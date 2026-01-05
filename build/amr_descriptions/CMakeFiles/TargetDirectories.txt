@@ -1,9 +1,0 @@
-/home/thuong/amr_ws/build/amr_descriptions/CMakeFiles/uninstall.dir
-/home/thuong/amr_ws/build/amr_descriptions/CMakeFiles/amr_descriptions_uninstall.dir
-/home/thuong/amr_ws/build/amr_descriptions/CMakeFiles/test.dir
-/home/thuong/amr_ws/build/amr_descriptions/CMakeFiles/edit_cache.dir
-/home/thuong/amr_ws/build/amr_descriptions/CMakeFiles/rebuild_cache.dir
-/home/thuong/amr_ws/build/amr_descriptions/CMakeFiles/list_install_components.dir
-/home/thuong/amr_ws/build/amr_descriptions/CMakeFiles/install.dir
-/home/thuong/amr_ws/build/amr_descriptions/CMakeFiles/install/local.dir
-/home/thuong/amr_ws/build/amr_descriptions/CMakeFiles/install/strip.dir

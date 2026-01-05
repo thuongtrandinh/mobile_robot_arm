@@ -1,3 +1,0 @@
-[console_scripts]
-global_planner = amr_planner.global_planner:main
-
