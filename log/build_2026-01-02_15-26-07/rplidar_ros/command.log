@@ -1,0 +1,1 @@
+Invoking command in '/home/thuong/amr_ws/build/rplidar_ros': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/home/thuong/ros2_ws/install/agv_trajectory_tracking:/home/thuong/ros2_ws/install/agv_planner:/opt/ros/humble /usr/bin/cmake /home/thuong/amr_ws/src/rplidar_ros -DCMAKE_INSTALL_PREFIX=/home/thuong/amr_ws/install/rplidar_ros

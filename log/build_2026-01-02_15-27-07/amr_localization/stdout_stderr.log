@@ -1,0 +1,58 @@
+Built target ament_cmake_python_copy_agv_localization
+running egg_info
+creating agv_localization.egg-info
+writing agv_localization.egg-info/PKG-INFO
+writing dependency_links to agv_localization.egg-info/dependency_links.txt
+writing top-level names to agv_localization.egg-info/top_level.txt
+writing manifest file 'agv_localization.egg-info/SOURCES.txt'
+reading manifest file 'agv_localization.egg-info/SOURCES.txt'
+writing manifest file 'agv_localization.egg-info/SOURCES.txt'
+Built target ament_cmake_python_build_agv_localization_egg
+-- Install configuration: ""
+-- Installing: /home/thuong/amr_ws/install/amr_localization/share/amr_localization/environment/pythonpath.sh
+-- Installing: /home/thuong/amr_ws/install/amr_localization/share/amr_localization/environment/pythonpath.dsv
+-- Installing: /home/thuong/amr_ws/install/amr_localization/local/lib/python3.10/dist-packages/agv_localization-0.0.0-py3.10.egg-info
+-- Installing: /home/thuong/amr_ws/install/amr_localization/local/lib/python3.10/dist-packages/agv_localization-0.0.0-py3.10.egg-info/PKG-INFO
+-- Installing: /home/thuong/amr_ws/install/amr_localization/local/lib/python3.10/dist-packages/agv_localization-0.0.0-py3.10.egg-info/dependency_links.txt
+-- Installing: /home/thuong/amr_ws/install/amr_localization/local/lib/python3.10/dist-packages/agv_localization-0.0.0-py3.10.egg-info/top_level.txt
+-- Installing: /home/thuong/amr_ws/install/amr_localization/local/lib/python3.10/dist-packages/agv_localization-0.0.0-py3.10.egg-info/SOURCES.txt
+-- Installing: /home/thuong/amr_ws/install/amr_localization/local/lib/python3.10/dist-packages/agv_localization
+-- Installing: /home/thuong/amr_ws/install/amr_localization/local/lib/python3.10/dist-packages/agv_localization/__init__.py
+-- Installing: /home/thuong/amr_ws/install/amr_localization/local/lib/python3.10/dist-packages/agv_localization/odometry_motion_model.py
+-- Installing: /home/thuong/amr_ws/install/amr_localization/local/lib/python3.10/dist-packages/agv_localization/kalman_filter.py
+-- Installing: /home/thuong/amr_ws/install/amr_localization/local/lib/python3.10/dist-packages/agv_localization/imu_republisher.py
+-- Installing: /home/thuong/amr_ws/install/amr_localization/local/lib/python3.10/dist-packages/agv_localization/odom_republisher.py
+-- Installing: /home/thuong/amr_ws/install/amr_localization/local/lib/python3.10/dist-packages/agv_localization/fusion_monitor.py
+Listing '/home/thuong/amr_ws/install/amr_localization/local/lib/python3.10/dist-packages/agv_localization'...
+Compiling '/home/thuong/amr_ws/install/amr_localization/local/lib/python3.10/dist-packages/agv_localization/__init__.py'...
+Compiling '/home/thuong/amr_ws/install/amr_localization/local/lib/python3.10/dist-packages/agv_localization/fusion_monitor.py'...
+Compiling '/home/thuong/amr_ws/install/amr_localization/local/lib/python3.10/dist-packages/agv_localization/imu_republisher.py'...
+Compiling '/home/thuong/amr_ws/install/amr_localization/local/lib/python3.10/dist-packages/agv_localization/kalman_filter.py'...
+Compiling '/home/thuong/amr_ws/install/amr_localization/local/lib/python3.10/dist-packages/agv_localization/odom_republisher.py'...
+Compiling '/home/thuong/amr_ws/install/amr_localization/local/lib/python3.10/dist-packages/agv_localization/odometry_motion_model.py'...
+-- Installing: /home/thuong/amr_ws/install/amr_localization/share/amr_localization/launch
+-- Installing: /home/thuong/amr_ws/install/amr_localization/share/amr_localization/launch/global_localization.launch.py
+-- Installing: /home/thuong/amr_ws/install/amr_localization/share/amr_localization/launch/local_localization.launch.py
+-- Installing: /home/thuong/amr_ws/install/amr_localization/share/amr_localization/config
+-- Installing: /home/thuong/amr_ws/install/amr_localization/share/amr_localization/config/amcl.yaml
+-- Installing: /home/thuong/amr_ws/install/amr_localization/share/amr_localization/config/ekf.yaml
+-- Installing: /home/thuong/amr_ws/install/amr_localization/lib/amr_localization/kalman_filter.py
+-- Installing: /home/thuong/amr_ws/install/amr_localization/lib/amr_localization/imu_republisher.py
+-- Installing: /home/thuong/amr_ws/install/amr_localization/lib/amr_localization/odom_republisher.py
+-- Installing: /home/thuong/amr_ws/install/amr_localization/lib/amr_localization/odometry_motion_model.py
+-- Installing: /home/thuong/amr_ws/install/amr_localization/lib/amr_localization/fusion_monitor.py
+-- Installing: /home/thuong/amr_ws/install/amr_localization/share/ament_index/resource_index/package_run_dependencies/amr_localization
+-- Installing: /home/thuong/amr_ws/install/amr_localization/share/ament_index/resource_index/parent_prefix_path/amr_localization
+-- Installing: /home/thuong/amr_ws/install/amr_localization/share/amr_localization/environment/ament_prefix_path.sh
+-- Installing: /home/thuong/amr_ws/install/amr_localization/share/amr_localization/environment/ament_prefix_path.dsv
+-- Installing: /home/thuong/amr_ws/install/amr_localization/share/amr_localization/environment/path.sh
+-- Installing: /home/thuong/amr_ws/install/amr_localization/share/amr_localization/environment/path.dsv
+-- Installing: /home/thuong/amr_ws/install/amr_localization/share/amr_localization/local_setup.bash
+-- Installing: /home/thuong/amr_ws/install/amr_localization/share/amr_localization/local_setup.sh
+-- Installing: /home/thuong/amr_ws/install/amr_localization/share/amr_localization/local_setup.zsh
+-- Installing: /home/thuong/amr_ws/install/amr_localization/share/amr_localization/local_setup.dsv
+-- Installing: /home/thuong/amr_ws/install/amr_localization/share/amr_localization/package.dsv
+-- Installing: /home/thuong/amr_ws/install/amr_localization/share/ament_index/resource_index/packages/amr_localization
+-- Installing: /home/thuong/amr_ws/install/amr_localization/share/amr_localization/cmake/amr_localizationConfig.cmake
+-- Installing: /home/thuong/amr_ws/install/amr_localization/share/amr_localization/cmake/amr_localizationConfig-version.cmake
+-- Installing: /home/thuong/amr_ws/install/amr_localization/share/amr_localization/package.xml

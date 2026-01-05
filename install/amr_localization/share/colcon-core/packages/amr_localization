@@ -1,0 +1,1 @@
+cv_bridge:geometry_msgs:libopencv-dev:nav2_amcl:nav2_lifecycle_manager:nav2_map_server:nav_msgs:rclcpp:rclpy:robot_localization:sensor_msgs:std_msgs:tf2:tf2_geometry_msgs:tf2_ros:tf_transformations:visualization_msgs:yaml-cpp-vendor

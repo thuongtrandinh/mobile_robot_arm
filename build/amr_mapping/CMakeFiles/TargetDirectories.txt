@@ -1,0 +1,9 @@
+/home/thuong/amr_ws/build/amr_mapping/CMakeFiles/uninstall.dir
+/home/thuong/amr_ws/build/amr_mapping/CMakeFiles/amr_mapping_uninstall.dir
+/home/thuong/amr_ws/build/amr_mapping/CMakeFiles/test.dir
+/home/thuong/amr_ws/build/amr_mapping/CMakeFiles/edit_cache.dir
+/home/thuong/amr_ws/build/amr_mapping/CMakeFiles/rebuild_cache.dir
+/home/thuong/amr_ws/build/amr_mapping/CMakeFiles/list_install_components.dir
+/home/thuong/amr_ws/build/amr_mapping/CMakeFiles/install.dir
+/home/thuong/amr_ws/build/amr_mapping/CMakeFiles/install/local.dir
+/home/thuong/amr_ws/build/amr_mapping/CMakeFiles/install/strip.dir

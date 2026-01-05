@@ -1,0 +1,38 @@
+[0.276s] Invoking command in '/home/thuong/amr_ws/build/amr_teleop': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/home/thuong/ros2_ws/install/agv_trajectory_tracking:/home/thuong/ros2_ws/install/agv_planner:/opt/ros/humble /usr/bin/cmake --build /home/thuong/amr_ws/build/amr_teleop -- -j12 -l12
+[0.343s] [ 33%] [32mBuilding CXX object CMakeFiles/agv_controller.dir/src/main.cpp.o[0m
+[0.343s] [ 66%] [32mBuilding CXX object CMakeFiles/agv_controller.dir/src/KeyboardInput.cpp.o[0m
+[5.051s] [01m[K/home/thuong/amr_ws/src/amr_teleop/src/KeyboardInput.cpp:[m[K In function ‘[01m[Kvoid sigintHandler(int)[m[K’:
+[5.051s] [01m[K/home/thuong/amr_ws/src/amr_teleop/src/KeyboardInput.cpp:10:24:[m[K [01;35m[Kwarning: [m[Kunused parameter ‘[01m[Ksignum[m[K’ [[01;35m[K]8;;https://gcc.gnu.org/onlinedocs/gcc/Warning-Options.html#index-Wunused-parameter-Wunused-parameter]8;;[m[K]
+[5.051s]    10 | void sigintHandler([01;35m[Kint signum[m[K)
+[5.051s]       |                    [01;35m[K~~~~^~~~~~[m[K
+[6.819s] [100%] [32m[1mLinking CXX executable agv_controller[0m
+[6.993s] [100%] Built target agv_controller
+[7.005s] Invoked command in '/home/thuong/amr_ws/build/amr_teleop' returned '0': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/home/thuong/ros2_ws/install/agv_trajectory_tracking:/home/thuong/ros2_ws/install/agv_planner:/opt/ros/humble /usr/bin/cmake --build /home/thuong/amr_ws/build/amr_teleop -- -j12 -l12
+[7.007s] Invoking command in '/home/thuong/amr_ws/build/amr_teleop': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/home/thuong/ros2_ws/install/agv_trajectory_tracking:/home/thuong/ros2_ws/install/agv_planner:/opt/ros/humble /usr/bin/cmake --install /home/thuong/amr_ws/build/amr_teleop
+[7.014s] -- Install configuration: ""
+[7.015s] -- Installing: /home/thuong/amr_ws/install/amr_teleop/lib/amr_teleop/agv_controller
+[7.016s] -- Set runtime path of "/home/thuong/amr_ws/install/amr_teleop/lib/amr_teleop/agv_controller" to ""
+[7.016s] -- Installing: /home/thuong/amr_ws/install/amr_teleop/share/amr_teleop/launch
+[7.016s] -- Installing: /home/thuong/amr_ws/install/amr_teleop/share/amr_teleop/launch/agv_controller.launch.py
+[7.016s] -- Installing: /home/thuong/amr_ws/install/amr_teleop/share/amr_teleop/src
+[7.017s] -- Installing: /home/thuong/amr_ws/install/amr_teleop/share/amr_teleop/src/KeyboardInput.cpp
+[7.017s] -- Installing: /home/thuong/amr_ws/install/amr_teleop/share/amr_teleop/src/main.cpp
+[7.017s] -- Installing: /home/thuong/amr_ws/install/amr_teleop/share/amr_teleop/include
+[7.017s] -- Installing: /home/thuong/amr_ws/install/amr_teleop/share/amr_teleop/include/agv_controller
+[7.017s] -- Installing: /home/thuong/amr_ws/install/amr_teleop/share/amr_teleop/include/agv_controller/KeyboardInput.h
+[7.017s] -- Installing: /home/thuong/amr_ws/install/amr_teleop/share/ament_index/resource_index/package_run_dependencies/amr_teleop
+[7.018s] -- Installing: /home/thuong/amr_ws/install/amr_teleop/share/ament_index/resource_index/parent_prefix_path/amr_teleop
+[7.018s] -- Installing: /home/thuong/amr_ws/install/amr_teleop/share/amr_teleop/environment/ament_prefix_path.sh
+[7.018s] -- Installing: /home/thuong/amr_ws/install/amr_teleop/share/amr_teleop/environment/ament_prefix_path.dsv
+[7.018s] -- Installing: /home/thuong/amr_ws/install/amr_teleop/share/amr_teleop/environment/path.sh
+[7.018s] -- Installing: /home/thuong/amr_ws/install/amr_teleop/share/amr_teleop/environment/path.dsv
+[7.019s] -- Installing: /home/thuong/amr_ws/install/amr_teleop/share/amr_teleop/local_setup.bash
+[7.019s] -- Installing: /home/thuong/amr_ws/install/amr_teleop/share/amr_teleop/local_setup.sh
+[7.019s] -- Installing: /home/thuong/amr_ws/install/amr_teleop/share/amr_teleop/local_setup.zsh
+[7.019s] -- Installing: /home/thuong/amr_ws/install/amr_teleop/share/amr_teleop/local_setup.dsv
+[7.019s] -- Installing: /home/thuong/amr_ws/install/amr_teleop/share/amr_teleop/package.dsv
+[7.019s] -- Installing: /home/thuong/amr_ws/install/amr_teleop/share/ament_index/resource_index/packages/amr_teleop
+[7.020s] -- Installing: /home/thuong/amr_ws/install/amr_teleop/share/amr_teleop/cmake/amr_teleopConfig.cmake
+[7.020s] -- Installing: /home/thuong/amr_ws/install/amr_teleop/share/amr_teleop/cmake/amr_teleopConfig-version.cmake
+[7.020s] -- Installing: /home/thuong/amr_ws/install/amr_teleop/share/amr_teleop/package.xml
+[7.023s] Invoked command in '/home/thuong/amr_ws/build/amr_teleop' returned '0': CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}:/home/thuong/ros2_ws/install/agv_trajectory_tracking:/home/thuong/ros2_ws/install/agv_planner:/opt/ros/humble /usr/bin/cmake --install /home/thuong/amr_ws/build/amr_teleop
