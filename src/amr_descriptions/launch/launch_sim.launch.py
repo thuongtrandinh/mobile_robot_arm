@@ -26,12 +26,12 @@ def launch_setup(context, *args, **kwargs):
         package_name = 'amr_descriptions'
         pkg_path = os.path.join(get_package_share_directory(package_name))
         xacro_file = os.path.join(pkg_path, 'model', 'roarm_description', 'urdf', 'roarm.xacro')
-        controller_config = os.path.join(pkg_path, 'model', 'roarm_description', 'config', 'roarm_controllers.yaml')
+        controller_config = os.path.join(pkg_path, 'model', 'roarm_description', 'config', 'ros2_control.yaml')
         rviz_config_file = os.path.join(pkg_path, 'model', 'roarm_description', 'config', 'roarm_description.rviz')
     else:  # mobile_robot
         package_name = 'amr_descriptions'
         pkg_path = os.path.join(get_package_share_directory(package_name))
-        xacro_file = os.path.join(pkg_path, 'urdf', 'mobile_robot.urdf.xacro')
+        xacro_file = os.path.join(pkg_path, 'model', 'wheeled', 'urdf', 'mobile_robot.urdf.xacro')
         controller_config = None  # Will use default ros2_control config
         rviz_config_file = os.path.join(pkg_path, 'rviz', 'rviz2.rviz')
     
@@ -119,7 +119,7 @@ def launch_setup(context, *args, **kwargs):
         arm_controller = Node(
             package="controller_manager",
             executable="spawner",
-            arguments=["arm_controller", "--controller-manager", "/controller_manager"],
+            arguments=["hand_controller", "--controller-manager", "/controller_manager"],
             parameters=[{'use_sim_time': use_sim_time}],
         )
         

@@ -3,8 +3,8 @@
 
   <!-- Gazebo plugin for ros2_control (Ignition Gazebo) -->
   <gazebo>
-    <plugin filename="ign_ros2_control-system" name="ign_ros2_control::IgnitionROS2ControlPlugin">
-      <parameters>$(find roarm_description)/config/roarm_controllers.yaml</parameters>
+    <plugin filename="gz_ros2_control-system" name="gz_ros2_control::GazeboSimROS2ControlPlugin">
+      <parameters>$(find amr_descriptions)/model/roarm_description/config/ros2_controller.yaml</parameters>
     </plugin>
   </gazebo>
 

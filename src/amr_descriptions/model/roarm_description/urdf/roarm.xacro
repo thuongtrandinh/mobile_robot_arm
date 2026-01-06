@@ -2,11 +2,11 @@
 <robot name="roarm" xmlns:xacro="http://www.ros.org/wiki/xacro">
     
     <!-- Include URDF description -->
-    <xacro:include filename="$(find roarm_description)/urdf/roarm.urdf.xacro"/>
+    <xacro:include filename="$(find amr_descriptions)/model/roarm_description/urdf/roarm.urdf.xacro"/>
     
     <!-- Include Gazebo plugins -->
-    <xacro:include filename="$(find roarm_description)/urdf/roarm_gazebo.xacro"/>
+    <xacro:include filename="$(find amr_descriptions)/model/roarm_description/urdf/roarm_gazebo.xacro"/>
     
     <!-- Include ros2_control -->
-    <xacro:include filename="$(find roarm_description)/urdf/roarm_ros2_control.xacro"/>
+    <xacro:include filename="$(find amr_descriptions)/model/roarm_description/urdf/roarm_ros2_control.xacro"/>
 </robot>
