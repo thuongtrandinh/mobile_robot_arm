@@ -8,10 +8,6 @@ controller_manager:
     diff_controller:
       type: diff_drive_controller/DiffDriveController
 
-
-joint_broadcaster:
-  ros__parameters: {}
-
 diff_controller:
   ros__parameters:
     # Wheel Joint Names
@@ -31,6 +27,7 @@ diff_controller:
     # CRITICAL: Accept unstamped cmd_vel
     cmd_vel_timeout: 0.5
     publish_rate: 50.0
+    use_stamped_vel: false  # IMPORTANT: Accept unstamped Twist messages
     
     # Input/Output remapping
     cmd_vel: cmd_vel  # Subscribe to standard /cmd_vel topic

@@ -10,9 +10,9 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
-add_executable(agv_controller src/KeyboardInput.cpp src/main.cpp)
-ament_target_dependencies(agv_controller rclcpp geometry_msgs)
-install(TARGETS agv_controller DESTINATION lib/${PROJECT_NAME})
+add_executable(amr_teleop src/KeyboardInput.cpp src/main.cpp)
+ament_target_dependencies(amr_teleop rclcpp geometry_msgs)
+install(TARGETS amr_teleop DESTINATION lib/${PROJECT_NAME})
 
 install (
   DIRECTORY launch src include

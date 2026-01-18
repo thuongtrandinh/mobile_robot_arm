@@ -28,7 +28,7 @@
     <!-- ...existing code... -->
     <gazebo>
         <plugin filename="gz_ros2_control-system" name="gz_ros2_control::GazeboSimROS2ControlPlugin">
-            <parameters>$(find mobile_robot)/config/my_controller.yaml</parameters>
+            <parameters>$(find amr_descriptions)/model/wheeled/config/ros2_control.yaml</parameters>
         </plugin>
         <plugin filename="ignition-gazebo-imu-system" name="ignition::gazebo::systems::Imu">
         </plugin>
