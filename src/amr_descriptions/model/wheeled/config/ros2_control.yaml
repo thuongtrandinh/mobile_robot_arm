@@ -2,13 +2,13 @@ controller_manager:
   ros__parameters:
     update_rate: 100  # Hz
 
-    joint_broadcaster:
+    joint_broad:
       type: joint_state_broadcaster/JointStateBroadcaster
 
-    diff_controller:
+    diff_cont:
       type: diff_drive_controller/DiffDriveController
 
-diff_controller:
+diff_cont:
   ros__parameters:
     # Wheel Joint Names
     left_wheel_names: ["left_wheel_joint"]
@@ -24,21 +24,21 @@ diff_controller:
     base_frame_id: "base_footprint"
     enable_odom_tf: false          # CRITICAL: FALSE - Let EKF publish odom→base_footprint TF after sensor fusion!
 
-    # CRITICAL: Accept unstamped cmd_vel
+    # CRITICAL: Accept stamped cmd_vel
     cmd_vel_timeout: 0.5
     publish_rate: 50.0
-    use_stamped_vel: false  # IMPORTANT: Accept unstamped Twist messages
+    use_stamped_vel: true  # IMPORTANT: Accept stamped Twist messages
     
     # Input/Output remapping
     cmd_vel: cmd_vel  # Subscribe to standard /cmd_vel topic
     
     # Velocity Limits - Tăng giới hạn để robot chạy nhanh hơn
     linear.x.has_velocity_limits: true
-    linear.x.max_velocity: 0.8   # Tăng từ 0.5 lên 2.0
-    linear.x.min_velocity: -0.8
+    linear.x.max_velocity: 2.0
+    linear.x.min_velocity: -2.0
     angular.z.has_velocity_limits: true
-    angular.z.max_velocity: 1.0  # Tăng từ 1.0 lên 2.0
-    angular.z.min_velocity: -1.0
+    angular.z.max_velocity: 2.0
+    angular.z.min_velocity: -2.0
 
     # Covariance
     pose_covariance_diagonal: [0.001, 0.001, 1000000.0, 1000000.0, 1000000.0, 1000.0]

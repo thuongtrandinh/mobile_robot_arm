@@ -7,10 +7,22 @@
 
     <gazebo reference="left_wheel">
         <material>Gazebo/Blue</material>
+        <mu1>1.0</mu1>
+        <mu2>1.0</mu2>
+        <kp>1000000.0</kp>
+        <kd>10.0</kd>
+        <minDepth>0.001</minDepth>
+        <maxVel>10.0</maxVel>
     </gazebo>
 
     <gazebo reference="right_wheel">
         <material>Gazebo/Blue</material>
+        <mu1>1.0</mu1>
+        <mu2>1.0</mu2>
+        <kp>1000000.0</kp>
+        <kd>10.0</kd>
+        <minDepth>0.001</minDepth>
+        <maxVel>10.0</maxVel>
     </gazebo>
 
         <gazebo reference="above_base_caster">

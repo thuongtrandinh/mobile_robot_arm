@@ -91,7 +91,7 @@ def launch_setup(context, *args, **kwargs):
     joint_state_broadcaster_spawner = Node(
         package='controller_manager',
         executable='spawner',
-        arguments=['joint_broadcaster'],
+        arguments=['joint_broad'],
         parameters=[{'use_sim_time': use_sim_time}],
         output='screen'
     )
@@ -100,7 +100,7 @@ def launch_setup(context, *args, **kwargs):
     diff_controller_spawner = Node(
         package='controller_manager',
         executable='spawner',
-        arguments=['diff_controller'],
+        arguments=['diff_cont'],
         parameters=[{'use_sim_time': use_sim_time}],
         output='screen'
     )

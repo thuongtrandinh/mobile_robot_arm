@@ -19,7 +19,7 @@ public:
 private:
     void keyboardLoop();
 
-    rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_pub_;
+    rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr cmd_pub_;
     std::thread input_thread_;
     struct termios oldt_;
 };

@@ -21,7 +21,7 @@ void sigintHandler(int signum)
 
 KeyboardInput::KeyboardInput() : Node("keyboard_input"), running_(true)
 {
-    cmd_pub_ = this->create_publisher<geometry_msgs::msg::Twist>("/diff_controller/cmd_vel", 10);
+    cmd_pub_ = this->create_publisher<geometry_msgs::msg::TwistStamped>("/diff_cont/cmd_vel", 10);
 
     // Set terminal to raw mode
     tcgetattr(STDIN_FILENO, &oldt_);
@@ -87,10 +87,12 @@ void KeyboardInput::keyboardLoop()
 
 void KeyboardInput::publishCmd(double linear, double angular)
 {
-    geometry_msgs::msg::Twist msg;
+    geometry_msgs::msg::TwistStamped msg;
+    msg.header.stamp = this->get_clock()->now();
+    msg.header.frame_id = "base_link";
 
-    msg.linear.x = linear;
-    msg.angular.z = angular;
+    msg.twist.linear.x = linear;
+    msg.twist.angular.z = angular;
 
     cmd_pub_->publish(msg);
 }
