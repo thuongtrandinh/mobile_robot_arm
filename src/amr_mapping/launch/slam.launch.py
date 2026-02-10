@@ -44,40 +44,40 @@ def generate_launch_description():
     
     # 1. IMU Republisher - Add covariance to Gazebo IMU
     # TUNED: High covariance to reduce jerky motion during SLAM
-    imu_republisher = Node(
-        package="agv_localization",
-        executable="imu_republisher",
-        name="imu_republisher",
-        output="screen",
-        parameters=[
-            {"use_sim_time": use_sim_time},
-            {"input_topic": "/imu"},
-            {"output_topic": "/imu_with_covariance"},
-            {"orientation_covariance": 0.1},            # Increased from 0.05
-            {"angular_velocity_covariance": 0.15},      # Increased from 0.08
-            {"linear_acceleration_covariance": 0.25}    # Increased from 0.15
-        ]
-    )
+    # imu_republisher = Node(
+    #     package="agv_localization",
+    #     executable="imu_republisher",
+    #     name="imu_republisher",
+    #     output="screen",
+    #     parameters=[
+    #         {"use_sim_time": use_sim_time},
+    #         {"input_topic": "/imu"},
+    #         {"output_topic": "/imu_with_covariance"},
+    #         {"orientation_covariance": 0.1},            # Increased from 0.05
+    #         {"angular_velocity_covariance": 0.15},      # Increased from 0.08
+    #         {"linear_acceleration_covariance": 0.25}    # Increased from 0.15
+    #     ]
+    # )
     
     # 2. Odometry Republisher - Add covariance to wheel odometry
     # TUNED: High covariance to reduce jerky motion during SLAM
-    odom_republisher = Node(
-        package="agv_localization",
-        executable="odom_republisher",
-        name="odom_republisher",
-        output="screen",
-        parameters=[
-            {"use_sim_time": use_sim_time},
-            {"input_topic": "/diff_cont/odom"},
-            {"output_topic": "/diff_cont/odom_with_covariance"},
-            {"pose_x_covariance": 0.05},                # Increased from 0.01
-            {"pose_y_covariance": 0.05},                # Increased from 0.01
-            {"pose_yaw_covariance": 0.1},               # Increased from 0.05
-            {"twist_vx_covariance": 0.05},              # Increased from 0.01
-            {"twist_vy_covariance": 0.05},              # Increased from 0.01
-            {"twist_vyaw_covariance": 0.1}              # Increased from 0.05
-        ]
-    )
+    # odom_republisher = Node(
+    #     package="agv_localization",
+    #     executable="odom_republisher",
+    #     name="odom_republisher",
+    #     output="screen",
+    #     parameters=[
+    #         {"use_sim_time": use_sim_time},
+    #         {"input_topic": "/diff_cont/odom"},
+    #         {"output_topic": "/diff_cont/odom_with_covariance"},
+    #         {"pose_x_covariance": 0.05},                # Increased from 0.01
+    #         {"pose_y_covariance": 0.05},                # Increased from 0.01
+    #         {"pose_yaw_covariance": 0.1},               # Increased from 0.05
+    #         {"twist_vx_covariance": 0.05},              # Increased from 0.01
+    #         {"twist_vy_covariance": 0.05},              # Increased from 0.01
+    #         {"twist_vyaw_covariance": 0.1}              # Increased from 0.05
+    #     ]
+    # )
     
     # 3. EKF Node - Fuse IMU + Encoder to reduce drift
     ekf_filter = Node(
@@ -124,16 +124,6 @@ def generate_launch_description():
         ]
     )
 
-    mapping_aruco_saver = Node(
-        package="agv_mapping_with_knowns_poses",
-        executable="mapping_aruco",
-        name="mapping_aruco_saver",
-        output="screen",
-        parameters=[
-            {"use_sim_time": use_sim_time},
-        ],
-    )
-
     nav2_lifecycle_manager = Node(
         package="nav2_lifecycle_manager",
         executable="lifecycle_manager",
@@ -149,13 +139,8 @@ def generate_launch_description():
     return LaunchDescription([
         use_sim_time_arg,
         slam_config_arg,
-        # Sensor fusion nodes (reduce odometry drift!)
-        imu_republisher,
-        odom_republisher,
         ekf_filter,
-        # SLAM nodes
         nav2_map_saver,
         slam_toolbox,
-        mapping_aruco_saver,
         nav2_lifecycle_manager,
     ])

@@ -1,24 +1,18 @@
-# ============================================
-# AMCL CONFIG CHO ROBOT THẬT
-# Adaptive Monte Carlo Localization với LiDAR
-# ============================================
+
 amcl:
   ros__parameters:
     # === QUAN TRỌNG: Robot thật ===
     use_sim_time: false
     
-    # === TF FRAMES ===
     global_frame_id: "map"
     odom_frame_id: "odom"
     base_frame_id: "base_footprint"
     
-    # === TF BROADCAST ===
-    # TẮT nếu dùng EKF để publish TF map->odom
-    # BẬT nếu AMCL là nguồn localization duy nhất
+
     tf_broadcast: true
     transform_tolerance: 0.5  # Giảm để TF chặt chẽ hơn
     
-    # === INITIAL POSE ===
+
     set_initial_pose: true
     initial_pose:
       x: 0.0
@@ -26,8 +20,6 @@ amcl:
       z: 0.0
       yaw: 0.0
     
-    # === ODOMETRY MODEL ===
-    # Differential drive robot
     robot_model_type: "nav2_amcl::DifferentialMotionModel"
     
     # Motion noise - Giảm để particles hội tụ ổn định hơn
@@ -40,8 +32,7 @@ amcl:
     alpha3: 0.15   # Translation noise từ translation
     alpha4: 0.15   # Translation noise từ rotation
     
-    # === UPDATE THRESHOLDS ===
-    # Robot phải di chuyển bao nhiêu trước khi update
+
     update_min_d: 0.1     # 20cm di chuyển (giảm update frequency)
     update_min_a: 0.056     # ~17 độ xoay
     update_min_d: 0.2     # Tăng lên 20cm để giảm tần suất nhảy TF
@@ -55,7 +46,7 @@ amcl:
     # === LASER MODEL ===
     laser_model_type: "likelihood_field"
     scan_topic: "scan"           # Topic LiDAR của robot thật
-    laser_max_range: 5.0        # Phạm vi tối đa LiDAR (meters)
+    laser_max_range: 20.0        # Phạm vi tối đa LiDAR (meters)
     laser_min_range: 0.15        # Phạm vi tối thiểu
     max_beams: 360                # Số beams sử dụng
     

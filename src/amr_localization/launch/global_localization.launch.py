@@ -57,7 +57,6 @@ def generate_launch_description():
     
     ekf_config_file = os.path.join(agv_localization_dir, "config", "ekf.yaml")
     amcl_config_file = os.path.join(agv_localization_dir, "config", "amcl.yaml")
-    rviz_config_file = os.path.join(mobile_robot_dir, "rviz", "rviz2.rviz")
     
     map_path = PathJoinSubstitution([
         get_package_share_directory("amr_localization"),
@@ -114,11 +113,6 @@ def generate_launch_description():
         ]
     )
     
-    amcl_delayed = TimerAction(
-        period=3.0,
-        actions=[nav2_amcl]
-    )
-    
     # Lifecycle Manager (manages map_server and amcl lifecycle)
     nav2_lifecycle_manager = Node(
         package="nav2_lifecycle_manager",
@@ -130,16 +124,6 @@ def generate_launch_description():
             {"use_sim_time": use_sim_time},
             {"autostart": True}
         ]
-    )
-    
-    # RViz2 for visualization
-    rviz2_node = Node(
-        package="rviz2",
-        executable="rviz2",
-        name="rviz2",
-        output="screen",
-        arguments=["-d", rviz_config_file],
-        parameters=[{"use_sim_time": use_sim_time}]
     )
 
     # ===========================
@@ -153,7 +137,5 @@ def generate_launch_description():
         yaw_arg,
         ekf_filter_node,
         nav2_map_server,
-        amcl_delayed,
         nav2_lifecycle_manager,
-        rviz2_node,
     ])

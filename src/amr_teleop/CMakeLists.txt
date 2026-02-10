@@ -15,7 +15,7 @@ ament_target_dependencies(amr_teleop rclcpp geometry_msgs)
 install(TARGETS amr_teleop DESTINATION lib/${PROJECT_NAME})
 
 install (
-  DIRECTORY launch src include
+  DIRECTORY src include
   DESTINATION share/${PROJECT_NAME}
 )
 include_directories(
