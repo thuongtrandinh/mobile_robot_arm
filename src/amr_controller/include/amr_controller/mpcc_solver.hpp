@@ -1,4 +1,18 @@
-// Copyright 2026 H-AMPCC Authors
+cd ~/LVTN/amr_ws/HALO/drl_moudle
+source ~/miniconda3/etc/profile.d/conda.sh
+conda activate mpc_rl
+export LD_PRELOAD=/lib/x86_64-linux-gnu/libtiff.so.5
+
+python train_ppo.py \
+  --config configs/mpc_rl.py \
+  --output_dir train_data/run1 \
+  --total_timesteps 5000000 \
+  --eval_freq 500 \
+  --n_eval_episodes 100 \
+  --action_dim 9 \
+  --action_range 2.25 \
+  --use_AM True \
+  --use_PL True// Copyright 2026 H-AMPCC Authors
 // SPDX-License-Identifier: Apache-2.0
 //
 // iLQR-based solver for the Adaptive MPCC optimisation problem.

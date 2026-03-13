@@ -36,13 +36,15 @@ def set_random_seed(seed: int, using_cuda: bool = False) -> None:
     # seed the RNG for all devices (both CPU and CUDA)
     th.manual_seed(seed)
 
+    deterministic = os.environ.get("HALO_DETERMINISTIC", "0") == "1"
+
     if using_cuda:
         th.cuda.manual_seed_all(seed)
-        # Deterministic operations for CuDNN, it may impact performances
-        th.backends.cudnn.deterministic = True
-        th.backends.cudnn.benchmark = False
+        # By default prefer speed on GPU; enable deterministic mode only when explicitly requested.
+        th.backends.cudnn.deterministic = deterministic
+        th.backends.cudnn.benchmark = not deterministic
 
-    th.use_deterministic_algorithms(True)
+    th.use_deterministic_algorithms(deterministic)
 
 
 def explained_variance(y_pred: np.ndarray, y_true: np.ndarray) -> np.ndarray:

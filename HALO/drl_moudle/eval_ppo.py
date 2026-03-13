@@ -107,7 +107,11 @@ def main(args):
     env.use_ros = use_ros
     env.action_space = gym.spaces.Discrete(action_dim * action_dim)  # temp solution
     env.use_AM = use_action_mask
+    env.use_action_mask = use_action_mask
     env.use_PL = True
+    logging.info('Action mask visualization: %s', env.use_action_mask)
+    logging.info('Action mask filtering (use_AM): %s', env.use_AM)
+    logging.info('Action grid: dim=%d, range=%.3f', action_dim, args.action_range)
 
     if use_action_mask:
         model = MpcPPO(
@@ -176,7 +180,10 @@ if __name__ == "__main__":
     parser.add_argument('--re_theta', type=float, default=0.01)
     parser.add_argument('-v', '--visualize', default=False, action='store_true')
     parser.add_argument('--use_ros', default=False, action='store_true')
-    parser.add_argument('--use_action_mask', default=True, action='store_true')
+    parser.add_argument('--use_action_mask', dest='use_action_mask', action='store_true', default=True,
+                        help='Enable action mask + grid visualization')
+    parser.add_argument('--no-use_action_mask', dest='use_action_mask', action='store_false',
+                        help='Disable action mask + grid visualization')
     parser.add_argument('--model_dir', type=str, default='data/model1')
     parser.add_argument('--action_dim', type=int, default=9)
     parser.add_argument('--action_range', type=float, default=2.0)

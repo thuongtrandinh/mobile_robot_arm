@@ -18,13 +18,21 @@ from modules.evaluation import evaluate_policy
 from modules.utils import get_linear_fn
 
 def main(args):
-    if os.path.exists(args.output_dir):
+    output_exists = os.path.exists(args.output_dir)
+    is_resuming = args.resume and output_exists
+
+    if output_exists and not args.resume:
         shutil.rmtree(args.output_dir)
 
-    os.makedirs(args.output_dir)
-    # copy config file from ${args.config} to ${args.output_dir} as config.py
-    shutil.copy(args.config, os.path.join(args.output_dir, "config.py"))
-    args.config = os.path.join(args.output_dir, "config.py")
+    os.makedirs(args.output_dir, exist_ok=True)
+
+    output_config = os.path.join(args.output_dir, "config.py")
+    # Resume: keep the existing config in output dir for consistency.
+    if is_resuming and os.path.exists(output_config):
+        args.config = output_config
+    else:
+        shutil.copy(args.config, output_config)
+        args.config = output_config
 
     # configure logging
     log_file = os.path.join(args.output_dir, "output.log")
@@ -62,6 +70,9 @@ def main(args):
     logging.info('Current goal_weight: {}'.format(args.goal_weight))
     logging.info('Current re_collision: {}'.format(args.re_collision))
     logging.info('Current re_arrival: {}'.format(args.re_arrival))
+    logging.info('Current n_steps: {}'.format(args.n_steps))
+    logging.info('Current batch_size: {}'.format(args.batch_size))
+    logging.info('Current n_epochs: {}'.format(args.n_epochs))
     device = th.device('cuda:0' if th.cuda.is_available() and args.gpu else 'cpu')
     logging.info('Using device: %s', device)
 
@@ -94,8 +105,9 @@ def main(args):
         "GraphPolicy",
         env,
         learning_rate=lr_schedule,
-        n_steps=2048,
-        batch_size=64,
+        n_steps=args.n_steps,
+        batch_size=args.batch_size,
+        n_epochs=args.n_epochs,
         ent_coef=0.001,
         tensorboard_log=args.output_dir,
         seed=args.randomseed,
@@ -104,10 +116,20 @@ def main(args):
         goal_coord_range=goal_range,
         use_ros=use_ros,
     )
+
+    if args.resume:
+        resume_model_path = os.path.join(args.output_dir, "best_model")
+        if os.path.exists(resume_model_path) or os.path.exists(resume_model_path + ".zip"):
+            model.set_parameters(resume_model_path, device=device)
+            logging.info("Resumed parameters from: %s", resume_model_path)
+        else:
+            logging.warning("Resume requested but no best_model(.zip) found in %s. Training from scratch.",
+                            args.output_dir)
+
     curriculum_callback = CurriculumCallback(verbose=0)
-    eval_callback = EvalCallback(eval_env=env, n_eval_episodes=100, eval_freq=500,
+    eval_callback = EvalCallback(eval_env=env, n_eval_episodes=args.n_eval_episodes, eval_freq=args.eval_freq,
                                  best_model_save_path=args.output_dir, verbose=1)
-    model.learn(int(5e6), callback=[eval_callback, curriculum_callback])
+    model.learn(int(args.total_timesteps), callback=[eval_callback, curriculum_callback])
     # checkpt_callback = CheckpointCallback(save_freq=2000, save_path=args.checkpt_dir, name_prefix='PPO')
     # model.learn(int(5e6), callback=[eval_callback, curriculum_callback, checkpt_callback])
 
@@ -119,7 +141,7 @@ if __name__ == "__main__":
     parser.add_argument('--output_dir', type=str, default='train_data/action_mask_eval_traj_3_4')
     
     # parser.add_argument('--output_dir', type=str, default='data/output_test')
-    parser.add_argument('--resume', default=True, action='store_true')
+    parser.add_argument('--resume', default=False, action='store_true')
     parser.add_argument('--gpu', default=True, action='store_true')
     parser.add_argument('--debug', default=False, action='store_true')
     parser.add_argument('--randomseed', type=int, default=3)
@@ -136,6 +158,12 @@ if __name__ == "__main__":
     parser.add_argument('--use_PL', type=bool, default=True, help="enable Privileged Learning")
     parser.add_argument('--PL_traj_length', type=int, default=4)
     parser.add_argument('--PL_traj_gamma', type=float, default=0.9)
+    parser.add_argument('--n_steps', type=int, default=2048)
+    parser.add_argument('--batch_size', type=int, default=64)
+    parser.add_argument('--n_epochs', type=int, default=10)
+    parser.add_argument('--total_timesteps', type=int, default=int(5e6))
+    parser.add_argument('--eval_freq', type=int, default=500)
+    parser.add_argument('--n_eval_episodes', type=int, default=100)
     # parser.add_argument('--checkpt_dir', type=str, default='data/output_eval_ipopt_theta_4_yaw_penalize_pt1')
 
 
