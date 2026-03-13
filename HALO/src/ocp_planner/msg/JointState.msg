@@ -1,4 +1,4 @@
-Header header
+std_msgs/Header header
 
 ocp_planner/RobotState robot_state
 ocp_planner/HumanState[] human_states

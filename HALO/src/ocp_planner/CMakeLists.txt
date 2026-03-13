@@ -1,55 +1,96 @@
-cmake_minimum_required(VERSION 3.10)
-project(ocp_planner_standalone)
+cmake_minimum_required(VERSION 3.8)
+project(ocp_planner)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_BUILD_TYPE Release)
 set(CMAKE_CXX_FLAGS_RELEASE "-O3")
 
-# Find only essential dependencies (NO ROS)
+# Find dependencies for ROS2
+find_package(ament_cmake REQUIRED)
+find_package(rclcpp REQUIRED)
+find_package(rclpy REQUIRED)
+find_package(std_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
+find_package(nav_msgs REQUIRED)
+find_package(rosidl_default_generators REQUIRED)
+
 find_package(OpenCV REQUIRED)
 find_package(Eigen3 REQUIRED)
+find_package(casadi REQUIRED)
 
-# Find Casadi from conda environment
-set(CASADI_INCLUDE_DIR "$ENV{CONDA_PREFIX}/lib/python3.8/site-packages/casadi/include")
-set(CASADI_LIB_DIR "$ENV{CONDA_PREFIX}/lib/python3.8/site-packages/casadi")
+################################################
+## Declare ROS messages and services ##
+################################################
 
-find_library(CASADI_LIBRARY 
-    NAMES casadi
-    PATHS ${CASADI_LIB_DIR}
-    NO_DEFAULT_PATH
+# Generate messages
+rosidl_generate_interfaces(${PROJECT_NAME}
+  "msg/DynaObstacle.msg"
+  "msg/ObstacleArray.msg"
+  "msg/RobotState.msg"
+  "msg/HumanState.msg"
+  "msg/ObstacleState.msg"
+  "msg/WallState.msg"
+  "msg/Point.msg"
+  "msg/PolyState.msg"
+  "msg/JointState.msg"
+  "msg/ControlVar.msg"
+  "srv/OcpLocalPlann.srv"
+  DEPENDENCIES std_msgs geometry_msgs nav_msgs
 )
 
-if(NOT CASADI_LIBRARY)
-    message(STATUS "Trying to find casadi in system paths...")
-    find_library(CASADI_LIBRARY casadi)
-endif()
+# Get typesupport target for linking against self-generated interfaces
+rosidl_get_typesupport_target(cpp_typesupport_target ${PROJECT_NAME} "rosidl_typesupport_cpp")
 
-if(NOT CASADI_LIBRARY)
-    message(FATAL_ERROR "Casadi library not found! Searched in: ${CASADI_LIB_DIR}")
-else()
-    message(STATUS "Found Casadi: ${CASADI_LIBRARY}")
-endif()
+################################################
+## Build ##
+################################################
 
 include_directories(
   ${PROJECT_SOURCE_DIR}
   ${OpenCV_INCLUDE_DIRS}
   ${EIGEN3_INCLUDE_DIR}
-  ${CASADI_INCLUDE_DIR}
+)
+
+# ROS2 node executable
+add_executable(${PROJECT_NAME}_node
+  src/main.cc
+  src/astar.cc
+  src/smooth.cc
+  src/lookahead.cc
+  src/planner.cc
+  src/mpc.cc
+)
+
+ament_target_dependencies(${PROJECT_NAME}_node
+  rclcpp
+  std_msgs
+  geometry_msgs
+  nav_msgs
+)
+
+target_compile_definitions(${PROJECT_NAME}_node PRIVATE ROS_BUILD)
+
+target_link_libraries(${PROJECT_NAME}_node
+  "${cpp_typesupport_target}"
+  ${OpenCV_LIBRARIES}
+  casadi::casadi
+  dw
 )
 
 ################################################
 ################# pybind11 #####################
 ################################################
 
-# Use conda environment Python
-set(PYTHON_EXECUTABLE "$ENV{CONDA_PREFIX}/bin/python")
-set(PYTHON_INCLUDE_DIRECTORY "$ENV{CONDA_PREFIX}/include/python3.8")
+# Use conda environment Python (pybind11 3.x uses FindPython3)
+set(Python3_EXECUTABLE "$ENV{CONDA_PREFIX}/bin/python")
+set(Python3_INCLUDE_DIRS "$ENV{CONDA_PREFIX}/include/python3.8")
+find_package(Python3 COMPONENTS Interpreter Development.Module REQUIRED)
 
-# Add pybind11
+# Add pybind11 subdirectory
 add_subdirectory(extern/pybind11)
 
-# Build Python binding module
-pybind11_add_module(ocp_planner_py
+# Build Python binding module (STANDALONE - no ROS dependency)
+pybind11_add_module(${PROJECT_NAME}_py
   src/ocp_bind.cc
   src/astar.cc
   src/smooth.cc
@@ -58,14 +99,23 @@ pybind11_add_module(ocp_planner_py
   src/mpc.cc
 )
 
-target_link_libraries(ocp_planner_py
+target_link_libraries(${PROJECT_NAME}_py
   PRIVATE
   ${OpenCV_LIBRARIES}
-  ${CASADI_LIBRARY}
-  # dw library if needed
+  casadi::casadi
 )
 
-# Install to a known location
-install(TARGETS ocp_planner_py
-  LIBRARY DESTINATION ${CMAKE_CURRENT_SOURCE_DIR}/../../drl_moudle
+################################################
+## Install ##
+################################################
+
+install(TARGETS ${PROJECT_NAME}_node
+  DESTINATION lib/${PROJECT_NAME}
 )
+
+# Install Python binding to lib directory
+install(TARGETS ${PROJECT_NAME}_py
+  LIBRARY DESTINATION lib
+)
+
+ament_package()

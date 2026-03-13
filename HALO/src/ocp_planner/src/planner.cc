@@ -60,18 +60,19 @@ MpcReturn Planner::PlannExec(const JointState &state,
   auto final_path = vel_planner_->UpdateVelocity(smooth_path, state.robot.v);
 
   {
+#ifdef ROS_BUILD
     a_start_smooth_path_->header.frame_id = "map";
     a_start_smooth_path_->poses.clear();
-    geometry_msgs::PoseStamped pose_stamped;
+    geometry_msgs::msg::PoseStamped pose_stamped;
     for (const Point &p: final_path) {
       pose_stamped.pose.position.x = p.x;
       pose_stamped.pose.position.y = p.y;
       pose_stamped.pose.position.z = p.v;
       a_start_smooth_path_->poses.push_back(pose_stamped);
     }
+#endif
     astar_path_.clear();
     astar_path_ = final_path;
-
   }
 
 

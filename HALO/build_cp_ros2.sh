@@ -10,8 +10,8 @@ conda activate mpc_rl
 source /opt/ros/humble/setup.bash
 
 # Build using colcon
-cd /home/thuong/LVTN/HALO
-colcon build --packages-select ocp_planner --symlink-install
+cd /home/thuong/LVTN/amr_ws/HALO
+colcon build --packages-select ocp_planner --symlink-install --cmake-args -Dcasadi_DIR=/usr/local/lib/cmake/casadi
 
 # Remove old Python binding file
 rm -f drl_moudle/ocp_planner_py.cpython-38-x86_64-linux-gnu.so

@@ -15,7 +15,6 @@ from sympy import false
 
 from crowd_sim.envs.utils.robot import Robot
 
-from simple_env.mpc_policy import MpcPolicy
 from algorithms.mpc_ppo import MpcPPO
 from modules.evaluation import evaluate_policy
 from modules.policies import ExternalPolicy
@@ -91,7 +90,7 @@ def main(args):
     # seed_everything(seed=args.randomseed)
     use_ros = args.use_ros
     use_action_mask = args.use_action_mask
-    env = gym.make("CrowdSim-v0")
+    env = gym.make("CrowdSim-v0", disable_env_checker=True)
     env.configure(env_config)
     env.set_phase(10)
 
@@ -126,6 +125,7 @@ def main(args):
         except ValueError as e:
             print(f"Caught an exception: {e}")
     else:
+        from simple_env.mpc_policy import MpcPolicy
         print("==========a star=================")
         env.use_action_mask = False
         model = MpcPolicy(env, use_ros=use_ros)

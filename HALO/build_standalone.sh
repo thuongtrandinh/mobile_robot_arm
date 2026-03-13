@@ -9,7 +9,7 @@ source ~/miniconda3/etc/profile.d/conda.sh
 conda activate mpc_rl
 
 # Create build directory
-cd /home/thuong/LVTN/HALO/src/ocp_planner
+cd /home/thuong/LVTN/amr_ws/HALO/src/ocp_planner
 mkdir -p build
 cd build
 

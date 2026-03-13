@@ -37,14 +37,27 @@ from crowd_sim.envs.utils.state import  FullState
 import ocp_planner_py
 
 # ros modules
-import rospy
-from ocp_planner.srv import OcpLocalPlann, OcpLocalPlannRequest
-from ocp_planner.msg import HumanState as HumanStateMsg
-from ocp_planner.msg import ObstacleState as ObstacleStateMsg
-from ocp_planner.msg import PolyState, Point, WallState
-from nav_msgs.msg import Path as NavPath
-from geometry_msgs.msg import PoseStamped 
-from std_msgs.msg import Header
+try:
+    import rospy
+    from ocp_planner.srv import OcpLocalPlann, OcpLocalPlannRequest
+    from ocp_planner.msg import HumanState as HumanStateMsg
+    from ocp_planner.msg import ObstacleState as ObstacleStateMsg
+    from ocp_planner.msg import PolyState, Point, WallState
+    from nav_msgs.msg import Path as NavPath
+    from geometry_msgs.msg import PoseStamped
+    from std_msgs.msg import Header
+except ImportError:
+    rospy = None
+    OcpLocalPlann = None
+    OcpLocalPlannRequest = None
+    HumanStateMsg = None
+    ObstacleStateMsg = None
+    PolyState = None
+    Point = None
+    WallState = None
+    NavPath = None
+    PoseStamped = None
+    Header = None
 
 class MpcPPO(GraphPPO):
     policy_aliases: ClassVar[Dict[str, Any]] = {"GraphPolicy": MaskedActorCriticPolicy, }
@@ -103,6 +116,8 @@ class MpcPPO(GraphPPO):
         self.use_ros = use_ros
 
         if self.use_ros:
+            if rospy is None:
+                raise ImportError("use_ros=True requires rospy and ROS message packages in Python environment")
             self.ocp_planner = rospy.ServiceProxy('/ocp_plann', OcpLocalPlann)
         else:
             self.ocp_planner = ocp_planner_py.OcpPlanner()

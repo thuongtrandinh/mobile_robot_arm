@@ -393,7 +393,7 @@ int Mpc::SolveMpc(const Eigen::MatrixXd &A, const Eigen::MatrixXd &b,
   // create nlp solver and buffers
   casadi::Dict ipopt_opts;
   ipopt_opts["print_level"] = 0;
-  ipopt_opts["linear_solver"] = "ma57";
+  ipopt_opts["linear_solver"] = "mumps";
   // ipopt_opts["hessian_approximation"] = "limited-memory";
   ipopt_opts["max_iter"] = 300;
   ipopt_opts["tol"] = 5e-4;

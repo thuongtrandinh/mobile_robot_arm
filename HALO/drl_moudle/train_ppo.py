@@ -65,7 +65,7 @@ def main(args):
     device = th.device('cuda:0' if th.cuda.is_available() and args.gpu else 'cpu')
     logging.info('Using device: %s', device)
 
-    env = gym.make("CrowdSim-v0")
+    env = gym.make("CrowdSim-v0", disable_env_checker=True)
     env.configure(env_config)
     env.set_phase(0)
 

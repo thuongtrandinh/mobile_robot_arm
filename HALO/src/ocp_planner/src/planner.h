@@ -19,8 +19,8 @@
 #include "lookahead.h"
 
 #ifdef ROS_BUILD
-#include <nav_msgs/Path.h>
-#include <geometry_msgs/PoseStamped.h>
+#include <nav_msgs/msg/path.hpp>
+#include <geometry_msgs/msg/pose_stamped.hpp>
 #endif
 
 #include "mpc.h"
@@ -91,7 +91,7 @@ class Planner {
     mpc_params->local_obst_num = 8;
     ocp_planner_->SetParams(mpc_params);
 #ifdef ROS_BUILD
-    a_start_smooth_path_ = std::make_shared<nav_msgs::Path>();
+    a_start_smooth_path_ = std::make_shared<nav_msgs::msg::Path>();
 #endif
     // update map
     cv::Mat map = this->CreateMap();
@@ -113,7 +113,7 @@ class Planner {
   bool visual_flag_;
 
 #ifdef ROS_BUILD
-  inline nav_msgs::Path GetAStarSmoothPath() const {
+  inline nav_msgs::msg::Path GetAStarSmoothPath() const {
     return *a_start_smooth_path_;
   }
 #endif
@@ -149,7 +149,7 @@ class Planner {
   std::unique_ptr<Mpc> ocp_planner_;
 
 #ifdef ROS_BUILD
-  std::shared_ptr<nav_msgs::Path> a_start_smooth_path_;
+  std::shared_ptr<nav_msgs::msg::Path> a_start_smooth_path_;
 #endif
   std::vector<Point> astar_path_{};
 
