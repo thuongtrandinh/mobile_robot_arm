@@ -117,6 +117,7 @@ class CrowdSim(gym.Env):
         self.actions_prob: np.ndarray = None
         self.random_seed: int = 0
         self.phase_num: int = 0
+        self.robot_fov_half_angle: float = np.pi  # default full 360 deg
         self.phase: Optional[str] = None
         self.MPC_NP: int = 10
 
@@ -143,6 +144,7 @@ class CrowdSim(gym.Env):
         self.time_step = config.env.time_step
         self.randomize_attributes = config.env.randomize_attributes
         self.robot_sensor_range = config.env.robot_sensor_range
+        self.robot_fov_half_angle = getattr(config.robot, 'fov_half_angle', np.pi)
 
         self.success_reward = config.reward.success_reward
         self.collision_penalty = config.reward.collision_penalty
@@ -756,12 +758,14 @@ class CrowdSim(gym.Env):
         if self.robot.sensor == 'coordinates':
             ob_human = self.compute_observation_for(self.robot)
             if self.obstacles is not None:
-                ob_obstacles = [obstacle.get_observable_state() for i, obstacle in enumerate(self.obstacles)]
+                ob_obstacles = [obstacle.get_observable_state() for obstacle in self.obstacles
+                                if self._is_in_fov(obstacle.px, obstacle.py)]
             else:
                 ob_obstacles = []
 
             if self.walls is not None:
-                ob_walls = [wall.get_observable_state() for i, wall in enumerate(self.walls)]
+                ob_walls = [wall.get_observable_state() for wall in self.walls
+                            if self._is_in_fov((wall.sx + wall.ex) / 2, (wall.sy + wall.ey) / 2)]
             else:
                 ob_walls = []
             ob_human_pred_path = []
@@ -1408,10 +1412,13 @@ class CrowdSim(gym.Env):
 
             # compute the observation
             if self.robot.sensor == 'coordinates':
-                ob_human = [human.get_observable_state() for human in self.humans]
-                ob_obstacles = [obstacle.get_observable_state() for i, obstacle in enumerate(self.obstacles)]
-                ob_walls = [wall.get_observable_state() for i, wall in enumerate(self.walls)]
-                ob_human_pred_path = [human.get_prediction_path() for human in self.humans]
+                _visible_humans = [h for h in self.humans if self._is_in_fov(h.px, h.py)]
+                ob_human = [human.get_observable_state() for human in _visible_humans]
+                ob_obstacles = [obstacle.get_observable_state() for obstacle in self.obstacles
+                                if self._is_in_fov(obstacle.px, obstacle.py)]
+                ob_walls = [wall.get_observable_state() for wall in self.walls
+                            if self._is_in_fov((wall.sx + wall.ex) / 2, (wall.sy + wall.ey) / 2)]
+                ob_human_pred_path = [human.get_prediction_path() for human in _visible_humans]
                 ob = (ob_human, ob_obstacles, ob_walls, ob_human_pred_path)
                 # print("pred path")
             elif self.robot.sensor == 'RGB':
@@ -1420,9 +1427,12 @@ class CrowdSim(gym.Env):
             if self.robot.sensor == 'coordinates':
                 ob_human = [
                     human.get_next_observable_state(action) for human, action in zip(self.humans, human_actions)
+                    if self._is_in_fov(human.px, human.py)
                 ]
-                ob_obstacles = [obstacle.get_observable_state() for i, obstacle in enumerate(self.obstacles)]
-                ob_walls = [wall.get_observable_state() for i, wall in enumerate(self.walls)]
+                ob_obstacles = [obstacle.get_observable_state() for obstacle in self.obstacles
+                                if self._is_in_fov(obstacle.px, obstacle.py)]
+                ob_walls = [wall.get_observable_state() for wall in self.walls
+                            if self._is_in_fov((wall.sx + wall.ex) / 2, (wall.sy + wall.ey) / 2)]
                 ob_human_pred_path = []
                 ob = (ob_human, ob_obstacles, ob_walls, ob_human_pred_path)
             elif self.robot.sensor == 'RGB':
@@ -1490,10 +1500,13 @@ class CrowdSim(gym.Env):
 
             # compute the observation
             if self.robot.sensor == 'coordinates':
-                ob_human = [human.get_observable_state() for human in self.humans]
-                ob_obstacles = [obstacle.get_observable_state() for i, obstacle in enumerate(self.obstacles)]
-                ob_walls = [wall.get_observable_state() for i, wall in enumerate(self.walls)]
-                ob_human_pred_path = [human.get_prediction_path() for human in self.humans]
+                _visible_humans = [h for h in self.humans if self._is_in_fov(h.px, h.py)]
+                ob_human = [human.get_observable_state() for human in _visible_humans]
+                ob_obstacles = [obstacle.get_observable_state() for obstacle in self.obstacles
+                                if self._is_in_fov(obstacle.px, obstacle.py)]
+                ob_walls = [wall.get_observable_state() for wall in self.walls
+                            if self._is_in_fov((wall.sx + wall.ex) / 2, (wall.sy + wall.ey) / 2)]
+                ob_human_pred_path = [human.get_prediction_path() for human in _visible_humans]
                 ob = (ob_human, ob_obstacles, ob_walls, ob_human_pred_path)
                 # print("pred path")
             elif self.robot.sensor == 'RGB':
@@ -1502,9 +1515,12 @@ class CrowdSim(gym.Env):
             if self.robot.sensor == 'coordinates':
                 ob_human = [
                     human.get_next_observable_state(action) for human, action in zip(self.humans, human_actions)
+                    if self._is_in_fov(human.px, human.py)
                 ]
-                ob_obstacles = [obstacle.get_observable_state() for i, obstacle in enumerate(self.obstacles)]
-                ob_walls = [wall.get_observable_state() for i, wall in enumerate(self.walls)]
+                ob_obstacles = [obstacle.get_observable_state() for obstacle in self.obstacles
+                                if self._is_in_fov(obstacle.px, obstacle.py)]
+                ob_walls = [wall.get_observable_state() for wall in self.walls
+                            if self._is_in_fov((wall.sx + wall.ex) / 2, (wall.sy + wall.ey) / 2)]
                 ob_human_pred_path = []
                 ob = (ob_human, ob_obstacles, ob_walls, ob_human_pred_path)
             elif self.robot.sensor == 'RGB':
@@ -1548,17 +1564,30 @@ class CrowdSim(gym.Env):
                        v_right=v_right)
 
         
+    def _is_in_fov(self, target_px: float, target_py: float) -> bool:
+        """Return True if target position is within the robot's field of view."""
+        if self.robot_fov_half_angle >= np.pi:
+            return True  # full 360-degree vision, everything visible
+        dx = target_px - self.robot.px
+        dy = target_py - self.robot.py
+        angle_to_target = np.arctan2(dy, dx)
+        angle_diff = angle_to_target - self.robot.theta
+        # Normalize to [-pi, pi]
+        angle_diff = (angle_diff + np.pi) % (2 * np.pi) - np.pi
+        return abs(angle_diff) <= self.robot_fov_half_angle
+
     def compute_observation_for(self, agent):
         if agent == self.robot:
             ob = []
             for human in self.humans:
                 if self.test_changing_size is False:
-                    ob.append(human.get_observable_state())
+                    if self._is_in_fov(human.px, human.py):
+                        ob.append(human.get_observable_state())
                 else:
                     dis2 = ((human.px - agent.px) * (human.px - agent.px) +
                             (human.py - agent.py) * (human.py - agent.py))
 
-                    if dis2 < self.robot_sensor_range * self.robot_sensor_range:
+                    if dis2 < self.robot_sensor_range * self.robot_sensor_range and self._is_in_fov(human.px, human.py):
                         ob.append(human.get_observable_state())
         else:
             ob = [other_human.get_observable_state() for other_human in self.humans if other_human != agent]

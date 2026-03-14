@@ -6,6 +6,7 @@ import sys
 import gym
 import importlib.util
 import logging
+import numpy as np
 import torch as th
 
 from crowd_sim.envs.utils.robot import Robot
@@ -70,6 +71,7 @@ def main(args):
     logging.info('Current goal_weight: {}'.format(args.goal_weight))
     logging.info('Current re_collision: {}'.format(args.re_collision))
     logging.info('Current re_arrival: {}'.format(args.re_arrival))
+    logging.info('Current fov_angle (deg): {}'.format(args.fov_angle))
     logging.info('Current n_steps: {}'.format(args.n_steps))
     logging.info('Current batch_size: {}'.format(args.batch_size))
     logging.info('Current n_epochs: {}'.format(args.n_epochs))
@@ -98,6 +100,7 @@ def main(args):
     env.use_PL = args.use_PL
     env.PL_traj_length = args.PL_traj_length
     env.PL_traj_gamma = args.PL_traj_gamma
+    env.robot_fov_half_angle = np.radians(args.fov_angle)
 
     lr_schedule = get_linear_fn(2.5e-4, 1.0e-4, 0.5)
 
@@ -153,6 +156,9 @@ if __name__ == "__main__":
     parser.add_argument('--re_theta', type=float, default=0.01)
     parser.add_argument('--action_dim', type=int, default=9)
     parser.add_argument('--action_range', type=float, default=2.25)
+    parser.add_argument('--fov_angle', type=float, default=110.0,
+                        help='Total forward FOV in degrees (e.g. 110 => robot sees +-55 deg). '
+                             'Use 360 to restore full 360-degree visibility.')
     parser.add_argument('--use_ros', type=bool, default=False)
     parser.add_argument('--use_AM', type=bool, default=True, help="enable Action Mask")
     parser.add_argument('--use_PL', type=bool, default=True, help="enable Privileged Learning")
