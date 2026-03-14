@@ -117,7 +117,7 @@ class CrowdSim(gym.Env):
         self.actions_prob: np.ndarray = None
         self.random_seed: int = 0
         self.phase_num: int = 0
-        self.robot_fov_half_angle: float = np.pi  # default full 360 deg
+        self.robot_fov_half_angle: float = np.radians(55)  # default 110 deg (ZED2 camera FOV)
         self.phase: Optional[str] = None
         self.MPC_NP: int = 10
 
@@ -1192,6 +1192,16 @@ class CrowdSim(gym.Env):
 
             if not self.use_AM:
                 continue
+
+            # FOV check: mask goal positions outside the robot's camera field of view.
+            # gx, gy are in the robot's local frame (gx = forward, gy = left).
+            # The ZED2 camera has a 110-degree horizontal FOV (±55° from forward).
+            if self.robot_fov_half_angle < np.pi and (gx != 0.0 or gy != 0.0):
+                goal_angle = np.arctan2(gy, gx)
+                if abs(goal_angle) > self.robot_fov_half_angle:
+                    self.action_mask[action_idx] = 0.0
+                    is_valid = False
+                    continue
 
             if gx * gx + gy * gy  > max_dist * max_dist:
                 is_valid = False
