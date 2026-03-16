@@ -109,6 +109,11 @@ def main(args):
     env.use_AM = use_action_mask
     env.use_action_mask = use_action_mask
     env.use_PL = True
+    # Set trực tiếp lên crowd_sim (unwrapped) để _update_action_mask() dùng đúng giá trị
+    env.unwrapped.num_actions_per_dim = action_dim
+    env.unwrapped.goal_coord_range = goal_range
+    env.unwrapped.use_AM = use_action_mask
+    env.unwrapped.use_action_mask = use_action_mask
     logging.info('Action mask visualization: %s', env.use_action_mask)
     logging.info('Action mask filtering (use_AM): %s', env.use_AM)
     logging.info('Action grid: dim=%d, range=%.3f', action_dim, args.action_range)

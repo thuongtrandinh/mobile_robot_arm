@@ -4,6 +4,10 @@ import torch
 import numpy as np
 from .rvo.rvo_inter import rvo_inter
 
+# Bán kính bao robot (top-view): thân 0.3×0.4 m → sqrt(0.15²+0.2²) = 0.25 m
+# Khớp với amr_controller (ampcc_params.yaml) và URDF wheel_separation=0.46 m
+ROBOT_RADIUS = 0.25
+
 JointStateTensor = Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]
 
 
@@ -105,7 +109,7 @@ class CrowdNavGraph:
             temp = temp.reshape(human_state.shape[0], -1, 2)
             temp = torch.matmul(temp, transform_matrix)
             human_state[:, :8] = temp.reshape(human_state.shape[0], -1)
-            human_state[:, -1] = human_state[:, -1] + 0.3
+            human_state[:, -1] = human_state[:, -1] + ROBOT_RADIUS
         
         if obstacle_state.shape[0] != 0:
             obstacle_state = torch.index_select(obstacle_state, 1, torch.tensor([8, 9, 0, 1, 2, 3, 4, 5, 6, 7, 10]))
@@ -113,7 +117,7 @@ class CrowdNavGraph:
             temp = temp.reshape(obstacle_state.shape[0], -1, 2)
             temp = torch.matmul(temp, transform_matrix)
             obstacle_state[:, :8] = temp.reshape(obstacle_state.shape[0], -1)
-            obstacle_state[:, -1] = obstacle_state[:, -1] + 0.3
+            obstacle_state[:, -1] = obstacle_state[:, -1] + ROBOT_RADIUS
         
         if wall_state.shape[0] != 0:
             wall_state = torch.index_select(wall_state, 1, torch.tensor([8, 9, 10, 11, 0, 1, 2, 3, 4, 5, 6, 7]))
@@ -121,7 +125,7 @@ class CrowdNavGraph:
             temp = temp.reshape(wall_state.shape[0], -1, 2)
             temp = torch.matmul(temp, transform_matrix)
             wall_state[:, :10] = temp.reshape(wall_state.shape[0], -1)
-            wall_state = torch.cat((wall_state, 0.3 * torch.ones((wall_state.shape[0], 1))), dim=1)
+            wall_state = torch.cat((wall_state, ROBOT_RADIUS * torch.ones((wall_state.shape[0], 1))), dim=1)
 
         return new_robot_state, human_state, obstacle_state, wall_state
 

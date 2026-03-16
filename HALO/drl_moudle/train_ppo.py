@@ -1,4 +1,5 @@
 import argparse
+import math
 import os.path
 import shutil
 import sys
@@ -79,6 +80,8 @@ def main(args):
     env = gym.make("CrowdSim-v0", disable_env_checker=True)
     env.configure(env_config)
     env.set_phase(0)
+    logging.info('FOV enabled: %s, FOV angle: %.1f deg, range: %.1f m',
+                 env.use_fov, math.degrees(env.camera_fov_rad) * 2, env.camera_range)
 
     robot = Robot(env_config, "robot")
     robot.time_step = env.time_step
@@ -97,6 +100,10 @@ def main(args):
     env.use_AM = args.use_AM
     env.use_PL = args.use_PL
     env.PL_traj_length = args.PL_traj_length
+    # Set trực tiếp lên crowd_sim (unwrapped) để _update_action_mask() dùng đúng giá trị
+    env.unwrapped.num_actions_per_dim = action_dim
+    env.unwrapped.goal_coord_range = goal_range
+    env.unwrapped.use_AM = args.use_AM
     env.PL_traj_gamma = args.PL_traj_gamma
 
     lr_schedule = get_linear_fn(2.5e-4, 1.0e-4, 0.5)
@@ -126,10 +133,26 @@ def main(args):
             logging.warning("Resume requested but no best_model(.zip) found in %s. Training from scratch.",
                             args.output_dir)
 
+        model._episode_num = args.start_episode
+        logging.info("Resumed from episode: %d", model._episode_num)
+        ep = args.start_episode
+        if ep >= 7999:
+            env.set_phase(3)
+            logging.info("Restored curriculum: Phase 3 (ep >= 7999)")
+        elif ep >= 4999:
+            env.set_phase(2)
+            logging.info("Restored curriculum: Phase 2 (ep >= 4999)")
+        elif ep >= 1999:
+            env.set_phase(1)
+            logging.info("Restored curriculum: Phase 1 (ep >= 1999)")
+        else:
+            logging.info("Restored curriculum: Phase 0 (ep < 1999)")
+
     curriculum_callback = CurriculumCallback(verbose=0)
     eval_callback = EvalCallback(eval_env=env, n_eval_episodes=args.n_eval_episodes, eval_freq=args.eval_freq,
                                  best_model_save_path=args.output_dir, verbose=1)
-    model.learn(int(args.total_timesteps), callback=[eval_callback, curriculum_callback])
+    model.learn(int(args.total_timesteps), callback=[eval_callback, curriculum_callback],
+                reset_num_timesteps=not args.resume)
     # checkpt_callback = CheckpointCallback(save_freq=2000, save_path=args.checkpt_dir, name_prefix='PPO')
     # model.learn(int(5e6), callback=[eval_callback, curriculum_callback, checkpt_callback])
 
@@ -142,6 +165,8 @@ if __name__ == "__main__":
     
     # parser.add_argument('--output_dir', type=str, default='data/output_test')
     parser.add_argument('--resume', default=False, action='store_true')
+    parser.add_argument('--start_episode', type=int, default=0,
+                        help='Episode number to resume from (use with --resume)')
     parser.add_argument('--gpu', default=True, action='store_true')
     parser.add_argument('--debug', default=False, action='store_true')
     parser.add_argument('--randomseed', type=int, default=3)

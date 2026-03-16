@@ -133,6 +133,16 @@ class CrowdSim(gym.Env):
         self.PL_traj_length = 0
         self.PL_traj_gamma = 0.0
 
+        # ── Camera FOV config (ZED2 = 110°, range 8 m) ──────────────────────
+        # Default ON để training match hardware. Override qua config nếu cần.
+        self.use_fov          = True
+        self.camera_fov_rad   = math.radians(110.0) / 2.0  # half-angle = 55°
+        self.camera_range     = 8.0   # m
+        # ── LiDAR 360° safe zone ─────────────────────────────────────────────
+        # Mọi người trong vùng này bị coi là vật cản tĩnh trong action masking
+        self.use_lidar_safe_zone    = True
+        self.lidar_safe_zone_radius = 1.5   # m
+
 
     def configure(self, config) -> None:
         """
@@ -143,6 +153,14 @@ class CrowdSim(gym.Env):
         self.time_step = config.env.time_step
         self.randomize_attributes = config.env.randomize_attributes
         self.robot_sensor_range = config.env.robot_sensor_range
+
+        # Camera FOV + LiDAR safe zone (override defaults set in __init__)
+        self.use_fov                = getattr(config.env, 'use_fov',                True)
+        fov_deg                     = getattr(config.env, 'camera_fov_deg',         110.0)
+        self.camera_fov_rad         = math.radians(fov_deg) / 2.0
+        self.camera_range           = getattr(config.env, 'camera_range',           8.0)
+        self.use_lidar_safe_zone    = getattr(config.env, 'use_lidar_safe_zone',    True)
+        self.lidar_safe_zone_radius = getattr(config.env, 'lidar_safe_zone_radius', 1.5)
 
         self.success_reward = config.reward.success_reward
         self.collision_penalty = config.reward.collision_penalty
@@ -1189,6 +1207,12 @@ class CrowdSim(gym.Env):
             if not self.use_AM:
                 continue
 
+            # ── VÙNG MÙ PHÍA SAU: gx < 0 trong robot-local frame (x = hướng tiến) ──
+            # Mask TẤT CẢ subgoal đòi hỏi robot đi lùi → triệt tiêu hành động ở blind zone
+            if gx < 0:
+                self.action_mask[action_idx] = 0.0
+                continue
+
             if gx * gx + gy * gy  > max_dist * max_dist:
                 is_valid = False
                 self.action_mask[action_idx] = 0.0
@@ -1202,6 +1226,25 @@ class CrowdSim(gym.Env):
                     break
             if not is_valid:
                 continue
+
+            # ── LIDAR SAFE ZONE: 360°, người gần < lidar_safe_zone_radius ────────────
+            # Bất kể FOV camera, LiDAR thấy được người đang di chuyển trong vùng gần.
+            # Coi người đó là vật cản tĩnh → block subgoal đi vào vùng đó.
+            if self.use_lidar_safe_zone:
+                for human in self.humans:
+                    dist_rob_to_human = math.sqrt(
+                        (self.robot.px - human.px) ** 2 + (self.robot.py - human.py) ** 2
+                    )
+                    if dist_rob_to_human < self.lidar_safe_zone_radius:
+                        closest_dist = np.sqrt(
+                            (goal_in_map[0] - human.px) ** 2 + (goal_in_map[1] - human.py) ** 2
+                        )
+                        if closest_dist < human.radius + safety_dis:
+                            self.action_mask[action_idx] = 0.0
+                            is_valid = False
+                            break
+                if not is_valid:
+                    continue
             for wall in self.walls:
                 closest_dist = point_to_segment_dist(wall.sx, wall.sy, wall.ex, wall.ey, *goal_in_map)
                 if closest_dist < safety_dis:
@@ -1408,10 +1451,17 @@ class CrowdSim(gym.Env):
 
             # compute the observation
             if self.robot.sensor == 'coordinates':
-                ob_human = [human.get_observable_state() for human in self.humans]
+                # compute_observation_for() giữ đủ N nodes, zero-fill nếu ngoài FOV
+                ob_human = self.compute_observation_for(self.robot)
                 ob_obstacles = [obstacle.get_observable_state() for i, obstacle in enumerate(self.obstacles)]
                 ob_walls = [wall.get_observable_state() for i, wall in enumerate(self.walls)]
-                ob_human_pred_path = [human.get_prediction_path() for human in self.humans]
+                # pred_paths phải có cùng thứ tự với ob_human (all N humans)
+                # human ẩn (ngoài FOV) → dummy path rỗng ([], []) để zip() không lệch index
+                visible_set = set(id(h) for h in self._visible_humans)
+                ob_human_pred_path = [
+                    human.get_prediction_path() if id(human) in visible_set else ([], [])
+                    for human in self.humans
+                ]
                 ob = (ob_human, ob_obstacles, ob_walls, ob_human_pred_path)
                 # print("pred path")
             elif self.robot.sensor == 'RGB':
@@ -1551,15 +1601,39 @@ class CrowdSim(gym.Env):
     def compute_observation_for(self, agent):
         if agent == self.robot:
             ob = []
+            self._visible_humans = []  # sẽ dùng để sync pred_path trong step()
             for human in self.humans:
-                if self.test_changing_size is False:
+                if not self.use_fov:
+                    # Chế độ legacy: robot thấy tất cả 360°, không giới hạn
                     ob.append(human.get_observable_state())
+                    self._visible_humans.append(human)
                 else:
-                    dis2 = ((human.px - agent.px) * (human.px - agent.px) +
-                            (human.py - agent.py) * (human.py - agent.py))
+                    dx = human.px - agent.px
+                    dy = human.py - agent.py
+                    dis2 = dx * dx + dy * dy
 
-                    if dis2 < self.robot_sensor_range * self.robot_sensor_range:
+                    is_visible = True
+
+                    # Kiểm tra tầm nhìn (camera_range)
+                    if dis2 > self.camera_range * self.camera_range:
+                        is_visible = False
+
+                    # Kiểm tra góc ZED2 (±55° = 110° tổng)
+                    if is_visible:
+                        angle_to_human = math.atan2(dy, dx)
+                        rel_angle = angle_to_human - agent.theta
+                        rel_angle = (rel_angle + math.pi) % (2 * math.pi) - math.pi
+                        if abs(rel_angle) > self.camera_fov_rad:
+                            is_visible = False
+
+                    if is_visible:
                         ob.append(human.get_observable_state())
+                        self._visible_humans.append(human)
+                    else:
+                        # Vùng mù: giữ node trong GNN nhưng zero-fill trạng thái
+                        # Vị trí 999m → RVO tính không có nguy cơ va chạm
+                        # GNN học cách bỏ qua các node sentinel này
+                        ob.append(ObservableState(999.0, 999.0, 0.0, 0.0, human.radius))
         else:
             ob = [other_human.get_observable_state() for other_human in self.humans if other_human != agent]
             if self.robot.visible:

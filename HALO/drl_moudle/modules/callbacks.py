@@ -352,12 +352,14 @@ class EvalCallback(EventCallback):
             self.logger.record("eval/success_rate", success_rate)
             self.logger.dump(self.num_timesteps)
 
-            if episode_num > 20000 and ave_return > self.best_ave_return:
+            if episode_num > 1000 and ave_return > self.best_ave_return:
                 if self.verbose >= 1:
                     print("New best average return!")
 
                 if self.best_model_save_path is not None:
                     self.model.save(os.path.join(self.best_model_save_path, "best_model"))
+                    with open(os.path.join(self.best_model_save_path, "episode_num.txt"), "w") as f:
+                        f.write(str(episode_num))
 
                 self.best_ave_return = float(ave_return)
                 # Trigger callback on new best model, if needed
@@ -420,19 +422,16 @@ class CurriculumCallback(BaseCallback):
                 #     return False
 
 
-                if episode_num == 3999:
+                if episode_num == 1999:
                     self.locals['env'].set_phase(1)
                     logging.info(f"\033[92mCurriculum learning enters stage 2.\033[0m")
-                elif episode_num == 11999:
+                elif episode_num == 4999:
                     self.locals['env'].set_phase(2)
                     logging.info(f"\033[92mCurriculum learning enters stage 3.\033[0m")
-                elif episode_num == 19999:
+                elif episode_num == 7999:
                     self.locals['env'].set_phase(3)
                     logging.info(f"\033[92mCurriculum learning enters terminal stage.\033[0m")
-                # elif episode_num == 39999:
-                #     self.locals['env'].set_phase(5)
-                #     logging.info(f"\033[92mCurriculum learning enters terminal stage.\033[0m")
-                elif episode_num == 49999:
+                elif episode_num == 9999:
                     return False
 
 

@@ -75,12 +75,15 @@ source ~/miniconda3/etc/profile.d/conda.sh
 conda activate mpc_rl
 export LD_PRELOAD=/lib/x86_64-linux-gnu/libtiff.so.5
 
+conda activate mpc_rl
+export LD_PRELOAD=/lib/x86_64-linux-gnu/libtiff.so.5
+
 python train_ppo.py \
   --config configs/mpc_rl.py \
-  --output_dir train_data/run1 \
-  --total_timesteps 5000000 \
+  --output_dir train_data/run2 \
+  --total_timesteps 1000000 \
   --eval_freq 500 \
-  --n_eval_episodes 100 \
+  --n_eval_episodes 20 \
   --action_dim 9 \
   --action_range 2.25 \
   --use_AM True \
@@ -105,9 +108,16 @@ python train_ppo.py \
 ```bash
 python train_ppo.py \
   --config configs/mpc_rl.py \
-  --output_dir train_data/run1 \
+  --output_dir train_data/run2 \
+  --total_timesteps 1000000 \
+  --eval_freq 500 \
+  --n_eval_episodes 20 \
+  --action_dim 9 \
+  --action_range 2.25 \
+  --use_AM True \
+  --use_PL True \
   --resume \
-  --total_timesteps 5000000
+  --start_episode 4048
 ```
 
 Điều kiện: trong `train_data/run1` có `best_model` hoặc `best_model.zip`.
@@ -153,14 +163,13 @@ python eval_ppo.py \
 
 ```bash
 python eval_ppo.py \
-  --config configs/mpc_rl.py \
-  --model_dir train_data/run1 \
-  --n_eval_episodes 1 \
-  --output_dir eval_data/run1_debug \
+  --model_dir /home/thuong/LVTN/amr_ws/HALO/drl_moudle/data/model1 \
+  --output_dir eval_data/run2 \
   --output_image_dir images/run1_grid \
-  --use_action_mask \
+  --n_eval_episodes 1 \
   --action_dim 9 \
-  --action_range 2.25
+  --action_range 2.25 \
+  --use_action_mask
 ```
 
 Kết quả frame nằm ở `images/run1_grid`.
