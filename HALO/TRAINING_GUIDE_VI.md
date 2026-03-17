@@ -148,6 +148,59 @@ python eval_ppo.py \
 
 Output: success rate, collision rate.
 
+## Mode 2.5: Test trực tiếp với best_model.zip
+
+Điều kiện để chạy:
+- Trong thư mục `model_dir` phải có `best_model` hoặc `best_model.zip`.
+- File này chỉ xuất hiện sau khi callback eval lưu model tốt hơn trước đó.
+
+Kiểm tra nhanh:
+
+```bash
+ls -lh train_data/run1/best_model*
+```
+
+Nếu chưa có `best_model`:
+- Tiếp tục train thêm (nhất là khi mới bắt đầu hoặc eval chưa chạy đủ).
+- Giảm `--eval_freq` để callback đánh giá thường xuyên hơn.
+
+Test `best_model` lấy thống kê:
+
+```bash
+python eval_ppo.py \
+  --config configs/mpc_rl.py \
+  --model_dir train_data/run1 \
+  --n_eval_episodes 200 \
+  --use_action_mask
+```
+
+Test `best_model` có render:
+
+```bash
+python eval_ppo.py \
+  --config configs/mpc_rl.py \
+  --model_dir train_data/run1 \
+  --n_eval_episodes 20 \
+  --visualize \
+  --use_action_mask
+```
+
+Test `best_model` để soi frame:
+
+```bash
+python eval_ppo.py \
+  --config configs/mpc_rl.py \
+  --model_dir train_data/run1 \
+  --output_dir eval_data/run_best \
+  --output_image_dir images/run_best_grid \
+  --n_eval_episodes 1 \
+  --use_action_mask
+```
+
+Ghi chú Gazebo:
+- Các lệnh eval ở trên chạy trong môi trường HALO (CrowdSim), không tự động điều khiển robot ROS2/Gazebo.
+- Muốn chạy `best_model` trong Gazebo cần thêm node bridge suy luận PPO -> publish lệnh điều khiển ROS2.
+
 ## Mode 3: Render live khi eval
 
 ```bash

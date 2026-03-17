@@ -125,34 +125,59 @@ def main(args):
     )
 
     if args.resume:
-        resume_model_path = os.path.join(args.output_dir, "best_model")
-        if os.path.exists(resume_model_path) or os.path.exists(resume_model_path + ".zip"):
-            model.set_parameters(resume_model_path, device=device)
-            logging.info("Resumed parameters from: %s", resume_model_path)
+        last_model_path = os.path.join(args.output_dir, "last_model")
+        best_model_path = os.path.join(args.output_dir, "best_model")
+        last_episode_file = os.path.join(args.output_dir, "last_episode_num.txt")
+        best_episode_file = os.path.join(args.output_dir, "episode_num.txt")
+
+        if os.path.exists(last_model_path) or os.path.exists(last_model_path + ".zip"):
+            model.set_parameters(last_model_path, device=device)
+            logging.info("Resumed parameters from last checkpoint: %s", last_model_path)
+        elif os.path.exists(best_model_path) or os.path.exists(best_model_path + ".zip"):
+            model.set_parameters(best_model_path, device=device)
+            logging.info("Resumed parameters from best checkpoint: %s", best_model_path)
         else:
-            logging.warning("Resume requested but no best_model(.zip) found in %s. Training from scratch.",
+            logging.warning("Resume requested but no last_model(.zip) or best_model(.zip) found in %s. Training from scratch.",
                             args.output_dir)
 
-        model._episode_num = args.start_episode
+        resume_episode = args.start_episode
+        if resume_episode == 0:
+            if os.path.exists(last_episode_file):
+                with open(last_episode_file, "r") as f:
+                    resume_episode = int(f.read().strip())
+            elif os.path.exists(best_episode_file):
+                with open(best_episode_file, "r") as f:
+                    resume_episode = int(f.read().strip())
+
+        model._episode_num = resume_episode
         logging.info("Resumed from episode: %d", model._episode_num)
-        ep = args.start_episode
-        if ep >= 7999:
+        ep = resume_episode
+        if ep >= 19999:
             env.set_phase(3)
-            logging.info("Restored curriculum: Phase 3 (ep >= 7999)")
-        elif ep >= 4999:
+            logging.info("Restored curriculum: Phase 3 (ep >= 19999)")
+        elif ep >= 11999:
             env.set_phase(2)
-            logging.info("Restored curriculum: Phase 2 (ep >= 4999)")
-        elif ep >= 1999:
+            logging.info("Restored curriculum: Phase 2 (ep >= 11999)")
+        elif ep >= 3999:
             env.set_phase(1)
-            logging.info("Restored curriculum: Phase 1 (ep >= 1999)")
+            logging.info("Restored curriculum: Phase 1 (ep >= 3999)")
         else:
-            logging.info("Restored curriculum: Phase 0 (ep < 1999)")
+            logging.info("Restored curriculum: Phase 0 (ep < 3999)")
 
     curriculum_callback = CurriculumCallback(verbose=0)
     eval_callback = EvalCallback(eval_env=env, n_eval_episodes=args.n_eval_episodes, eval_freq=args.eval_freq,
                                  best_model_save_path=args.output_dir, verbose=1)
-    model.learn(int(args.total_timesteps), callback=[eval_callback, curriculum_callback],
-                reset_num_timesteps=not args.resume)
+    try:
+        model.learn(int(args.total_timesteps), callback=[eval_callback, curriculum_callback],
+                    reset_num_timesteps=not args.resume)
+    except KeyboardInterrupt:
+        logging.info("Training interrupted by user. Saving last model checkpoint...")
+    finally:
+        last_model_path = os.path.join(args.output_dir, "last_model")
+        model.save(last_model_path)
+        with open(os.path.join(args.output_dir, "last_episode_num.txt"), "w") as f:
+            f.write(str(model._episode_num))
+        logging.info("Saved last model to: %s.zip", last_model_path)
     # checkpt_callback = CheckpointCallback(save_freq=2000, save_path=args.checkpt_dir, name_prefix='PPO')
     # model.learn(int(5e6), callback=[eval_callback, curriculum_callback, checkpt_callback])
 

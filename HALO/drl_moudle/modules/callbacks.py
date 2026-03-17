@@ -422,16 +422,16 @@ class CurriculumCallback(BaseCallback):
                 #     return False
 
 
-                if episode_num == 1999:
+                if episode_num == 3999:
                     self.locals['env'].set_phase(1)
                     logging.info(f"\033[92mCurriculum learning enters stage 2.\033[0m")
-                elif episode_num == 4999:
+                elif episode_num == 11999:
                     self.locals['env'].set_phase(2)
                     logging.info(f"\033[92mCurriculum learning enters stage 3.\033[0m")
-                elif episode_num == 7999:
+                elif episode_num == 19999:
                     self.locals['env'].set_phase(3)
                     logging.info(f"\033[92mCurriculum learning enters terminal stage.\033[0m")
-                elif episode_num == 9999:
+                elif episode_num == 49999:
                     return False
 
 
