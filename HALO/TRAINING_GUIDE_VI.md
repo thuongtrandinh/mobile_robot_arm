@@ -106,21 +106,18 @@ python train_ppo.py \
 ## 4. Resume train
 
 ```bash
-python train_ppo.py \
-  --config configs/mpc_rl.py \
-  --output_dir train_data/run2 \
-  --total_timesteps 1000000 \
-  --eval_freq 500 \
-  --n_eval_episodes 20 \
-  --action_dim 9 \
-  --action_range 2.25 \
-  --use_AM True \
-  --use_PL True \
-  --resume \
-  --start_episode 4048
+export LD_PRELOAD=/lib/x86_64-linux-gnu/libtiff.so.5 && python train_ppo.py   --config configs/mpc_rl.py   --output_dir train_data/run_04   --total_timesteps 5000000   --eval_freq 200   --n_eval_episodes 20   --action_dim 9   --action_range 2.25   --use_AM True   --use_PL True   --n_steps 2048   --batch_size 128   --n_epochs 10 --resume
 ```
 
 Điều kiện: trong `train_data/run1` có `best_model` hoặc `best_model.zip`.
+
+Tuỳ chọn mới:
+
+- `--resume_from auto|last|best`
+  - `auto`: thử `last_model` trước, lỗi thì fallback sang `best_model`.
+  - `last`: chỉ resume từ `last_model`.
+  - `best`: chỉ resume từ `best_model`.
+- `--last_save_freq N`: auto-save `last_model` mỗi `N` episode (mặc định `50`).
 
 ---
 
@@ -448,11 +445,65 @@ python train_ppo.py \
   --config configs/mpc_rl.py \
   --output_dir train_data/run1 \
   --resume \
+  --resume_from auto \
+  --last_save_freq 50 \
   --total_timesteps 5000000 \
   --n_steps 4096 \
   --batch_size 256 \
   --n_epochs 10
 ```
+
+## 12. Chạy best_model.zip trong Gazebo (ROS2 `src/`)
+
+Đã thêm node bridge: `amr_planner/rl_local_goal_bridge`.
+
+Node này:
+- Load `best_model.zip` từ `--model_dir`.
+- Suy luận local-goal từ PPO.
+- Xuất lệnh `TwistStamped` ra `/diff_cont/cmd_vel` để robot chạy trong Gazebo.
+
+### 12.1 Build package
+
+```bash
+cd ~/LVTN/amr_ws
+colcon build --packages-select amr_planner
+source install/setup.bash
+```
+
+### 12.2 Chạy Gazebo
+
+```bash
+ros2 launch amr_descriptions gazebo.launch.py world:=room_20x20.world
+```
+
+### 12.3 Chạy bridge best_model (terminal mới)
+
+```bash
+cd ~/LVTN/amr_ws
+source install/setup.bash
+
+ros2 launch amr_planner rl_local_goal_bridge.launch.py \
+  model_dir:=/home/thuong/LVTN/amr_ws/HALO/drl_moudle/train_data/run_04 \
+  halo_drl_dir:=/home/thuong/LVTN/amr_ws/HALO/drl_moudle \
+  config:=configs/mpc_rl.py
+```
+
+### 12.4 Gửi goal để robot chạy
+
+- Mở RViz (từ launch Gazebo), dùng công cụ **2D Goal Pose** để publish vào `/goal_pose`.
+- Node bridge sẽ nhận `/odometry/filtered`, `/scan`, `/goal_pose` và phát `/diff_cont/cmd_vel`.
+
+### 12.5 Kiểm tra nhanh topic
+
+```bash
+ros2 topic echo /diff_cont/cmd_vel
+ros2 topic hz /diff_cont/cmd_vel
+```
+
+Nếu không thấy robot chạy:
+- Kiểm tra có file `best_model.zip` trong `model_dir`.
+- Kiểm tra có `/goal_pose` hay chưa.
+- Kiểm tra `odom_topic` đúng (mặc định `/odometry/filtered`).
   --re_theta 0.01
 ```
 

@@ -1207,11 +1207,8 @@ class CrowdSim(gym.Env):
             if not self.use_AM:
                 continue
 
-            # ── VÙNG MÙ PHÍA SAU: gx < 0 trong robot-local frame (x = hướng tiến) ──
-            # Mask TẤT CẢ subgoal đòi hỏi robot đi lùi → triệt tiêu hành động ở blind zone
-            if gx < 0:
-                self.action_mask[action_idx] = 0.0
-                continue
+            # Cho phép toàn bộ lưới action (kể cả các subgoal phía sau robot).
+            # Không chặn theo điều kiện gx < 0 để policy có thể chọn đủ 81 action.
 
             if gx * gx + gy * gy  > max_dist * max_dist:
                 is_valid = False

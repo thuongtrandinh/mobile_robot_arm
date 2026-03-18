@@ -25,7 +25,8 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'global_planner = amr_planner.global_planner:main',
+            'global_planner = agv_planner.global_planner:main',
+            'rl_local_goal_bridge = agv_planner.rl_local_goal_bridge:main',
         ],
     },
 )

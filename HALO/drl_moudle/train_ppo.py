@@ -14,7 +14,7 @@ from modules.policies import ExternalPolicy
 
 # from algorithms.graph_ppo import GraphPPO
 from algorithms.mpc_ppo import MpcPPO
-from modules.callbacks import CurriculumCallback, EvalCallback, CheckpointCallback
+from modules.callbacks import CurriculumCallback, EvalCallback, CheckpointCallback, LastModelCheckpointCallback
 from modules.evaluation import evaluate_policy
 from modules.utils import get_linear_fn
 
@@ -130,15 +130,28 @@ def main(args):
         last_episode_file = os.path.join(args.output_dir, "last_episode_num.txt")
         best_episode_file = os.path.join(args.output_dir, "episode_num.txt")
 
-        if os.path.exists(last_model_path) or os.path.exists(last_model_path + ".zip"):
-            model.set_parameters(last_model_path, device=device)
-            logging.info("Resumed parameters from last checkpoint: %s", last_model_path)
-        elif os.path.exists(best_model_path) or os.path.exists(best_model_path + ".zip"):
-            model.set_parameters(best_model_path, device=device)
-            logging.info("Resumed parameters from best checkpoint: %s", best_model_path)
+        resumed_ok = False
+        if args.resume_from == "last":
+            checkpoint_candidates = [(last_model_path, "last")]
+        elif args.resume_from == "best":
+            checkpoint_candidates = [(best_model_path, "best")]
         else:
-            logging.warning("Resume requested but no last_model(.zip) or best_model(.zip) found in %s. Training from scratch.",
-                            args.output_dir)
+            checkpoint_candidates = [(last_model_path, "last"), (best_model_path, "best")]
+
+        for ckpt_path, ckpt_name in checkpoint_candidates:
+            if not (os.path.exists(ckpt_path) or os.path.exists(ckpt_path + ".zip")):
+                continue
+            try:
+                model.set_parameters(ckpt_path, device=device)
+                logging.info("Resumed parameters from %s checkpoint: %s", ckpt_name, ckpt_path)
+                resumed_ok = True
+                break
+            except Exception as e:
+                logging.warning("Failed to load %s checkpoint at %s: %s", ckpt_name, ckpt_path, e)
+
+        if not resumed_ok:
+            logging.warning("Resume requested (%s) but no valid checkpoint found in %s. Training from scratch.",
+                            args.resume_from, args.output_dir)
 
         resume_episode = args.start_episode
         if resume_episode == 0:
@@ -167,14 +180,26 @@ def main(args):
     curriculum_callback = CurriculumCallback(verbose=0)
     eval_callback = EvalCallback(eval_env=env, n_eval_episodes=args.n_eval_episodes, eval_freq=args.eval_freq,
                                  best_model_save_path=args.output_dir, verbose=1)
+    last_model_callback = LastModelCheckpointCallback(
+        save_path=args.output_dir,
+        save_freq_episodes=args.last_save_freq,
+        verbose=1,
+    )
     try:
-        model.learn(int(args.total_timesteps), callback=[eval_callback, curriculum_callback],
+        model.learn(int(args.total_timesteps), callback=[eval_callback, curriculum_callback, last_model_callback],
                     reset_num_timesteps=not args.resume)
     except KeyboardInterrupt:
         logging.info("Training interrupted by user. Saving last model checkpoint...")
     finally:
         last_model_path = os.path.join(args.output_dir, "last_model")
-        model.save(last_model_path)
+        tmp_last_model_path = os.path.join(args.output_dir, "last_model_tmp")
+        model.save(tmp_last_model_path)
+        tmp_zip = tmp_last_model_path + ".zip"
+        final_zip = last_model_path + ".zip"
+        if os.path.exists(tmp_zip):
+            os.replace(tmp_zip, final_zip)
+        if os.path.exists(tmp_last_model_path):
+            os.remove(tmp_last_model_path)
         with open(os.path.join(args.output_dir, "last_episode_num.txt"), "w") as f:
             f.write(str(model._episode_num))
         logging.info("Saved last model to: %s.zip", last_model_path)
@@ -190,6 +215,8 @@ if __name__ == "__main__":
     
     # parser.add_argument('--output_dir', type=str, default='data/output_test')
     parser.add_argument('--resume', default=False, action='store_true')
+    parser.add_argument('--resume_from', type=str, default='auto', choices=['auto', 'last', 'best'],
+                        help='Checkpoint source for resume: auto tries last then best')
     parser.add_argument('--start_episode', type=int, default=0,
                         help='Episode number to resume from (use with --resume)')
     parser.add_argument('--gpu', default=True, action='store_true')
@@ -214,6 +241,8 @@ if __name__ == "__main__":
     parser.add_argument('--total_timesteps', type=int, default=int(5e6))
     parser.add_argument('--eval_freq', type=int, default=500)
     parser.add_argument('--n_eval_episodes', type=int, default=100)
+    parser.add_argument('--last_save_freq', type=int, default=50,
+                        help='Auto-save last_model every N episodes')
     # parser.add_argument('--checkpt_dir', type=str, default='data/output_eval_ipopt_theta_4_yaw_penalize_pt1')
 
 

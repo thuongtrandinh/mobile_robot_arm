@@ -523,3 +523,46 @@ class CheckpointCallback(BaseCallback):
             #         print(f"Saving model VecNormalize to {vec_normalize_path}")
 
         return True
+
+
+class LastModelCheckpointCallback(BaseCallback):
+    def __init__(self, save_path: str, save_freq_episodes: int = 50, verbose: int = 0):
+        super().__init__(verbose)
+        self.save_path = save_path
+        self.save_freq_episodes = max(1, int(save_freq_episodes))
+
+    def _init_callback(self) -> None:
+        os.makedirs(self.save_path, exist_ok=True)
+
+    def _save_last_checkpoint(self) -> None:
+        last_model_path = os.path.join(self.save_path, "last_model")
+        tmp_last_model_path = os.path.join(self.save_path, "last_model_tmp")
+
+        self.model.save(tmp_last_model_path)
+
+        tmp_zip = tmp_last_model_path + ".zip"
+        final_zip = last_model_path + ".zip"
+        if os.path.exists(tmp_zip):
+            os.replace(tmp_zip, final_zip)
+        if os.path.exists(tmp_last_model_path):
+            os.remove(tmp_last_model_path)
+
+        episode_num = int(self.locals['self']._episode_num)
+        with open(os.path.join(self.save_path, "last_episode_num.txt"), "w") as f:
+            f.write(str(episode_num))
+
+        if self.verbose >= 1:
+            logging.info("Auto-saved last model at episode %d to: %s.zip", episode_num, last_model_path)
+
+    def _on_step(self) -> bool:
+        if not self.locals.get('done', False):
+            return True
+
+        episode_num = int(self.locals['self']._episode_num)
+        if episode_num > 0 and episode_num % self.save_freq_episodes == 0:
+            self._save_last_checkpoint()
+
+        return True
+
+    def _on_training_end(self) -> None:
+        self._save_last_checkpoint()

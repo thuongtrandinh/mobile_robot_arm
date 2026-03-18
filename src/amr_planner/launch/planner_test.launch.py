@@ -15,7 +15,7 @@ def generate_launch_description():
     # --- Nodes ---
     # map_server là một LifecycleNode, cần được quản lý
     global_planner_node = Node(
-        package='agv_planner',
+        package='amr_planner',
         executable='global_planner',
         name='agv_global_planner',
         output='screen',
