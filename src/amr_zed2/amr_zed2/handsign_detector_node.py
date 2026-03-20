@@ -80,7 +80,7 @@ class HandSignDetectorNode(Node):
     def _init_parameters(self):
         """Initialize ROS parameters"""
         defaults = {
-            'hand_model_path': 'handsign_exp14_best.pt',
+            'hand_model_path': 'best.pt',
             'person_model_path': 'yolov8n.pt',
             'start_hold_time': 3.0,
             'stop_hold_time': 3.0,
