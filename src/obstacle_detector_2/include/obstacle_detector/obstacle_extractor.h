@@ -57,9 +57,9 @@
 #include "visualization_msgs/msg/marker_array.hpp"
 #include "std_srvs/srv/empty.hpp"
 
-#include "obstacle_detector/msg/obstacles.hpp"
-#include "obstacle_detector/msg/circle_obstacle.hpp"
-#include "obstacle_detector/msg/segment_obstacle.hpp"
+#include "amr_interfaces/msg/obstacles.hpp"
+#include "amr_interfaces/msg/circle_obstacle.hpp"
+#include "amr_interfaces/msg/segment_obstacle.hpp"
 
 
 namespace obstacle_detector
@@ -104,7 +104,7 @@ private:
   rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr scan_sub_;
   rclcpp::Subscription<sensor_msgs::msg::PointCloud>::SharedPtr pcl_sub_;
   rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr pcl2_sub_;
-  rclcpp::Publisher<obstacle_detector::msg::Obstacles>::SharedPtr obstacles_pub_;
+  rclcpp::Publisher<amr_interfaces::msg::Obstacles>::SharedPtr obstacles_pub_;
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr obstacles_vis_pub_;
   rclcpp::Service<std_srvs::srv::Empty>::SharedPtr params_srv_;
 

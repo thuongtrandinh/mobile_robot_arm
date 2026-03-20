@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.8)
-project(ocp_planner)
+project(amr_interfaces)
 
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
@@ -22,6 +22,9 @@ set(msg_files
   "msg/PolyState.msg"
   "msg/RobotState.msg"
   "msg/WallState.msg"
+  "msg/CircleObstacle.msg"
+  "msg/SegmentObstacle.msg"
+  "msg/Obstacles.msg"
 )
 
 set(srv_files

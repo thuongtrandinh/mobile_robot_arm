@@ -45,9 +45,9 @@
 #include "visualization_msgs/msg/marker.hpp"
 #include "visualization_msgs/msg/marker_array.hpp"
 
-#include "obstacle_detector/msg/obstacles.hpp"
-#include "obstacle_detector/msg/circle_obstacle.hpp"
-#include "obstacle_detector/msg/segment_obstacle.hpp"
+#include "amr_interfaces/msg/obstacles.hpp"
+#include "amr_interfaces/msg/circle_obstacle.hpp"
+#include "amr_interfaces/msg/segment_obstacle.hpp"
 
 #include "obstacle_detector/utilities/tracked_circle_obstacle.h"
 #include "obstacle_detector/utilities/tracked_segment_obstacle.h"
@@ -65,17 +65,17 @@ private:
   void updateParamsUtil();
   void updateParams(const std::shared_ptr<rmw_request_id_t> request_header, const std::shared_ptr<std_srvs::srv::Empty::Request> &req, const std::shared_ptr<std_srvs::srv::Empty::Response> &res);
   void timerCallback();
-  void obstaclesCallback(const obstacle_detector::msg::Obstacles::ConstSharedPtr& new_obstacles);
-  void obstaclesCallbackCircles(const obstacle_detector::msg::Obstacles::ConstSharedPtr& new_obstacles);
-  void obstaclesCallbackSegments(const obstacle_detector::msg::Obstacles::ConstSharedPtr& new_obstacles);
+  void obstaclesCallback(const amr_interfaces::msg::Obstacles::ConstSharedPtr& new_obstacles);
+  void obstaclesCallbackCircles(const amr_interfaces::msg::Obstacles::ConstSharedPtr& new_obstacles);
+  void obstaclesCallbackSegments(const amr_interfaces::msg::Obstacles::ConstSharedPtr& new_obstacles);
   void odomCallback(const nav_msgs::msg::Odometry::ConstSharedPtr& msg);
 
   void initialize() { std_srvs::srv::Empty empt; updateParamsUtil(); }
 
-  double obstacleCostFunction(const obstacle_detector::msg::CircleObstacle& new_obstacle, const obstacle_detector::msg::CircleObstacle& old_obstacle);
-  double obstacleCostFunction(const obstacle_detector::msg::SegmentObstacle& new_obstacle, const obstacle_detector::msg::SegmentObstacle& old_obstacle);
-  void calculateCostMatrix(const std::vector<obstacle_detector::msg::CircleObstacle>& new_obstacles, arma::mat& cost_matrix);
-  void calculateCostMatrix(const std::vector<obstacle_detector::msg::SegmentObstacle>& new_obstacles, arma::mat& cost_matrix);
+  double obstacleCostFunction(const amr_interfaces::msg::CircleObstacle& new_obstacle, const amr_interfaces::msg::CircleObstacle& old_obstacle);
+  double obstacleCostFunction(const amr_interfaces::msg::SegmentObstacle& new_obstacle, const amr_interfaces::msg::SegmentObstacle& old_obstacle);
+  void calculateCostMatrix(const std::vector<amr_interfaces::msg::CircleObstacle>& new_obstacles, arma::mat& cost_matrix);
+  void calculateCostMatrix(const std::vector<amr_interfaces::msg::SegmentObstacle>& new_obstacles, arma::mat& cost_matrix);
   void calculateRowMinIndices(const arma::mat& cost_matrix, std::vector<int>& row_min_indices, const int T, const int U);
   void calculateColMinIndices(const arma::mat& cost_matrix, std::vector<int>& col_min_indices, const int T, const int U);
 
@@ -85,41 +85,41 @@ private:
   bool fissionObstaclesCorrespond(const int idx, const int jdx, const std::vector<int>& row_min_indices, const std::vector<int>& used_new);
 
   void fuseObstacles(const std::vector<int>& fusion_indices, const std::vector<int>& col_min_indices,
-                     std::vector<TrackedCircleObstacle>& new_tracked, const obstacle_detector::msg::Obstacles::ConstSharedPtr& new_obstacles);
+                     std::vector<TrackedCircleObstacle>& new_tracked, const amr_interfaces::msg::Obstacles::ConstSharedPtr& new_obstacles);
   void fissureObstacle(const std::vector<int>& fission_indices, const std::vector<int>& row_min_indices,
-                       std::vector<TrackedCircleObstacle>& new_tracked, const obstacle_detector::msg::Obstacles::ConstSharedPtr& new_obstacles);
+                       std::vector<TrackedCircleObstacle>& new_tracked, const amr_interfaces::msg::Obstacles::ConstSharedPtr& new_obstacles);
   void fuseObstacles(const std::vector<int>& fusion_indices, const std::vector<int>& col_min_indices,
-                     std::vector<TrackedSegmentObstacle>& new_tracked, const obstacle_detector::msg::Obstacles::ConstSharedPtr& new_obstacles);
+                     std::vector<TrackedSegmentObstacle>& new_tracked, const amr_interfaces::msg::Obstacles::ConstSharedPtr& new_obstacles);
   void fissureObstacle(const std::vector<int>& fission_indices, const std::vector<int>& row_min_indices,
-                       std::vector<TrackedSegmentObstacle>& new_tracked, const obstacle_detector::msg::Obstacles::ConstSharedPtr& new_obstacles);
+                       std::vector<TrackedSegmentObstacle>& new_tracked, const amr_interfaces::msg::Obstacles::ConstSharedPtr& new_obstacles);
 
   void updateObstacles();
   void publishObstacles();
   void publishVisualizationObstacles();
   visualization_msgs::msg::Marker getMarkerBase(uid_t uid);
-  visualization_msgs::msg::Marker getMarkerCircle(obstacle_detector::msg::CircleObstacle& ob);
-  visualization_msgs::msg::Marker getMarkerSegment(obstacle_detector::msg::SegmentObstacle& ob);
+  visualization_msgs::msg::Marker getMarkerCircle(amr_interfaces::msg::CircleObstacle& ob);
+  visualization_msgs::msg::Marker getMarkerSegment(amr_interfaces::msg::SegmentObstacle& ob);
   visualization_msgs::msg::Marker getMarkerText(uid_t uid);
   visualization_msgs::msg::Marker getMarkerVelocityArrow(uid_t uid, double px, double py, double vx, double vy);
 
   std::shared_ptr<rclcpp::Node> nh_;
   std::shared_ptr<rclcpp::Node> nh_local_;
 
-  rclcpp::Subscription<obstacle_detector::msg::Obstacles>::SharedPtr obstacles_sub_;
+  rclcpp::Subscription<amr_interfaces::msg::Obstacles>::SharedPtr obstacles_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
-  rclcpp::Publisher<obstacle_detector::msg::Obstacles>::SharedPtr obstacles_pub_;
+  rclcpp::Publisher<amr_interfaces::msg::Obstacles>::SharedPtr obstacles_pub_;
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr obstacles_vis_pub_;
   rclcpp::Service<std_srvs::srv::Empty>::SharedPtr params_srv_;
   rclcpp::TimerBase::SharedPtr timer_;
 
   double radius_margin_;
-  obstacle_detector::msg::Obstacles obstacles_;
+  amr_interfaces::msg::Obstacles obstacles_;
   nav_msgs::msg::Odometry odom_;
 
   std::vector<TrackedCircleObstacle> tracked_circle_obstacles_;
-  std::vector<obstacle_detector::msg::CircleObstacle> untracked_circle_obstacles_;
+  std::vector<amr_interfaces::msg::CircleObstacle> untracked_circle_obstacles_;
   std::vector<TrackedSegmentObstacle> tracked_segment_obstacles_;
-  std::vector<obstacle_detector::msg::SegmentObstacle> untracked_segment_obstacles_;
+  std::vector<amr_interfaces::msg::SegmentObstacle> untracked_segment_obstacles_;
 
   // Parameters
   bool p_active_;

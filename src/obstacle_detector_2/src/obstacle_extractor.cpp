@@ -128,12 +128,12 @@ void ObstacleExtractor::updateParamsUtil(){
         pcl2_sub_ = nh_->create_subscription<sensor_msgs::msg::PointCloud2>(
             "pcl2", 10, std::bind(&ObstacleExtractor::pcl2Callback, this, std::placeholders::_1));
       }
-      obstacles_pub_ = nh_->create_publisher<obstacle_detector::msg::Obstacles>("raw_obstacles", 10);
+      obstacles_pub_ = nh_->create_publisher<amr_interfaces::msg::Obstacles>("raw_obstacles", 10);
       obstacles_vis_pub_ = nh_->create_publisher<visualization_msgs::msg::MarkerArray>("raw_obstacles_visualization", 10);
     }
     else {
       // Send empty message
-      auto obstacles_msg = obstacle_detector::msg::Obstacles();
+      auto obstacles_msg = amr_interfaces::msg::Obstacles();
       obstacles_msg.header.frame_id = p_frame_id_;
       obstacles_msg.header.stamp = nh_->get_clock()->now();
       obstacles_pub_->publish(obstacles_msg);
@@ -565,12 +565,12 @@ void ObstacleExtractor::transformObstacles() {
 }
 
 void ObstacleExtractor::publishObstacles() {
-  auto obstacles_msg = obstacle_detector::msg::Obstacles();
+  auto obstacles_msg = amr_interfaces::msg::Obstacles();
   obstacles_msg.header.stamp = stamp_;
   obstacles_msg.header.frame_id = published_obstacles_frame_id_;
 
   for (const Segment& s : segments_) {
-    obstacle_detector::msg::SegmentObstacle segment;
+    amr_interfaces::msg::SegmentObstacle segment;
     segment.first_point.x = s.first_point.x;
     segment.first_point.y = s.first_point.y;
     segment.first_point.z = s.first_point.z;
@@ -584,7 +584,7 @@ void ObstacleExtractor::publishObstacles() {
   for (const Circle& c : circles_) {
     if (c.center.x > p_min_x_limit_ && c.center.x < p_max_x_limit_ &&
         c.center.y > p_min_y_limit_ && c.center.y < p_max_y_limit_) {
-        obstacle_detector::msg::CircleObstacle circle;
+        amr_interfaces::msg::CircleObstacle circle;
 
         circle.center.x = c.center.x;
         circle.center.y = c.center.y;

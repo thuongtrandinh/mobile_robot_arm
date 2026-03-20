@@ -1,10 +1,10 @@
-ocp_planner/JointState ob
-ocp_planner/Point sub_goal
+amr_interfaces/JointState ob
+amr_interfaces/Point sub_goal
 
 ---
 bool success
 float64 al
 float64 ar
-ocp_planner/Point revised_goal
-ocp_planner/Point[] astar_path
-ocp_planner/ControlVar[] control_vars
+amr_interfaces/Point revised_goal
+amr_interfaces/Point[] astar_path
+amr_interfaces/ControlVar[] control_vars

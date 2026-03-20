@@ -22,20 +22,13 @@ find_package(tf2_ros REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 find_package(laser_geometry REQUIRED)
 find_package(builtin_interfaces REQUIRED)
-find_package(rosidl_default_generators REQUIRED)
+find_package(amr_interfaces REQUIRED)
 
 find_package(Armadillo REQUIRED)
 find_package(Boost 1.54.0 REQUIRED system)
 
-rosidl_generate_interfaces(${PROJECT_NAME}
-  "msg/CircleObstacle.msg"
-  "msg/Obstacles.msg"
-  "msg/SegmentObstacle.msg"
-  DEPENDENCIES geometry_msgs std_msgs builtin_interfaces 
-)
-
 set(PROJECT_INCLUDE_DIRS include)
-set(PROJECT_DEPENDS "rclcpp" "std_msgs" "nav_msgs" "std_srvs" "visualization_msgs" "geometry_msgs" "sensor_msgs" "tf2" "tf2_geometry_msgs" "tf2_ros" "laser_geometry" "rosidl_default_generators")
+set(PROJECT_DEPENDS "rclcpp" "std_msgs" "nav_msgs" "std_srvs" "visualization_msgs" "geometry_msgs" "sensor_msgs" "tf2" "tf2_geometry_msgs" "tf2_ros" "laser_geometry" "amr_interfaces")
 
 include_directories(include ${PROJECT_INCLUDE_DIRS} ${ARMADILLO_INCLUDE_DIRS} ${Boost_INCLUDE_DIRS})
 
@@ -44,23 +37,14 @@ include_directories(include ${PROJECT_INCLUDE_DIRS} ${ARMADILLO_INCLUDE_DIRS} ${
 add_library(obstacle_extractor src/obstacle_extractor.cpp)
 target_link_libraries(obstacle_extractor ${ARMADILLO_LIBRARIES})
 ament_target_dependencies(obstacle_extractor ${PROJECT_DEPENDS})
-# allow the project to link against its own messages
-rosidl_get_typesupport_target(cpp_typesupport_target "${PROJECT_NAME}" "rosidl_typesupport_cpp")
-target_link_libraries(obstacle_extractor "${cpp_typesupport_target}")
 
 add_library(obstacle_tracker src/obstacle_tracker.cpp)
 target_link_libraries(obstacle_tracker ${ARMADILLO_LIBRARIES})
 ament_target_dependencies(obstacle_tracker ${PROJECT_DEPENDS})
-# allow the project to link against its own messages
-rosidl_get_typesupport_target(cpp_typesupport_target "${PROJECT_NAME}" "rosidl_typesupport_cpp")
-target_link_libraries(obstacle_tracker "${cpp_typesupport_target}")
 
 add_library(obstacle_publisher src/obstacle_publisher.cpp)
 target_link_libraries(obstacle_publisher ${ARMADILLO_LIBRARIES})
 ament_target_dependencies(obstacle_publisher ${PROJECT_DEPENDS})
-# allow the project to link against its own messages
-rosidl_get_typesupport_target(cpp_typesupport_target "${PROJECT_NAME}" "rosidl_typesupport_cpp")
-target_link_libraries(obstacle_publisher "${cpp_typesupport_target}")
 
 #
 # Build nodes

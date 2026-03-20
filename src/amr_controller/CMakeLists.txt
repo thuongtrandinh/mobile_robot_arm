@@ -15,7 +15,7 @@ find_package(std_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(tf2 REQUIRED)
-find_package(ocp_planner REQUIRED)
+find_package(amr_interfaces REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(OpenCV REQUIRED)
 
@@ -40,7 +40,7 @@ ament_target_dependencies(amr_controller_core
   std_msgs
   geometry_msgs
   nav_msgs
-  ocp_planner
+  amr_interfaces
 )
 
 target_link_libraries(amr_controller_core
@@ -70,7 +70,7 @@ ament_target_dependencies(ampcc_node
   geometry_msgs
   nav_msgs
   tf2
-  ocp_planner
+  amr_interfaces
 )
 
 # ---------- Install ----------
@@ -103,7 +103,7 @@ ament_export_targets(amr_controller_coreTargets HAS_LIBRARY_TARGET)
 ament_export_include_directories(include)
 ament_export_libraries(amr_controller_core)
 ament_export_dependencies(rclcpp std_msgs geometry_msgs nav_msgs Eigen3)
-ament_export_dependencies(ocp_planner)
+ament_export_dependencies(amr_interfaces)
 
 # ---------- Testing ----------
 if(BUILD_TESTING)

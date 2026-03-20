@@ -37,9 +37,9 @@
 
 #include "rclcpp/rclcpp.hpp"
 #include "std_srvs/srv/empty.hpp"
-#include "obstacle_detector/msg/obstacles.hpp"
-#include "obstacle_detector/msg/circle_obstacle.hpp"
-#include "obstacle_detector/msg/segment_obstacle.hpp"
+#include "amr_interfaces/msg/obstacles.hpp"
+#include "amr_interfaces/msg/circle_obstacle.hpp"
+#include "amr_interfaces/msg/segment_obstacle.hpp"
 
 namespace obstacle_detector
 {
@@ -68,11 +68,11 @@ private:
   std::shared_ptr<rclcpp::Node> nh_;
   std::shared_ptr<rclcpp::Node> nh_local_;
 
-  rclcpp::Publisher<obstacle_detector::msg::Obstacles>::SharedPtr obstacles_pub_;
+  rclcpp::Publisher<amr_interfaces::msg::Obstacles>::SharedPtr obstacles_pub_;
   rclcpp::Service<std_srvs::srv::Empty>::SharedPtr params_srv_;
   rclcpp::TimerBase::SharedPtr timer_;
 
-  obstacle_detector::msg::Obstacles obstacles_;
+  amr_interfaces::msg::Obstacles obstacles_;
   double t_;
 
   // Parameters

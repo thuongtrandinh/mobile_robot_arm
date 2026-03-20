@@ -1,2 +1,2 @@
 bool is_clockwise
-ocp_planner/Point[] vertices
+amr_interfaces/Point[] vertices

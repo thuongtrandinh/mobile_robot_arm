@@ -1,3 +1,3 @@
 std_msgs/Header header
 
-ocp_planner/DynaObstacle[] dyna_obstacles
+amr_interfaces/DynaObstacle[] dyna_obstacles
