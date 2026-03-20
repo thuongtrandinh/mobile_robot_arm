@@ -9,7 +9,7 @@ source ~/miniconda3/etc/profile.d/conda.sh
 conda activate mpc_rl
 
 # Create build directory
-cd /home/thuong/LVTN/amr_ws/HALO/src/ocp_planner
+cd "$(dirname "$0")/src/ocp_planner"
 mkdir -p build
 cd build
 
@@ -27,6 +27,6 @@ echo "✅ Build completed!"
 echo "Python binding installed to: drl_moudle/ocp_planner_py.cpython-38-x86_64-linux-gnu.so"
 echo ""
 echo "Now you can run training:"
-echo "  cd ~/LVTN/HALO/drl_moudle"
+echo "  cd $(dirname "$0")/drl_moudle"
 echo "  conda activate mpc_rl"
 echo "  python train_ppo.py"

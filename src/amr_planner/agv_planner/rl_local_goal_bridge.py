@@ -11,7 +11,11 @@ import torch as th
 from geometry_msgs.msg import PoseStamped, TwistStamped
 from nav_msgs.msg import OccupancyGrid, Odometry
 from rclpy.node import Node
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from sensor_msgs.msg import LaserScan
+
+# AMR custom messages for ZED2 integration
+from amr_interfaces.msg import HumanStateArray, ObstacleStateArray
 
 
 class RLLocalGoalBridge(Node):
@@ -37,6 +41,7 @@ class RLLocalGoalBridge(Node):
         self.declare_parameter("scan_topic", "/scan")
         self.declare_parameter("goal_topic", "/goal_pose")
         self.declare_parameter("cmd_topic", "/diff_cont/cmd_vel")
+        self.declare_parameter("use_zed2_data", True)  # Enable ZED2 integration
 
         self.halo_drl_dir = self.get_parameter("halo_drl_dir").get_parameter_value().string_value
         self.config_path = self.get_parameter("config").get_parameter_value().string_value
@@ -53,6 +58,7 @@ class RLLocalGoalBridge(Node):
         self.wheel_base = self.get_parameter("wheel_base").get_parameter_value().double_value
         self.obstacle_radius = self.get_parameter("obstacle_radius").get_parameter_value().double_value
         self.obstacle_sample_step = self.get_parameter("obstacle_sample_step").get_parameter_value().integer_value
+        self.use_zed2_data = self.get_parameter("use_zed2_data").get_parameter_value().bool_value
 
         self.odom_topic = self.get_parameter("odom_topic").get_parameter_value().string_value
         self.scan_topic = self.get_parameter("scan_topic").get_parameter_value().string_value
@@ -65,10 +71,15 @@ class RLLocalGoalBridge(Node):
         self.latest_scan: Optional[LaserScan] = None
         self.map_bounds: Optional[Tuple[float, float, float, float]] = None
 
+        # ZED2 data storage
+        self.zed2_humans: List = []
+        self.zed2_obstacles: List = []
+
         self.model = None
         self.device = th.device("cuda:0" if th.cuda.is_available() else "cpu")
 
         self.FullState = None
+        self.ObservableState = None
         self.ObstacleState = None
         self.WallState = None
         self.JointState = None
@@ -80,6 +91,18 @@ class RLLocalGoalBridge(Node):
         self.create_subscription(LaserScan, self.scan_topic, self._scan_callback, 10)
         self.create_subscription(PoseStamped, self.goal_topic, self._goal_callback, 10)
         self.create_subscription(OccupancyGrid, "/map", self._map_callback, 10)
+
+        # ZED2 subscriptions with BEST_EFFORT QoS to match publisher
+        if self.use_zed2_data:
+            zed_qos = QoSProfile(
+                reliability=ReliabilityPolicy.BEST_EFFORT,
+                history=HistoryPolicy.KEEP_LAST,
+                depth=1
+            )
+            self.create_subscription(HumanStateArray, "/zed2/humans", self._humans_callback, zed_qos)
+            self.create_subscription(ObstacleStateArray, "/zed2/obstacles", self._obstacles_callback, zed_qos)
+            self.get_logger().info("ZED2 integration enabled")
+
         self.cmd_pub = self.create_publisher(TwistStamped, self.cmd_topic, 10)
 
         timer_period = self.get_parameter("timer_period").get_parameter_value().double_value
@@ -108,7 +131,7 @@ class RLLocalGoalBridge(Node):
         from algorithms.mpc_ppo import MpcPPO
         from modules.policies import ExternalPolicy
         from crowd_sim.envs.utils.robot import Robot
-        from crowd_sim.envs.utils.state import FullState, ObstacleState, WallState, JointState
+        from crowd_sim.envs.utils.state import FullState, ObservableState, ObstacleState, WallState, JointState
         from algorithms.graph_ppo import joint_state_as_graph
 
         spec = importlib.util.spec_from_file_location("config", config_path)
@@ -146,6 +169,7 @@ class RLLocalGoalBridge(Node):
         self.model.set_parameters(model_path, device=self.device)
 
         self.FullState = FullState
+        self.ObservableState = ObservableState
         self.ObstacleState = ObstacleState
         self.WallState = WallState
         self.JointState = JointState
@@ -184,6 +208,44 @@ class RLLocalGoalBridge(Node):
         width_m = msg.info.width * msg.info.resolution
         height_m = msg.info.height * msg.info.resolution
         self.map_bounds = (origin_x, origin_x + width_m, origin_y, origin_y + height_m)
+
+    def _humans_callback(self, msg: HumanStateArray) -> None:
+        """Callback for ZED2 human detections"""
+        if self.ObservableState is None:
+            return
+        self.zed2_humans = []
+        if self.current_pose is None:
+            return
+        px, py, yaw = self.current_pose
+        cos_yaw, sin_yaw = math.cos(yaw), math.sin(yaw)
+
+        for human in msg.humans:
+            # Transform from robot frame to world frame
+            wx = px + human.px * cos_yaw - human.py * sin_yaw
+            wy = py + human.px * sin_yaw + human.py * cos_yaw
+            wvx = human.vx * cos_yaw - human.vy * sin_yaw
+            wvy = human.vx * sin_yaw + human.vy * cos_yaw
+            self.zed2_humans.append(
+                self.ObservableState(wx, wy, wvx, wvy, human.radius)
+            )
+
+    def _obstacles_callback(self, msg: ObstacleStateArray) -> None:
+        """Callback for ZED2 obstacle detections"""
+        if self.ObstacleState is None:
+            return
+        self.zed2_obstacles = []
+        if self.current_pose is None:
+            return
+        px, py, yaw = self.current_pose
+        cos_yaw, sin_yaw = math.cos(yaw), math.sin(yaw)
+
+        for obs in msg.obstacles:
+            # Transform from robot frame to world frame
+            wx = px + obs.px * cos_yaw - obs.py * sin_yaw
+            wy = py + obs.px * sin_yaw + obs.py * cos_yaw
+            self.zed2_obstacles.append(
+                self.ObstacleState(wx, wy, obs.radius)
+            )
 
     def _build_walls(self) -> List:
         if self.map_bounds is None:
@@ -264,8 +326,16 @@ class RLLocalGoalBridge(Node):
         )
 
         obstacles = self._scan_to_obstacles()
+        # Add ZED2 obstacles (people detected as obstacles)
+        if self.use_zed2_data:
+            obstacles.extend(self.zed2_obstacles)
+
         walls = self._build_walls()
-        observed_state = ([], obstacles, walls, [])
+
+        # Use ZED2 humans or empty list
+        humans = self.zed2_humans if self.use_zed2_data else []
+
+        observed_state = (humans, obstacles, walls, [])
 
         try:
             joint_state = self.JointState(full_state, observed_state)

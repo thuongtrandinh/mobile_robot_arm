@@ -1,0 +1,19 @@
+# AMR ZED2 Hand Sign Detector Configuration
+
+handsign_detector:
+  ros__parameters:
+    # Model paths (relative to package share/models or absolute path)
+    hand_model_path: "handsign_exp14_best.pt"
+    person_model_path: "yolov8n.pt"
+
+    # Signal detection timing
+    start_hold_time: 3.0        # Seconds to hold START signal
+    stop_hold_time: 3.0         # Seconds to hold STOP signal
+    signal_timeout: 2.0         # Reset signal if not seen for this duration
+
+    # Person tracking
+    person_radius: 0.3          # Radius for obstacle/human representation (meters)
+
+    # Display options
+    show_display: true          # Show OpenCV window
+    publish_image: false        # Publish visualization to ROS topic (disable for performance)
