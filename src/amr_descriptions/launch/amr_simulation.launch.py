@@ -4,7 +4,8 @@ import os
 import xacro
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument, OpaqueFunction
+from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument, OpaqueFunction, RegisterEventHandler
+from launch.event_handlers import OnProcessExit
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import PathJoinSubstitution
 from launch_ros.substitutions import FindPackageShare
@@ -20,6 +21,10 @@ def launch_setup(context, *args, **kwargs):
     init_x = context.launch_configurations.get('x_pos', '0.0')
     init_y = context.launch_configurations.get('y_pos', '0.0')
     init_height = context.launch_configurations.get('height', '0.1')
+    headless_str = context.launch_configurations.get('headless', 'false')
+    headless = headless_str.lower() == 'true'
+    spawn_controllers_str = context.launch_configurations.get('spawn_controllers', 'false')
+    spawn_controllers = spawn_controllers_str.lower() == 'true'
     
     pkg_path = get_package_share_directory(package_name)
     xacro_file = os.path.join(pkg_path, 'model', 'wheeled', 'urdf', 'mobile_robot.urdf.xacro')
@@ -38,6 +43,8 @@ def launch_setup(context, *args, **kwargs):
     
     # ========== NODES ==========
     
+    gz_args = ('-r -s -v 2 ' if headless else '-r -v 2 ') + world_file
+
     # 1. Gazebo (server + gui)
     gazebo = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([
@@ -48,7 +55,7 @@ def launch_setup(context, *args, **kwargs):
             ])
         ]),
         launch_arguments=[
-            ('gz_args', '-r -v 4 ' + world_file),
+            ('gz_args', gz_args),
             ('use_sim_time', use_sim_time_str),
         ]
     )
@@ -76,7 +83,7 @@ def launch_setup(context, *args, **kwargs):
         parameters=[{'use_sim_time': use_sim_time}],
     )
     
-    # 5. Controllers
+    # 5. Controllers (optional)
     joint_state_broadcaster = Node(
         package='controller_manager',
         executable='spawner',
@@ -113,9 +120,14 @@ def launch_setup(context, *args, **kwargs):
         package='obstacle_detector',
         executable='obstacle_extractor_node',
         remappings=[
-            ('/pcl2', 'camera/points'),
+            ('pcl2', '/camera/points'),
+            ('raw_obstacles', '/raw_obstacles'),
+            ('raw_obstacles_visualization', '/raw_obstacles_visualization'),
         ],
         parameters=[
+            {'active': True},
+            {'use_scan': False},
+            {'use_pcl': False},
             {'use_pcl2': True},
             {'use_sim_time': use_sim_time},
             {'frame_id': 'map'},
@@ -129,10 +141,12 @@ def launch_setup(context, *args, **kwargs):
         package='obstacle_detector',
         executable='obstacle_tracker_node',
         remappings=[
-            ('/raw_obstacles', 'raw_obstacles'),
-            ('/obstacles', 'obstacles'),
+            ('raw_obstacles', '/raw_obstacles'),
+            ('tracked_obstacles', '/obstacles'),
+            ('tracked_obstacles_visualization', '/obstacles_visualization'),
         ],
         parameters=[
+            {'active': True},
             {'use_sim_time': use_sim_time},
             {'frame_id': 'map'},
             {'loop_rate': 100.0},
@@ -142,16 +156,34 @@ def launch_setup(context, *args, **kwargs):
     )
     
     # Return all nodes
-    return [
+    nodes = [
         gazebo,
         robot_state_publisher,
         spawn_entity,
-        joint_state_broadcaster,
-        diff_drive_controller,
         bridge_node,
         obstacle_extractor,
         obstacle_tracker,
     ]
+
+    if spawn_controllers:
+        nodes.append(
+            RegisterEventHandler(
+                event_handler=OnProcessExit(
+                    target_action=spawn_entity,
+                    on_exit=[joint_state_broadcaster],
+                )
+            )
+        )
+        nodes.append(
+            RegisterEventHandler(
+                event_handler=OnProcessExit(
+                    target_action=joint_state_broadcaster,
+                    on_exit=[diff_drive_controller],
+                )
+            )
+        )
+
+    return nodes
 
 
 def generate_launch_description():
@@ -175,6 +207,16 @@ def generate_launch_description():
         'height', default_value='0.1',
         description='Initial height of robot'
     )
+
+    headless_arg = DeclareLaunchArgument(
+        'headless', default_value='false',
+        description='Run Gazebo server only (no GUI) to avoid OpenGL GUI warnings'
+    )
+
+    spawn_controllers_arg = DeclareLaunchArgument(
+        'spawn_controllers', default_value='false',
+        description='Spawn ros2_control controllers after robot spawn'
+    )
     
     # OpaqueFunction to setup launch
     launch_setup_func = OpaqueFunction(function=launch_setup)
@@ -184,5 +226,7 @@ def generate_launch_description():
         x_pos_arg,
         y_pos_arg,
         height_arg,
+        headless_arg,
+        spawn_controllers_arg,
         launch_setup_func,
     ])
