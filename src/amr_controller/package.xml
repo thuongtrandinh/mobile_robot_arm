@@ -18,6 +18,7 @@
   <depend>geometry_msgs</depend>
   <depend>nav_msgs</depend>
   <depend>tf2</depend>
+  <depend>ocp_planner</depend>
   <depend>eigen3_cmake_module</depend>
 
   <build_depend>eigen</build_depend>
