@@ -1,18 +1,15 @@
 """
 AMR ZED2 Package
 Hand sign detection and person tracking for mobile robot
+Supports both real ZED2 camera and Gazebo simulation
 """
 
 __version__ = '2.0.0'
 
-from .handsign_detector_node import HandSignDetectorNode, main
-from .velocity_filter import VelocityFilter
-from .bytetrack_handler import ByteTracker, Track
-
+# Lazy imports to avoid circular dependency and reduce load time
 __all__ = [
     'HandSignDetectorNode',
-    'main',
+    'HandSignDetectorSimNode',
     'VelocityFilter',
-    'ByteTracker',
-    'Track',
+    'BoTSortTracker',
 ]

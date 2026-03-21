@@ -78,7 +78,21 @@ walking_gait:
         position: 0.3
       - time: 1.0
         position: 0.0
-  
+
+  left_elbow_joint:
+    # Elbow slightly bent during walking (natural arm position)
+    keyframes:
+      - time: 0.0
+        position: -0.4
+      - time: 0.25
+        position: -0.5
+      - time: 0.5
+        position: -0.4
+      - time: 0.75
+        position: -0.3
+      - time: 1.0
+        position: -0.4
+
   right_shoulder_joint:
     keyframes:
       - time: 0.0
@@ -91,6 +105,20 @@ walking_gait:
         position: -0.3
       - time: 1.0
         position: 0.0
+
+  right_elbow_joint:
+    # Elbow slightly bent during walking (natural arm position)
+    keyframes:
+      - time: 0.0
+        position: -0.4
+      - time: 0.25
+        position: -0.3
+      - time: 0.5
+        position: -0.4
+      - time: 0.75
+        position: -0.5
+      - time: 1.0
+        position: -0.4
   
   # Walking path (trajectory in space)
   trajectory_path:

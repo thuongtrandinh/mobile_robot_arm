@@ -165,6 +165,91 @@
       </axis>
     </joint>
 
+    <!-- Left Forearm -->
+    <link name="left_forearm">
+      <pose relative_to="left_upper_arm">0 0 -0.2 0 0 0</pose>
+      <inertial>
+        <mass>1.5</mass>
+        <inertia>
+          <ixx>0.01</ixx>
+          <ixy>0</ixy>
+          <ixz>0</ixz>
+          <iyy>0.01</iyy>
+          <iyz>0</iyz>
+          <izz>0.008</izz>
+        </inertia>
+      </inertial>
+      <visual name="left_forearm_visual">
+        <geometry>
+          <box>
+            <size>0.07 0.07 0.25</size>
+          </box>
+        </geometry>
+        <material>
+          <ambient>0.9 0.7 0.5 1</ambient>
+          <diffuse>0.9 0.7 0.5 1</diffuse>
+        </material>
+      </visual>
+      <collision name="left_forearm_collision">
+        <geometry>
+          <box>
+            <size>0.07 0.07 0.25</size>
+          </box>
+        </geometry>
+      </collision>
+    </link>
+
+    <joint name="left_elbow" type="revolute">
+      <parent>left_upper_arm</parent>
+      <child>left_forearm</child>
+      <axis>
+        <xyz>1 0 0</xyz>
+        <limit>
+          <lower>-2</lower>
+          <upper>0</upper>
+        </limit>
+      </axis>
+    </joint>
+
+    <!-- Left Hand (fist - closed hand) -->
+    <link name="left_hand">
+      <pose relative_to="left_forearm">0 0 -0.15 0 0 0</pose>
+      <inertial>
+        <mass>0.3</mass>
+        <inertia>
+          <ixx>0.001</ixx>
+          <ixy>0</ixy>
+          <ixz>0</ixz>
+          <iyy>0.001</iyy>
+          <iyz>0</iyz>
+          <izz>0.001</izz>
+        </inertia>
+      </inertial>
+      <visual name="left_hand_visual">
+        <geometry>
+          <sphere>
+            <radius>0.04</radius>
+          </sphere>
+        </geometry>
+        <material>
+          <ambient>0.9 0.7 0.5 1</ambient>
+          <diffuse>0.9 0.7 0.5 1</diffuse>
+        </material>
+      </visual>
+      <collision name="left_hand_collision">
+        <geometry>
+          <sphere>
+            <radius>0.04</radius>
+          </sphere>
+        </geometry>
+      </collision>
+    </link>
+
+    <joint name="left_wrist" type="fixed">
+      <parent>left_forearm</parent>
+      <child>left_hand</child>
+    </joint>
+
     <!-- Right Arm -->
     <link name="right_upper_arm">
       <pose relative_to="torso">-0.15 0.1 0.1 0 0 0</pose>
@@ -209,6 +294,91 @@
           <upper>2</upper>
         </limit>
       </axis>
+    </joint>
+
+    <!-- Right Forearm -->
+    <link name="right_forearm">
+      <pose relative_to="right_upper_arm">0 0 -0.2 0 0 0</pose>
+      <inertial>
+        <mass>1.5</mass>
+        <inertia>
+          <ixx>0.01</ixx>
+          <ixy>0</ixy>
+          <ixz>0</ixz>
+          <iyy>0.01</iyy>
+          <iyz>0</iyz>
+          <izz>0.008</izz>
+        </inertia>
+      </inertial>
+      <visual name="right_forearm_visual">
+        <geometry>
+          <box>
+            <size>0.07 0.07 0.25</size>
+          </box>
+        </geometry>
+        <material>
+          <ambient>0.9 0.7 0.5 1</ambient>
+          <diffuse>0.9 0.7 0.5 1</diffuse>
+        </material>
+      </visual>
+      <collision name="right_forearm_collision">
+        <geometry>
+          <box>
+            <size>0.07 0.07 0.25</size>
+          </box>
+        </geometry>
+      </collision>
+    </link>
+
+    <joint name="right_elbow" type="revolute">
+      <parent>right_upper_arm</parent>
+      <child>right_forearm</child>
+      <axis>
+        <xyz>1 0 0</xyz>
+        <limit>
+          <lower>-2</lower>
+          <upper>0</upper>
+        </limit>
+      </axis>
+    </joint>
+
+    <!-- Right Hand (fist - closed hand) -->
+    <link name="right_hand">
+      <pose relative_to="right_forearm">0 0 -0.15 0 0 0</pose>
+      <inertial>
+        <mass>0.3</mass>
+        <inertia>
+          <ixx>0.001</ixx>
+          <ixy>0</ixy>
+          <ixz>0</ixz>
+          <iyy>0.001</iyy>
+          <iyz>0</iyz>
+          <izz>0.001</izz>
+        </inertia>
+      </inertial>
+      <visual name="right_hand_visual">
+        <geometry>
+          <sphere>
+            <radius>0.04</radius>
+          </sphere>
+        </geometry>
+        <material>
+          <ambient>0.9 0.7 0.5 1</ambient>
+          <diffuse>0.9 0.7 0.5 1</diffuse>
+        </material>
+      </visual>
+      <collision name="right_hand_collision">
+        <geometry>
+          <sphere>
+            <radius>0.04</radius>
+          </sphere>
+        </geometry>
+      </collision>
+    </link>
+
+    <joint name="right_wrist" type="fixed">
+      <parent>right_forearm</parent>
+      <child>right_hand</child>
     </joint>
 
     <!-- Left Leg -->

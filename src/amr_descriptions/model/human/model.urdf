@@ -162,6 +162,33 @@
     </collision>
   </link>
 
+  <!-- Left Hand (fist - closed hand to avoid stop gesture detection) -->
+  <joint name="left_wrist_joint" type="fixed">
+    <parent link="left_forearm"/>
+    <child link="left_hand"/>
+    <origin xyz="0 0 -0.18" rpy="0 0 0"/>
+  </joint>
+
+  <link name="left_hand">
+    <inertial>
+      <mass value="0.3"/>
+      <inertia ixx="0.001" ixy="0" ixz="0" iyy="0.001" iyz="0" izz="0.001"/>
+    </inertial>
+    <visual>
+      <geometry>
+        <sphere radius="0.04"/>
+      </geometry>
+      <material name="skin">
+        <color rgba="0.9 0.7 0.5 1"/>
+      </material>
+    </visual>
+    <collision>
+      <geometry>
+        <sphere radius="0.04"/>
+      </geometry>
+    </collision>
+  </link>
+
   <!-- Right Arm -->
   <joint name="right_shoulder_joint" type="revolute">
     <parent link="torso"/>
@@ -215,6 +242,33 @@
     <collision>
       <geometry>
         <box size="0.07 0.07 0.3"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <!-- Right Hand (fist - closed hand to avoid stop gesture detection) -->
+  <joint name="right_wrist_joint" type="fixed">
+    <parent link="right_forearm"/>
+    <child link="right_hand"/>
+    <origin xyz="0 0 -0.18" rpy="0 0 0"/>
+  </joint>
+
+  <link name="right_hand">
+    <inertial>
+      <mass value="0.3"/>
+      <inertia ixx="0.001" ixy="0" ixz="0" iyy="0.001" iyz="0" izz="0.001"/>
+    </inertial>
+    <visual>
+      <geometry>
+        <sphere radius="0.04"/>
+      </geometry>
+      <material name="skin">
+        <color rgba="0.9 0.7 0.5 1"/>
+      </material>
+    </visual>
+    <collision>
+      <geometry>
+        <sphere radius="0.04"/>
       </geometry>
     </collision>
   </link>
