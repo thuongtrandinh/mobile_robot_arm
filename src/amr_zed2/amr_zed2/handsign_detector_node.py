@@ -19,9 +19,9 @@ from ultralytics import YOLO
 from cv_bridge import CvBridge
 
 import tf2_ros
-from geometry_msgs.msg import PointStamped, PoseStamped, Quaternion
+from geometry_msgs.msg import PointStamped, PoseStamped, Quaternion, Point, Vector3
 from std_msgs.msg import Header
-from amr_interfaces.msg import HumanState, ObstacleState, ObstacleStateArray
+from amr_interfaces.msg import HumanState, Obstacles, CircleObstacle
 import math
 
 from .botsort_handler import BoTSortTracker
@@ -171,7 +171,7 @@ class HandSignDetectorNode(Node):
             depth=10
         )
         self._pub_main_person = self.create_publisher(HumanState, '/tracking/main_person', qos)
-        self._pub_obstacles = self.create_publisher(ObstacleStateArray, '/tracking/obstacles', qos)
+        self._pub_obstacles = self.create_publisher(Obstacles, '/tracking/obstacles', qos)
         
         # Publisher for navigation goal (when person is lost, robot should go to last known position)
         self._pub_lost_goal = self.create_publisher(PoseStamped, '/navigation/goal', qos)
@@ -488,22 +488,32 @@ class HandSignDetectorNode(Node):
         self._pub_main_person.publish(human_msg)
         
         # Publish other persons as obstacles
-        obstacle_array = ObstacleStateArray()
-        obstacle_array.header.stamp = timestamp
-        obstacle_array.header.frame_id = self._global_frame
-        
+        obstacles_msg = Obstacles()
+        obstacles_msg.header.stamp = timestamp
+        obstacles_msg.header.frame_id = self._global_frame
+
         for obj in traced_objects:
             if obj.track_id == main_person.track_id:
                 continue
-            
-            obstacle = ObstacleState()
-            obstacle.id = int(obj.track_id)
-            obstacle.px = float(obj.center_3d_global[0])
-            obstacle.py = float(obj.center_3d_global[1])
-            obstacle.radius = self._estimate_person_radius(obj)
-            obstacle_array.obstacles.append(obstacle)
-        
-        self._pub_obstacles.publish(obstacle_array)
+
+            circle = CircleObstacle()
+            circle.uid = int(obj.track_id)
+            circle.center = Point(
+                x=float(obj.center_3d_global[0]),
+                y=float(obj.center_3d_global[1]),
+                z=0.0
+            )
+            circle.velocity = Vector3(
+                x=float(obj.velocity_global[0]),
+                y=float(obj.velocity_global[1]),
+                z=0.0
+            )
+            circle.radius = self._estimate_person_radius(obj)
+            circle.true_radius = circle.radius
+            circle.confidence = obj.confidence
+            obstacles_msg.circles.append(circle)
+
+        self._pub_obstacles.publish(obstacles_msg)
     
     def _publish_lost_goal(self, position_global, timestamp):
         """Publish navigation goal when person is lost (for robot to move to last known position)

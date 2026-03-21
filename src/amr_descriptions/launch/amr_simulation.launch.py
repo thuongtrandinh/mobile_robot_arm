@@ -115,7 +115,23 @@ def launch_setup(context, *args, **kwargs):
         output='screen'
     )
     
-    # 7. Obstacle Detector Nodes
+    # 7. ZED2 Hand Sign Detector (Simulation)
+    zed2_handsign_detector = Node(
+        package='amr_zed2',
+        executable='handsign_detector_sim',
+        name='handsign_detector_sim',
+        parameters=[
+            {'use_sim_time': use_sim_time},
+            {'detection_conf': 0.5},
+            {'enable_visualization': True},
+            {'camera_frame': 'zed2_left_camera_frame'},
+            {'global_frame': 'odom'},
+            {'gesture_velocity_threshold': 0.1},
+        ],
+        output='screen'
+    )
+
+    # 8. Obstacle Detector Nodes
     obstacle_extractor = Node(
         package='obstacle_detector',
         executable='obstacle_extractor_node',
@@ -161,6 +177,7 @@ def launch_setup(context, *args, **kwargs):
         robot_state_publisher,
         spawn_entity,
         bridge_node,
+        zed2_handsign_detector,
         obstacle_extractor,
         obstacle_tracker,
     ]

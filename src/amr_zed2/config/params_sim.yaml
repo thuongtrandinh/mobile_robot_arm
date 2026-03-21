@@ -1,0 +1,46 @@
+# ZED2 Hand Sign Detector Configuration - SIMULATION VERSION
+# For use with Gazebo simulation
+
+# Detection parameters
+detection_conf: 0.5          # YOLO confidence threshold
+nms_threshold: 0.45          # NMS threshold
+person_radius: 0.3           # Estimated person radius (meters)
+
+# Model paths (relative to package share dir or absolute)
+hand_model_path: 'handsign.pt'
+person_model_path: 'yolov8n.pt'
+
+# Frame configuration
+camera_frame: 'zed2_left_camera_optical_frame'
+global_frame: 'odom'
+
+# Simulation settings
+use_sim_time: true
+
+# Visualization
+enable_visualization: false  # Show opencv window (requires display)
+
+# Tracking configuration
+tracker:
+  track_thresh: 0.5
+  track_buffer: 30
+  match_thresh: 0.8
+  use_appearance: true
+  appearance_weight: 0.5
+
+# Velocity filtering
+velocity_filter:
+  alpha: 0.3                 # Smoothing factor (0.1-0.5 recommended)
+
+# Gesture detection
+gesture:
+  hold_threshold: 3.0        # Seconds to hold gesture for trigger
+  frame_skip: 10             # Detect gesture every N frames
+
+# Loss recovery
+tracking:
+  lost_threshold: 30         # Frames without detection before LOST
+  prediction_horizon: 5.0    # Seconds to predict ahead when lost
+
+# Publishing rate (Hz)
+publish_rate: 30

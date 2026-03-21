@@ -3,7 +3,7 @@
 <package format="3">
   <name>amr_zed2</name>
   <version>2.0.0</version>
-  <description>ZED 2 hand sign detection and person tracking for mobile robot</description>
+  <description>ZED 2 hand sign detection and person tracking for mobile robot. Supports both real ZED2 camera and Gazebo simulation.</description>
   <maintainer email="thuong.trandinh@hcmutcmut.edu.vn">Thuong Tran Dinh</maintainer>
   <license>Apache-2.0</license>
 
@@ -15,7 +15,14 @@
   <exec_depend>geometry_msgs</exec_depend>
   <exec_depend>amr_interfaces</exec_depend>
   <exec_depend>cv_bridge</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>tf2_geometry_msgs</exec_depend>
+  <exec_depend>message_filters</exec_depend>
+
+  <!-- Real camera dependencies (optional) -->
   <exec_depend>pyzed</exec_depend>
+
+  <!-- Python dependencies -->
   <exec_depend>opencv-python</exec_depend>
   <exec_depend>ultralytics</exec_depend>
   <exec_depend>numpy</exec_depend>

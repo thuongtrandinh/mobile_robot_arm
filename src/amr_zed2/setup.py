@@ -24,6 +24,7 @@ setup(
     entry_points={
         'console_scripts': [
             'handsign_detector = amr_zed2.handsign_detector_node:main',
+            'handsign_detector_sim = amr_zed2.handsign_detector_sim_node:main',
         ],
     },
 )
