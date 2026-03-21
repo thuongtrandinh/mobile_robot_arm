@@ -1,0 +1,160 @@
+# Human Walking Animation Configuration
+# This file defines the joint trajectories for walking animation
+
+walking_gait:
+  # Duration of one complete walking cycle in seconds
+  cycle_duration: 1.0
+  
+  # Walking speed (linear velocity in m/s)
+  walking_speed: 0.5
+  
+  # Joint trajectories for a complete walking cycle
+  # Values are in radians
+  
+  left_hip_joint:
+    # Hip swings backward during swing phase, forward during stance
+    keyframes:
+      - time: 0.0
+        position: 0.0
+      - time: 0.25
+        position: 0.5
+      - time: 0.5
+        position: 0.0
+      - time: 0.75
+        position: -0.4
+      - time: 1.0
+        position: 0.0
+  
+  right_hip_joint:
+    keyframes:
+      - time: 0.0
+        position: 0.0
+      - time: 0.25
+        position: -0.4
+      - time: 0.5
+        position: 0.0
+      - time: 0.75
+        position: 0.5
+      - time: 1.0
+        position: 0.0
+  
+  left_knee_joint:
+    # Knee bends during swing phase
+    keyframes:
+      - time: 0.0
+        position: 0.0
+      - time: 0.25
+        position: 1.2
+      - time: 0.5
+        position: 0.0
+      - time: 0.75
+        position: 0.0
+      - time: 1.0
+        position: 0.0
+  
+  right_knee_joint:
+    keyframes:
+      - time: 0.0
+        position: 0.0
+      - time: 0.25
+        position: 0.0
+      - time: 0.5
+        position: 0.0
+      - time: 0.75
+        position: 1.2
+      - time: 1.0
+        position: 0.0
+  
+  left_shoulder_joint:
+    # Arms swing opposite to legs
+    keyframes:
+      - time: 0.0
+        position: 0.0
+      - time: 0.25
+        position: -0.3
+      - time: 0.5
+        position: 0.0
+      - time: 0.75
+        position: 0.3
+      - time: 1.0
+        position: 0.0
+  
+  right_shoulder_joint:
+    keyframes:
+      - time: 0.0
+        position: 0.0
+      - time: 0.25
+        position: 0.3
+      - time: 0.5
+        position: 0.0
+      - time: 0.75
+        position: -0.3
+      - time: 1.0
+        position: 0.0
+  
+  # Walking path (trajectory in space)
+  trajectory_path:
+    # Start position
+    start_pose:
+      x: 0.0
+      y: 0.0
+      z: 0.0
+      roll: 0.0
+      pitch: 0.0
+      yaw: 0.0
+    
+    # List of waypoints for walking path
+    waypoints:
+      - x: 0.0
+        y: 0.0
+        time: 0.0
+      - x: 0.5
+        y: 0.0
+        time: 1.0
+      - x: 1.0
+        y: 0.0
+        time: 2.0
+      - x: 1.5
+        y: 0.0
+        time: 3.0
+      - x: 1.5
+        y: 0.5
+        time: 4.0
+      - x: 1.5
+        y: 1.0
+        time: 5.0
+      - x: 1.0
+        y: 1.0
+        time: 6.0
+      - x: 0.5
+        y: 1.0
+        time: 7.0
+      - x: 0.0
+        y: 1.0
+        time: 8.0
+      - x: 0.0
+        y: 0.5
+        time: 9.0
+      - x: 0.0
+        y: 0.0
+        time: 10.0
+
+# Different animation states
+animations:
+  idle:
+    description: "Standing still"
+    duration: 0.5
+    joints:
+      left_hip_joint: 0.0
+      right_hip_joint: 0.0
+      left_knee_joint: 0.0
+      right_knee_joint: 0.0
+      left_shoulder_joint: 0.0
+      right_shoulder_joint: 0.0
+  
+  waving:
+    description: "Waving hand gesture"
+    duration: 1.0
+    joints:
+      right_shoulder_joint: 0.5
+      right_elbow_joint: -0.5
