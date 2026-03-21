@@ -14,14 +14,18 @@ from launch_ros.actions import Node
 
 def launch_setup(context, *args, **kwargs):
     package_name = 'amr_descriptions'
-    use_sim_time_str = context.launch_configurations['use_sim_time']
+    use_sim_time_str = context.launch_configurations.get('use_sim_time', 'true')
     use_sim_time = use_sim_time_str.lower() == 'true'
-    init_x = context.launch_configurations['x_pos']
-    init_y = context.launch_configurations['y_pos']
-    init_height = context.launch_configurations['height']
-    world_name = context.launch_configurations['world']
-    launch_rviz_str = context.launch_configurations['launch_rviz']
+    init_x = context.launch_configurations.get('x_pos', '0.0')
+    init_y = context.launch_configurations.get('y_pos', '0.0')
+    init_height = context.launch_configurations.get('height', '0.1')
+    world_name = context.launch_configurations.get('world', 'amr_simulation.world')
+    launch_rviz_str = context.launch_configurations.get('launch_rviz', 'true')
     launch_rviz = launch_rviz_str.lower() == 'true'
+    headless = context.launch_configurations.get('headless', 'false').lower() == 'true'
+    spawn_controllers = context.launch_configurations.get('spawn_controllers', 'true').lower() == 'true'
+    enable_human_animator = context.launch_configurations.get('enable_human_animator', 'true').lower() == 'true'
+    enable_obstacle_extractor = context.launch_configurations.get('enable_obstacle_extractor', 'true').lower() == 'true'
 
     pkg_path = get_package_share_directory(package_name)
     xacro_file = os.path.join(pkg_path, 'model', 'wheeled', 'urdf', 'mobile_robot.urdf.xacro')
@@ -128,6 +132,7 @@ def launch_setup(context, *args, **kwargs):
     )
 
     # Gazebo launch
+    gz_args = ('-r -s -v 4 ' if headless else '-r -v 4 ') + world_file
     gazebo_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([
             PathJoinSubstitution([
@@ -137,31 +142,50 @@ def launch_setup(context, *args, **kwargs):
             ])
         ]),
         launch_arguments=[
-            ('gz_args', '-r -v 4 ' + world_file),
-            ('use_sim_time', 'true'),
+            ('gz_args', gz_args),
+            ('use_sim_time', use_sim_time_str),
         ]
+    )
+
+    human_animator_node = Node(
+        package='amr_descriptions',
+        executable='human_animator.py',
+        name='human_animator',
+        output='screen',
+        parameters=[{'use_sim_time': use_sim_time}]
     )
 
     # Build launch list
     nodes_to_launch = [
         gazebo_launch,
         bridge,
-        obstacle_extractor_node,
         robot_state_publisher,
         spawn_entity,
-        RegisterEventHandler(
-            event_handler=OnProcessExit(
-                target_action=spawn_entity,
-                on_exit=[joint_state_broadcaster],
-            )
-        ),
-        RegisterEventHandler(
-            event_handler=OnProcessExit(
-                target_action=joint_state_broadcaster,
-                on_exit=[diff_drive_controller],
-            )
-        ),
     ]
+
+    if enable_obstacle_extractor:
+        nodes_to_launch.append(obstacle_extractor_node)
+
+    if spawn_controllers:
+        nodes_to_launch.append(
+            RegisterEventHandler(
+                event_handler=OnProcessExit(
+                    target_action=spawn_entity,
+                    on_exit=[joint_state_broadcaster],
+                )
+            )
+        )
+        nodes_to_launch.append(
+            RegisterEventHandler(
+                event_handler=OnProcessExit(
+                    target_action=joint_state_broadcaster,
+                    on_exit=[diff_drive_controller],
+                )
+            )
+        )
+
+    if enable_human_animator:
+        nodes_to_launch.append(human_animator_node)
 
     if launch_rviz:
         nodes_to_launch.append(rviz_node)
@@ -174,10 +198,14 @@ def generate_launch_description():
         DeclareLaunchArgument('use_sim_time', default_value='true', description='Use simulation time'),
         DeclareLaunchArgument('x_pos', default_value='0.0', description='Initial X position'),
         DeclareLaunchArgument('y_pos', default_value='0.0', description='Initial Y position'),
-        DeclareLaunchArgument('height', default_value='0.2', description='Initial spawn height'),
+        DeclareLaunchArgument('height', default_value='0.1', description='Initial spawn height'),
         DeclareLaunchArgument('launch_rviz', default_value='true', description='Launch RViz2'),
-        DeclareLaunchArgument('world', default_value='room_20x20.world',
+        DeclareLaunchArgument('headless', default_value='false', description='Run Gazebo in server-only mode'),
+        DeclareLaunchArgument('spawn_controllers', default_value='true', description='Spawn ros2_control controllers'),
+        DeclareLaunchArgument('enable_human_animator', default_value='true', description='Enable human walking animator node'),
+        DeclareLaunchArgument('enable_obstacle_extractor', default_value='true', description='Enable obstacle extractor node'),
+        DeclareLaunchArgument('world', default_value='amr_simulation.world',
                               description='World file to load',
-                              choices=['empty.world', 'room_20x20.world', 'small_house.world', 'small_warehouse.world']),
+                              choices=['amr_simulation.world', 'empty.world', 'room_20x20.world', 'small_house.world', 'small_warehouse.world']),
         OpaqueFunction(function=launch_setup),
     ])

@@ -70,8 +70,8 @@ class HumanWalkingAnimator(Node):
         knee_phase_left = math.sin(2 * math.pi * time_in_cycle)
         knee_phase_right = math.sin(2 * math.pi * (time_in_cycle + 0.5))
         
-        joint_angles['left_knee'] = max(0, knee_amplitude * knee_phase_left)
-        joint_angles['right_knee'] = max(0, knee_amplitude * knee_phase_right)
+        joint_angles['left_knee'] = max(0.0, knee_amplitude * knee_phase_left)
+        joint_angles['right_knee'] = max(0.0, knee_amplitude * knee_phase_right)
         
         # Shoulder motion: opposite to leg motion for balance
         shoulder_amplitude = 0.4
@@ -95,7 +95,7 @@ class HumanWalkingAnimator(Node):
         
         # Create a point for the current joint positions
         point = JointTrajectoryPoint()
-        point.positions = [joint_angles[joint] for joint in self.animated_joints]
+        point.positions = [float(joint_angles[joint]) for joint in self.animated_joints]
         
         # Set velocity to smoothly transition to next position
         point.velocities = [0.5] * len(self.animated_joints)
