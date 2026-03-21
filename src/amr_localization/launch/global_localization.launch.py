@@ -1,6 +1,6 @@
 import os
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, TimerAction
+from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
@@ -12,13 +12,19 @@ def generate_launch_description():
     # ===========================
     map_name_arg = DeclareLaunchArgument(
         "map_name",
-        default_value="lab208b3",
-        description="Map name (folder name in amr_localization/maps/)"
+        default_value="room_20x20",
+        description="Map name (folder name in amr_mapping/maps/)"
+    )
+
+    map_yaml_arg = DeclareLaunchArgument(
+        "map_yaml",
+        default_value="map.yaml",
+        description="Map yaml filename in selected map folder"
     )
     
     use_sim_time_arg = DeclareLaunchArgument(
         "use_sim_time",
-        default_value="false",
+        default_value="true",
         description="Use simulation time"
     )
     
@@ -45,6 +51,7 @@ def generate_launch_description():
     # ===========================
     map_name = LaunchConfiguration("map_name")
     use_sim_time = LaunchConfiguration("use_sim_time")
+    map_yaml = LaunchConfiguration("map_yaml")
     x_pos = LaunchConfiguration("x_pos")
     y_pos = LaunchConfiguration("y_pos")
     yaw = LaunchConfiguration("yaw")
@@ -52,17 +59,16 @@ def generate_launch_description():
     # ===========================
     # Package paths and configs
     # ===========================
-    agv_localization_dir = get_package_share_directory("agv_localization")
-    mobile_robot_dir = get_package_share_directory("mobile_robot")
+    amr_localization_dir = get_package_share_directory("amr_localization")
     
-    ekf_config_file = os.path.join(agv_localization_dir, "config", "ekf.yaml")
-    amcl_config_file = os.path.join(agv_localization_dir, "config", "amcl.yaml")
+    ekf_config_file = os.path.join(amr_localization_dir, "config", "ekf.yaml")
+    amcl_config_file = os.path.join(amr_localization_dir, "config", "amcl.yaml")
     
     map_path = PathJoinSubstitution([
-        get_package_share_directory("amr_localization"),
+        get_package_share_directory("amr_mapping"),
         "maps",
         map_name,
-        "lab208b3.yaml"
+        map_yaml
     ])
 
     # ===========================
@@ -131,11 +137,13 @@ def generate_launch_description():
     # ===========================
     return LaunchDescription([
         map_name_arg,
+        map_yaml_arg,
         use_sim_time_arg,
         x_pos_arg,
         y_pos_arg,
         yaw_arg,
         ekf_filter_node,
         nav2_map_server,
+        nav2_amcl,
         nav2_lifecycle_manager,
     ])

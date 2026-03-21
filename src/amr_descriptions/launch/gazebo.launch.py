@@ -111,6 +111,22 @@ def launch_setup(context, *args, **kwargs):
         output='screen'
     )
 
+    obstacle_extractor_node = Node(
+        package='obstacle_detector',
+        executable='obstacle_extractor_node',
+        name='obstacle_extractor',
+        output='screen',
+        parameters=[{
+            'use_sim_time': use_sim_time,
+            'active': True,
+            'use_scan': True,
+            'use_pcl': False,
+            'use_pcl2': False,
+            'transform_coordinates': False,
+            'frame_id': 'laser',
+        }]
+    )
+
     # Gazebo launch
     gazebo_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([
@@ -130,6 +146,7 @@ def launch_setup(context, *args, **kwargs):
     nodes_to_launch = [
         gazebo_launch,
         bridge,
+        obstacle_extractor_node,
         robot_state_publisher,
         spawn_entity,
         RegisterEventHandler(
