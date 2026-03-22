@@ -131,6 +131,40 @@ def launch_setup(context, *args, **kwargs):
         }]
     )
 
+    obstacle_tracker_node = Node(
+        package='obstacle_detector',
+        executable='obstacle_tracker_node',
+        name='obstacle_tracker',
+        output='screen',
+        remappings=[
+            ('raw_obstacles', '/raw_obstacles'),
+            ('tracked_obstacles', '/obstacles'),
+            ('tracked_obstacles_visualization', '/obstacles_visualization'),
+        ],
+        parameters=[{
+            'use_sim_time': use_sim_time,
+            'active': True,
+            'frame_id': 'laser',
+            'loop_rate': 100.0,
+            'tracking_duration': 2.0,
+        }]
+    )
+
+    obstacle_publisher_node = Node(
+        package='obstacle_detector',
+        executable='obstacle_publisher_node',
+        name='obstacle_publisher',
+        output='screen',
+        remappings=[
+            ('obstacles', '/virtual_obstacles'),
+        ],
+        parameters=[{
+            'use_sim_time': use_sim_time,
+            'active': True,
+            'frame_id': 'laser',
+        }]
+    )
+
     # Gazebo launch
     gz_args = ('-r -s -v 4 ' if headless else '-r -v 4 ') + world_file
     gazebo_launch = IncludeLaunchDescription(
@@ -165,6 +199,8 @@ def launch_setup(context, *args, **kwargs):
 
     if enable_obstacle_extractor:
         nodes_to_launch.append(obstacle_extractor_node)
+        nodes_to_launch.append(obstacle_tracker_node)
+        nodes_to_launch.append(obstacle_publisher_node)
 
     if spawn_controllers:
         nodes_to_launch.append(

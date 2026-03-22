@@ -213,5 +213,45 @@
       <direction>-0.5 0.1 -0.9</direction>
     </light>
 
+    <!-- Human walking actor -->
+    <actor name="human_walking">
+      <pose>1 1 0.0 0 0 0</pose>
+      <skin>
+        <filename>https://fuel.gazebosim.org/1.0/Mingfei/models/actor/tip/files/meshes/walk.dae</filename>
+        <scale>1.0</scale>
+      </skin>
+      <animation name="walk">
+        <filename>https://fuel.gazebosim.org/1.0/Mingfei/models/actor/tip/files/meshes/walk.dae</filename>
+        <interpolate_x>true</interpolate_x>
+      </animation>
+      <script>
+        <loop>true</loop>
+        <delay_start>0.0</delay_start>
+        <auto_start>true</auto_start>
+        <trajectory id="0" type="walk" tension="0.6">
+          <waypoint>
+            <time>0</time>
+            <pose>1 1 1.0 0 0 0</pose>
+          </waypoint>
+          <waypoint>
+            <time>4</time>
+            <pose>3 1 1.0 0 0 0</pose>
+          </waypoint>
+          <waypoint>
+            <time>8</time>
+            <pose>3 3 1.0 0 0 1.57</pose>
+          </waypoint>
+          <waypoint>
+            <time>12</time>
+            <pose>1 3 1.0 0 0 3.14</pose>
+          </waypoint>
+          <waypoint>
+            <time>16</time>
+            <pose>1 1 1.0 0 0 4.71</pose>
+          </waypoint>
+        </trajectory>
+      </script>
+    </actor>
+
   </world>
 </sdf>
