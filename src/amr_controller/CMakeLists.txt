@@ -84,6 +84,19 @@ install(
   DESTINATION share/${PROJECT_NAME}
 )
 
+install(
+  DIRECTORY policy
+  DESTINATION share/${PROJECT_NAME}
+)
+
+install(
+  PROGRAMS
+    scripts/eval_ppo.py
+    scripts/rl_ocp_policy_bridge.py
+    scripts/rl_policy_worker.py
+  DESTINATION lib/${PROJECT_NAME}
+)
+
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/config")
   install(
     DIRECTORY config

@@ -240,7 +240,7 @@ def generate_launch_description():
         DeclareLaunchArgument('spawn_controllers', default_value='true', description='Spawn ros2_control controllers'),
         DeclareLaunchArgument('enable_human_animator', default_value='true', description='Enable human walking animator node'),
         DeclareLaunchArgument('enable_obstacle_extractor', default_value='true', description='Enable obstacle extractor node'),
-        DeclareLaunchArgument('world', default_value='amr_simulation.world',
+        DeclareLaunchArgument('world', default_value='room_20x20.world',
                               description='World file to load',
                               choices=['amr_simulation.world', 'empty.world', 'room_20x20.world', 'small_house.world', 'small_warehouse.world']),
         OpaqueFunction(function=launch_setup),
