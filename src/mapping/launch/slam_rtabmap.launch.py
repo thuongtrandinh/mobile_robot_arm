@@ -4,7 +4,7 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
 
@@ -12,6 +12,8 @@ from ament_index_python.packages import get_package_share_directory
 def generate_launch_description():
     localization_dir = get_package_share_directory("localization")
     mapping_dir = get_package_share_directory("mapping")
+    zed2_dir = get_package_share_directory("zed2")
+    lidar_dir = get_package_share_directory("lidar")
     rtabmap_launch_dir = get_package_share_directory("rtabmap_launch")
 
     use_sim_time = LaunchConfiguration("use_sim_time")
@@ -20,6 +22,8 @@ def generate_launch_description():
     namespace = LaunchConfiguration("namespace")
     rtabmap_args = LaunchConfiguration("rtabmap_args")
     use_zed = LaunchConfiguration("use_zed")
+    use_lidar = LaunchConfiguration("use_lidar")
+    start_hardware = LaunchConfiguration("start_hardware")
     rgb_topic = LaunchConfiguration("rgb_topic")
     depth_topic = LaunchConfiguration("depth_topic")
     camera_info_topic = LaunchConfiguration("camera_info_topic")
@@ -56,9 +60,19 @@ def generate_launch_description():
         default_value="true",
         description="Enable ZED2 RGBD input for RTAB-Map (requires matching camera topics)",
     )
+    use_lidar_arg = DeclareLaunchArgument(
+        "use_lidar",
+        default_value="true",
+        description="Enable LiDAR input for RTAB-Map",
+    )
+    start_hardware_arg = DeclareLaunchArgument(
+        "start_hardware",
+        default_value="true",
+        description="If use_sim_time=false and start_hardware=true, launch ZED2 and LiDAR drivers automatically",
+    )
     rgb_topic_arg = DeclareLaunchArgument(
         "rgb_topic",
-        default_value="/zed2/zed_node/rgb/image_rect_color",
+        default_value="/zed2/zed_node/rgb/color/rect/image",
         description="RGB image topic used when use_zed=true",
     )
     depth_topic_arg = DeclareLaunchArgument(
@@ -68,8 +82,38 @@ def generate_launch_description():
     )
     camera_info_topic_arg = DeclareLaunchArgument(
         "camera_info_topic",
-        default_value="/zed2/zed_node/rgb/camera_info",
+        default_value="/zed2/zed_node/rgb/color/rect/camera_info",
         description="Camera info topic used when use_zed=true",
+    )
+
+    zed2_hardware = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(zed2_dir, "launch", "zed2.launch.py")
+        ),
+        launch_arguments={
+            "namespace": "",
+            "camera_name": "zed2",
+            "node_name": "zed_node",
+            "use_sim_time": "false",
+            "sim_mode": "false",
+            "publish_svo_clock": "false",
+        }.items(),
+        condition=IfCondition(PythonExpression([
+            "'", use_sim_time, "' == 'false' and '", start_hardware, "' == 'true' and '", use_zed, "' == 'true'"
+        ])),
+    )
+
+    lidar_hardware = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(lidar_dir, "launch", "a2m8.launch.py")
+        ),
+        launch_arguments={
+            "use_sim_time": "false",
+            "frame_id": "laser",
+        }.items(),
+        condition=IfCondition(PythonExpression([
+            "'", use_sim_time, "' == 'false' and '", start_hardware, "' == 'true' and '", use_lidar, "' == 'true'"
+        ])),
     )
 
     # Disabled old EKF pipeline (IMU + encoder only), kept here for reference.
@@ -176,9 +220,13 @@ def generate_launch_description():
             namespace_arg,
             rtabmap_args_arg,
             use_zed_arg,
+            use_lidar_arg,
+            start_hardware_arg,
             rgb_topic_arg,
             depth_topic_arg,
             camera_info_topic_arg,
+            zed2_hardware,
+            lidar_hardware,
             # zed2_rgbd_odometry,
             ekf_filter_node,
             rtabmap_slam,

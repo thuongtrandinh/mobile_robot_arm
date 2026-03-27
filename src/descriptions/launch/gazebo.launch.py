@@ -123,8 +123,8 @@ def launch_setup(context, *args, **kwargs):
         ],
         remappings=[
             # Đổi nhãn (Remap) sang đúng tên mà RTAB-Map đang há miệng chờ
-            ('/zed2/left/image', '/zed2/zed_node/rgb/image_rect_color'),
-            ('/zed2/left/camera_info', '/zed2/zed_node/rgb/camera_info'),
+            ('/zed2/left/image', '/zed2/zed_node/rgb/color/rect/image'),
+            ('/zed2/left/camera_info', '/zed2/zed_node/rgb/color/rect/camera_info'),
             ('/zed2/left/depth_image', '/zed2/zed_node/depth/depth_registered'),
         ],
         parameters=[{'use_sim_time': use_sim_time}],

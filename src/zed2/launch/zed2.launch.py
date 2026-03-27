@@ -138,7 +138,7 @@ def launch_setup(context, *args, **kwargs):
             }
 
     if (camera_name_val == ''):
-        camera_name_val = 'zed'
+        camera_name_val = 'zed2'
 
     if(namespace_val == ''):
         namespace_val = camera_name_val
@@ -312,7 +312,7 @@ def generate_launch_description():
                 choices=['screen', 'log', 'both']),
             DeclareLaunchArgument(
                 'camera_name',
-                default_value=TextSubstitution(text='zed'),
+                default_value=TextSubstitution(text='zed2'),
                 description='The name of the camera. It can be different from the camera model and it will be used as node `namespace`.'),
             DeclareLaunchArgument(
                 'container_name',
