@@ -99,6 +99,11 @@ def launch_setup(context, *args, **kwargs):
     )
 
     # Single bridge node for all topics
+    # Tên topic Depth trong Gazebo của bạn có thể khác một chút (tùy vào URDF).
+    # Thường nó sẽ là '/zed2/depth_image' hoặc '/zed2/depth/image_raw'.
+    # Giả sử ở đây Gazebo phát ra là '/zed2/depth_image'
+    
+   # Single bridge node for all topics
     bridge = Node(
         package='ros_gz_bridge',
         executable='parameter_bridge',
@@ -106,10 +111,21 @@ def launch_setup(context, *args, **kwargs):
             '/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock',
             '/scan@sensor_msgs/msg/LaserScan[gz.msgs.LaserScan',
             '/imu@sensor_msgs/msg/Imu[gz.msgs.IMU',
-            '/zed2/left/image_raw@sensor_msgs/msg/Image[gz.msgs.Image',
+            
+            # 1. Bắt đúng tên topic RGB từ Gazebo
+            '/zed2/left/image@sensor_msgs/msg/Image[gz.msgs.Image',
+            
+            # 2. Bắt đúng tên topic Camera Info từ Gazebo
             '/zed2/left/camera_info@sensor_msgs/msg/CameraInfo[gz.msgs.CameraInfo',
-            '/zed2/right/image_raw@sensor_msgs/msg/Image[gz.msgs.Image',
-            '/zed2/right/camera_info@sensor_msgs/msg/CameraInfo[gz.msgs.CameraInfo',
+            
+            # 3. Bắt đúng tên topic Depth từ Gazebo
+            '/zed2/left/depth_image@sensor_msgs/msg/Image[gz.msgs.Image',
+        ],
+        remappings=[
+            # Đổi nhãn (Remap) sang đúng tên mà RTAB-Map đang há miệng chờ
+            ('/zed2/left/image', '/zed2/zed_node/rgb/image_rect_color'),
+            ('/zed2/left/camera_info', '/zed2/zed_node/rgb/camera_info'),
+            ('/zed2/left/depth_image', '/zed2/zed_node/depth/depth_registered'),
         ],
         parameters=[{'use_sim_time': use_sim_time}],
         output='screen'

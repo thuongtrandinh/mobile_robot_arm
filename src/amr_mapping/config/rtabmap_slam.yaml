@@ -1,0 +1,26 @@
+rtabmap:
+  ros__parameters:
+    Mem/IncrementalMemory: true
+    Mem/InitWMWithAllNodes: false
+    Mem/STMSize: 30
+
+    RGBD/ProximityBySpace: true
+    RGBD/ProximityPathMaxNeighbors: 2
+    RGBD/OptimizeFromGraphEnd: false
+    RGBD/LinearUpdate: 0.05
+    RGBD/AngularUpdate: 0.03
+    Rtabmap/DetectionRate: 8
+
+    Grid/FromDepth: false
+    Grid/3D: false
+    Grid/RayTracing: true
+    Grid/RangeMin: 0.15
+    Grid/RangeMax: 12.0
+    Grid/CellSize: 0.05
+    Grid/NormalsSegmentation: false
+
+    Reg/Force3DoF: true
+    Optimizer/GravitySigma: 0
+
+    Vis/MinInliers: 15
+    Vis/InlierDistance: 0.05

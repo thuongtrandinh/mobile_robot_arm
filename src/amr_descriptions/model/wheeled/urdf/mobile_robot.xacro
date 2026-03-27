@@ -372,13 +372,13 @@
 	<joint name="caster_wheel_joint" type="fixed">
 		<parent link="base_link"/>
 		<child link="caster_wheel"/>
-		<origin xyz="-0.1 0.0 -0.035"/>
+		<origin xyz="-0.1 0.0 -0.015"/>
 	</joint>
 
 	<link name="caster_wheel">
 		<visual>
 			<geometry>
-				<sphere radius="0.035"/>
+				<sphere radius="0.015"/>
 			</geometry>
 			<material name="red"/>
 		</visual>
