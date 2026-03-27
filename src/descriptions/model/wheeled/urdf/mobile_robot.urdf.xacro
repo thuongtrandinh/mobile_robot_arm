@@ -1,0 +1,6 @@
+<?xml version="1.0"?>
+<robot name="myrobotagv" xmlns:xacro="http://www.ros.org/wiki/xacro">
+    
+    <xacro:include filename="$(find descriptions)/model/wheeled/urdf/mobile_robot.xacro"/>
+    <xacro:include filename="$(find descriptions)/model/wheeled/urdf/gazebo.xacro"/>
+</robot>

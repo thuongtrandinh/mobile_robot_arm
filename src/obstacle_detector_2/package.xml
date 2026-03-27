@@ -24,7 +24,7 @@
   <depend>armadillo</depend>
   <depend>nav_msgs</depend>
   <depend>builtin_interfaces</depend>
-  <depend>amr_interfaces</depend>
+  <depend>interfaces</depend>
 
   <export>
     <build_type>ament_cmake</build_type>

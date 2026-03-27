@@ -10,24 +10,24 @@ Thư mục `src/` chứa toàn bộ các **ROS 2 package** của hệ thống ro
 Cảm biến (LiDAR, IMU, Encoder)
         │
         ▼
-[amr_localization]  ──  EKF fusion + AMCL
+[localization]  ──  EKF fusion + AMCL
         │
-        ├──── [amr_mapping]   (SLAM, nếu chưa có bản đồ)
+        ├──── [mapping]   (SLAM, nếu chưa có bản đồ)
         │
         ▼
 [amr_planner]  ──  Informed-RRT* → /global_path
         │
         ▼
-[amr_controller]  ──  H-AMPCC (RLS + iLQR/MPCC) → /cmd_vel
+[controller]  ──  H-AMPCC (RLS + iLQR/MPCC) → /cmd_vel
         │
         ▼
-[amr_stm32]  ──  STM32F411 firmware PID → Động cơ bánh xe
+[stm32]  ──  STM32F411 firmware PID → Động cơ bánh xe
         │
    (phát triển)
-[amr_teleop]  ──  Điều khiển bàn phím (WASD)
-[amr_descriptions]  ──  Mô hình robot (URDF/Xacro) + Gazebo
-[amr_bringup]  ──  Launch file tổng (thực tế / mô phỏng)
-[rplidar_ros]  ──  Driver ROS 2 cho cảm biến RPLidar
+[teleoperation]  ──  Điều khiển bàn phím (WASD)
+[descriptions]  ──  Mô hình robot (URDF/Xacro) + Gazebo
+[bringup]  ──  Launch file tổng (thực tế / mô phỏng)
+[lidar]  ──  Driver ROS 2 cho cảm biến RPLidar
 ```
 
 ---
@@ -36,15 +36,15 @@ Cảm biến (LiDAR, IMU, Encoder)
 
 | Package | Ngôn ngữ | Mô tả ngắn |
 |---|---|---|
-| `amr_bringup` | Launch only | Khởi động toàn bộ hệ thống |
-| `amr_controller` | C++ | Bộ điều khiển H-AMPCC (nghiên cứu chính) |
-| `amr_descriptions` | C++/Python | Mô hình robot URDF + môi trường Gazebo |
-| `amr_localization` | C++/Python | Định vị (EKF + AMCL) |
-| `amr_mapping` | C++ | Lập bản đồ SLAM (slam_toolbox) |
+| `bringup` | Launch only | Khởi động toàn bộ hệ thống |
+| `controller` | C++ | Bộ điều khiển H-AMPCC (nghiên cứu chính) |
+| `descriptions` | C++/Python | Mô hình robot URDF + môi trường Gazebo |
+| `localization` | C++/Python | Định vị (EKF + AMCL) |
+| `mapping` | C++ | Lập bản đồ SLAM (slam_toolbox) |
 | `amr_planner` | Python | Lập lộ trình toàn cục (Informed-RRT*) |
-| `amr_stm32` | C (Embedded) | Firmware STM32F411 điều khiển động cơ |
-| `amr_teleop` | C++ | Điều khiển robot bằng bàn phím |
-| `rplidar_ros` | C++ | Driver RPLidar A2M8 (bên thứ ba) |
+| `stm32` | C (Embedded) | Firmware STM32F411 điều khiển động cơ |
+| `teleoperation` | C++ | Điều khiển robot bằng bàn phím |
+| `lidar` | C++ | Driver RPLidar A2M8 (bên thứ ba) |
 
 ---
 
@@ -52,7 +52,7 @@ Cảm biến (LiDAR, IMU, Encoder)
 
 ---
 
-### `amr_bringup`
+### `bringup`
 
 **Vai trò:** Package điều phối — chỉ chứa launch files, không có source code.
 
@@ -70,15 +70,15 @@ Cảm biến (LiDAR, IMU, Encoder)
 
 ```bash
 # Khởi động mô phỏng với SLAM
-ros2 launch amr_bringup simulated_robot.launch.py use_slam:=true
+ros2 launch bringup simulated_robot.launch.py use_slam:=true
 
 # Khởi động robot thực với AMCL
-ros2 launch amr_bringup real_robot.launch.py use_slam:=false
+ros2 launch bringup real_robot.launch.py use_slam:=false
 ```
 
 ---
 
-### `amr_controller`
+### `controller`
 
 **Vai trò:** Đây là **đóng góp nghiên cứu chính** của đồ án. Cài đặt bộ điều khiển **H-AMPCC (Hierarchical Adaptive Model Predictive Contouring Control)**.
 
@@ -135,7 +135,7 @@ ilqr_max_iter: 10
 
 ---
 
-### `amr_descriptions`
+### `descriptions`
 
 **Vai trò:** Định nghĩa mô hình robot (URDF/Xacro) và môi trường mô phỏng Gazebo.
 
@@ -171,12 +171,12 @@ model/wheeled/urdf/
 **Khởi động Gazebo:**
 
 ```bash
-ros2 launch amr_descriptions gazebo.launch.py world:=small_warehouse
+ros2 launch descriptions gazebo.launch.py world:=small_warehouse
 ```
 
 ---
 
-### `amr_localization`
+### `localization`
 
 **Vai trò:** Ước lượng vị trí robot trong bản đồ đã biết.
 
@@ -206,7 +206,7 @@ LiDAR (/scan) + Bản đồ ──► AMCL (nav2_amcl) ──► TF: map → odo
 
 ---
 
-### `amr_mapping`
+### `mapping`
 
 **Vai trò:** SLAM — Lập bản đồ đồng thời + định vị khi chưa có bản đồ.
 
@@ -231,7 +231,7 @@ loop_search_maximum_distance: 4.0
 **Khởi động SLAM:**
 
 ```bash
-ros2 launch amr_mapping slam.launch.py
+ros2 launch mapping slam.launch.py
 ```
 
 **Lưu bản đồ sau khi quét:**
@@ -277,7 +277,7 @@ ros2 topic pub /goal_pose geometry_msgs/PoseStamped '{...}'
 
 ---
 
-### `amr_stm32`
+### `stm32`
 
 **Vai trò:** Firmware nhúng cho vi điều khiển **STM32F411VET6** (Cortex-M4) — điều khiển PID động cơ.
 
@@ -288,11 +288,11 @@ ros2 topic pub /goal_pose geometry_msgs/PoseStamped '{...}'
 - Thực hiện vòng lặp PID để điều khiển PWM cho hai động cơ DC.
 - Đọc encoder để tính vận tốc thực và cấp odometry ngược lại.
 
-**Để mở và build:** Dùng **STM32CubeIDE**, mở project tại `amr_stm32/agv_PID/`.
+**Để mở và build:** Dùng **STM32CubeIDE**, mở project tại `stm32/agv_PID/`.
 
 ---
 
-### `amr_teleop`
+### `teleoperation`
 
 **Vai trò:** Điều khiển robot bằng bàn phím — dùng trong lúc phát triển và kiểm thử.
 
@@ -312,12 +312,12 @@ ros2 topic pub /goal_pose geometry_msgs/PoseStamped '{...}'
 **Khởi động:**
 
 ```bash
-ros2 run amr_teleop keyboard_input
+ros2 run teleoperation keyboard_input
 ```
 
 ---
 
-### `rplidar_ros`
+### `lidar`
 
 **Vai trò:** Driver ROS 2 cho cảm biến LiDAR **SLAMTEC RPLidar A2M8** (bên thứ ba, không chỉnh sửa).
 
@@ -326,10 +326,10 @@ ros2 run amr_teleop keyboard_input
 **Khởi động:**
 
 ```bash
-ros2 launch rplidar_ros rplidar_a2m8_launch.py
+ros2 launch lidar rplidar_a2m8_launch.py
 ```
 
-> Cấu hình cổng serial được ghi đè bởi `amr_bringup/config/rplidar_a2m8.yaml`.
+> Cấu hình cổng serial được ghi đè bởi `bringup/config/rplidar_a2m8.yaml`.
 
 ---
 
@@ -344,7 +344,7 @@ colcon build --symlink-install
 source install/setup.bash
 
 # Build một package cụ thể
-colcon build --symlink-install --packages-select amr_controller
+colcon build --symlink-install --packages-select controller
 ```
 
 ---
@@ -355,7 +355,7 @@ colcon build --symlink-install --packages-select amr_controller
 
 ```bash
 source install/setup.bash
-ros2 launch amr_bringup simulated_robot.launch.py use_slam:=true
+ros2 launch bringup simulated_robot.launch.py use_slam:=true
 ```
 
 ### 2. Lập bản đồ xong → Lưu bản đồ → Chạy với AMCL
@@ -366,7 +366,7 @@ ros2 service call /slam_toolbox/save_map slam_toolbox/srv/SaveMap \
   "name: {data: 'my_map'}"
 
 # Lần sau, dùng AMCL với bản đồ đã có
-ros2 launch amr_bringup simulated_robot.launch.py use_slam:=false
+ros2 launch bringup simulated_robot.launch.py use_slam:=false
 ```
 
 ### 3. Đặt mục tiêu và để controller dẫn đường

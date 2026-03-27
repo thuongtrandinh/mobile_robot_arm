@@ -98,7 +98,7 @@ void ObstaclePublisher::updateParamsUtil() {
 
   if (p_active_ != prev_active) {
     if (p_active_) {
-      obstacles_pub_ = nh_->create_publisher<amr_interfaces::msg::Obstacles>("obstacles", 10);
+      obstacles_pub_ = nh_->create_publisher<interfaces::msg::Obstacles>("obstacles", 10);
     }
     // else {
     //   obstacle_pub_.shutdown();
@@ -114,7 +114,7 @@ void ObstaclePublisher::updateParamsUtil() {
     return;
 
   for (int idx = 0; idx < p_x_vector_.size(); ++idx) {
-    amr_interfaces::msg::CircleObstacle circle;
+    interfaces::msg::CircleObstacle circle;
     circle.center.x = p_x_vector_[idx];
     circle.center.y = p_y_vector_[idx];
     circle.radius = p_r_vector_[idx];
@@ -158,7 +158,7 @@ void ObstaclePublisher::calculateObstaclesPositions(double dt) {
 }
 
 void ObstaclePublisher::fusionExample(double t) {
-  amr_interfaces::msg::CircleObstacle circ1, circ2;
+  interfaces::msg::CircleObstacle circ1, circ2;
 
   obstacles_.circles.clear();
 
@@ -189,7 +189,7 @@ void ObstaclePublisher::fusionExample(double t) {
 }
 
 void ObstaclePublisher::fissionExample(double t) {
-  amr_interfaces::msg::CircleObstacle circ1, circ2;
+  interfaces::msg::CircleObstacle circ1, circ2;
 
   obstacles_.circles.clear();
 
@@ -227,7 +227,7 @@ void ObstaclePublisher::fissionExample(double t) {
 }
 
 void ObstaclePublisher::publishObstacles() {
-  amr_interfaces::msg::Obstacles  obstacles_msg;
+  interfaces::msg::Obstacles  obstacles_msg;
   obstacles_msg = obstacles_;
 
   obstacles_msg.header.stamp = nh_->get_clock()->now();

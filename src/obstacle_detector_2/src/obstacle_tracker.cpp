@@ -110,14 +110,14 @@ void ObstacleTracker::updateParamsUtil(){
         odom_sub_ = nh_->create_subscription<nav_msgs::msg::Odometry>(
             "/odom", 10, std::bind(&ObstacleTracker::odomCallback, this, std::placeholders::_1));
       }
-      obstacles_sub_ = nh_->create_subscription<amr_interfaces::msg::Obstacles>(
+      obstacles_sub_ = nh_->create_subscription<interfaces::msg::Obstacles>(
             "raw_obstacles", 10, std::bind(&ObstacleTracker::obstaclesCallback, this, std::placeholders::_1));
-      obstacles_pub_ = nh_->create_publisher<amr_interfaces::msg::Obstacles>("tracked_obstacles", 10);
+      obstacles_pub_ = nh_->create_publisher<interfaces::msg::Obstacles>("tracked_obstacles", 10);
       obstacles_vis_pub_ = nh_->create_publisher<visualization_msgs::msg::MarkerArray>("tracked_obstacles_visualization", 10);
     }
     else {
       // Send empty message
-      auto obstacles_msg = amr_interfaces::msg::Obstacles();
+      auto obstacles_msg = interfaces::msg::Obstacles();
       obstacles_msg.header.frame_id = obstacles_.header.frame_id;
       obstacles_msg.header.stamp = nh_->get_clock()->now();
       obstacles_pub_->publish(obstacles_msg);
@@ -147,12 +147,12 @@ void ObstacleTracker::odomCallback(const nav_msgs::msg::Odometry::ConstSharedPtr
   odom_ = *msg;
 }
 
-void ObstacleTracker::obstaclesCallback(const amr_interfaces::msg::Obstacles::ConstSharedPtr& new_obstacles) {
+void ObstacleTracker::obstaclesCallback(const interfaces::msg::Obstacles::ConstSharedPtr& new_obstacles) {
   obstaclesCallbackCircles(new_obstacles);
   obstaclesCallbackSegments(new_obstacles);
 }
 
-void ObstacleTracker::obstaclesCallbackCircles(const amr_interfaces::msg::Obstacles::ConstSharedPtr& new_obstacles) {
+void ObstacleTracker::obstaclesCallbackCircles(const interfaces::msg::Obstacles::ConstSharedPtr& new_obstacles) {
   if (new_obstacles->circles.size() > 0){
     radius_margin_ = new_obstacles->circles[0].radius - new_obstacles->circles[0].true_radius;
   }
@@ -179,7 +179,7 @@ void ObstacleTracker::obstaclesCallbackCircles(const amr_interfaces::msg::Obstac
   vector<int> used_new_obstacles;
 
   vector<TrackedCircleObstacle> new_tracked_obstacles;
-  vector<amr_interfaces::msg::CircleObstacle> new_untracked_obstacles;
+  vector<interfaces::msg::CircleObstacle> new_untracked_obstacles;
 
   // Check for fusion (only tracked obstacles)
   for (int i = 0; i < T-1; ++i) {
@@ -264,7 +264,7 @@ void ObstacleTracker::obstaclesCallbackCircles(const amr_interfaces::msg::Obstac
   untracked_circle_obstacles_.assign(new_untracked_obstacles.begin(), new_untracked_obstacles.end());
 }
 
-void ObstacleTracker::obstaclesCallbackSegments(const amr_interfaces::msg::Obstacles::ConstSharedPtr& new_obstacles) {
+void ObstacleTracker::obstaclesCallbackSegments(const interfaces::msg::Obstacles::ConstSharedPtr& new_obstacles) {
   int N = new_obstacles->segments.size();
   int T = tracked_segment_obstacles_.size();
   int U = untracked_segment_obstacles_.size();
@@ -287,7 +287,7 @@ void ObstacleTracker::obstaclesCallbackSegments(const amr_interfaces::msg::Obsta
   vector<int> used_new_obstacles;
 
   vector<TrackedSegmentObstacle> new_tracked_obstacles;
-  vector<amr_interfaces::msg::SegmentObstacle> new_untracked_obstacles;
+  vector<interfaces::msg::SegmentObstacle> new_untracked_obstacles;
 
   // Check for fusion (only tracked obstacles)
   for (int i = 0; i < T-1; ++i) {
@@ -371,7 +371,7 @@ void ObstacleTracker::obstaclesCallbackSegments(const amr_interfaces::msg::Obsta
   untracked_segment_obstacles_.assign(new_untracked_obstacles.begin(), new_untracked_obstacles.end());
 }
 
-double ObstacleTracker::obstacleCostFunction(const amr_interfaces::msg::CircleObstacle& new_obstacle, const amr_interfaces::msg::CircleObstacle& old_obstacle) {
+double ObstacleTracker::obstacleCostFunction(const interfaces::msg::CircleObstacle& new_obstacle, const interfaces::msg::CircleObstacle& old_obstacle) {
   mat distribution = mat(2, 2).zeros();
   vec relative_position = vec(2).zeros();
 
@@ -400,11 +400,11 @@ double ObstacleTracker::obstacleCostFunction(const amr_interfaces::msg::CircleOb
   return cost / 1.0;
 }
 
-double ObstacleTracker::obstacleCostFunction(const amr_interfaces::msg::SegmentObstacle& new_obstacle, const amr_interfaces::msg::SegmentObstacle& old_obstacle) {
+double ObstacleTracker::obstacleCostFunction(const interfaces::msg::SegmentObstacle& new_obstacle, const interfaces::msg::SegmentObstacle& old_obstacle) {
   return sqrt(pow(new_obstacle.first_point.x - old_obstacle.first_point.x, 2.0) + pow(new_obstacle.first_point.y - old_obstacle.first_point.y, 2.0) + pow(new_obstacle.last_point.x - old_obstacle.last_point.x, 2.0) + pow(new_obstacle.last_point.y - old_obstacle.last_point.y, 2.0));
 }
 
-void ObstacleTracker::calculateCostMatrix(const vector<amr_interfaces::msg::CircleObstacle>& new_obstacles, mat& cost_matrix) {
+void ObstacleTracker::calculateCostMatrix(const vector<interfaces::msg::CircleObstacle>& new_obstacles, mat& cost_matrix) {
   /*
    * Cost between two obstacles represents their difference.
    * The bigger the cost, the less similar they are.
@@ -426,7 +426,7 @@ void ObstacleTracker::calculateCostMatrix(const vector<amr_interfaces::msg::Circ
   }
 }
 
-void ObstacleTracker::calculateCostMatrix(const vector<amr_interfaces::msg::SegmentObstacle>& new_obstacles, mat& cost_matrix) {
+void ObstacleTracker::calculateCostMatrix(const vector<interfaces::msg::SegmentObstacle>& new_obstacles, mat& cost_matrix) {
   /*
    * Cost between two obstacles represents their difference.
    * The bigger the cost, the less similar they are.
@@ -561,8 +561,8 @@ bool ObstacleTracker::fissionObstaclesCorrespond(const int idx, const int jdx, c
 }
 
 void ObstacleTracker::fuseObstacles(const vector<int>& fusion_indices, const vector<int> &col_min_indices,
-                                    vector<TrackedCircleObstacle>& new_tracked, const amr_interfaces::msg::Obstacles::ConstSharedPtr& new_obstacles) {
-  amr_interfaces::msg::CircleObstacle c;
+                                    vector<TrackedCircleObstacle>& new_tracked, const interfaces::msg::Obstacles::ConstSharedPtr& new_obstacles) {
+  interfaces::msg::CircleObstacle c;
 
   double sum_var_x  = 0.0;
   double sum_var_y  = 0.0;
@@ -601,8 +601,8 @@ void ObstacleTracker::fuseObstacles(const vector<int>& fusion_indices, const vec
 }
 
 void ObstacleTracker::fuseObstacles(const vector<int>& fusion_indices, const vector<int> &col_min_indices,
-                                    vector<TrackedSegmentObstacle>& new_tracked, const amr_interfaces::msg::Obstacles::ConstSharedPtr& new_obstacles) {
-  amr_interfaces::msg::SegmentObstacle c;
+                                    vector<TrackedSegmentObstacle>& new_tracked, const interfaces::msg::Obstacles::ConstSharedPtr& new_obstacles) {
+  interfaces::msg::SegmentObstacle c;
 
   double sum_var_x1  = 0.0;
   double sum_var_y1  = 0.0;
@@ -654,7 +654,7 @@ void ObstacleTracker::fuseObstacles(const vector<int>& fusion_indices, const vec
 }
 
 void ObstacleTracker::fissureObstacle(const vector<int>& fission_indices, const vector<int>& row_min_indices,
-                                      vector<TrackedCircleObstacle>& new_tracked, const amr_interfaces::msg::Obstacles::ConstSharedPtr& new_obstacles) {
+                                      vector<TrackedCircleObstacle>& new_tracked, const interfaces::msg::Obstacles::ConstSharedPtr& new_obstacles) {
   // For each new obstacle taking part in fission create a tracked obstacle from the original old one and update it with the new one
   for (int idx : fission_indices) {
     TrackedCircleObstacle to = tracked_circle_obstacles_[row_min_indices[idx]];
@@ -669,7 +669,7 @@ void ObstacleTracker::fissureObstacle(const vector<int>& fission_indices, const 
 }
 
 void ObstacleTracker::fissureObstacle(const vector<int>& fission_indices, const vector<int>& row_min_indices,
-                                      vector<TrackedSegmentObstacle>& new_tracked, const amr_interfaces::msg::Obstacles::ConstSharedPtr& new_obstacles) {
+                                      vector<TrackedSegmentObstacle>& new_tracked, const interfaces::msg::Obstacles::ConstSharedPtr& new_obstacles) {
   // For each new obstacle taking part in fission create a tracked obstacle from the original old one and update it with the new one
   for (int idx : fission_indices) {
     TrackedSegmentObstacle to = tracked_segment_obstacles_[row_min_indices[idx]];
@@ -700,13 +700,13 @@ void ObstacleTracker::updateObstacles() {
 }
 
 void ObstacleTracker::publishObstacles() {
-  auto obstacles_msg = amr_interfaces::msg::Obstacles();
+  auto obstacles_msg = interfaces::msg::Obstacles();
 
   obstacles_.circles.clear();
   obstacles_.segments.clear();
 
   for (auto& tracked_circle_obstacle : tracked_circle_obstacles_) {
-    amr_interfaces::msg::CircleObstacle ob = tracked_circle_obstacle.getObstacle();
+    interfaces::msg::CircleObstacle ob = tracked_circle_obstacle.getObstacle();
     ob.true_radius = ob.radius - radius_margin_;
     // Compensate robot velocity from obstacle velocity
     // Velocities are in robot's frame, x forward y leftwards
@@ -720,7 +720,7 @@ void ObstacleTracker::publishObstacles() {
     obstacles_.circles.push_back(ob);
   }
   for (auto& tracked_segment_obstacle : tracked_segment_obstacles_) {
-    amr_interfaces::msg::SegmentObstacle ob = tracked_segment_obstacle.getObstacle();
+    interfaces::msg::SegmentObstacle ob = tracked_segment_obstacle.getObstacle();
     // Compensate robot velocity from obstacle velocity
     // Velocities are in robot's frame, x forward y leftwards
     if (p_compensate_robot_velocity_)
@@ -765,7 +765,7 @@ visualization_msgs::msg::Marker ObstacleTracker::getMarkerBase(uid_t uid){
   return marker;
 }
 
-visualization_msgs::msg::Marker ObstacleTracker::getMarkerCircle(amr_interfaces::msg::CircleObstacle& ob){
+visualization_msgs::msg::Marker ObstacleTracker::getMarkerCircle(interfaces::msg::CircleObstacle& ob){
     auto circ_marker = getMarkerBase(ob.uid);
     circ_marker.ns = "tracked_obstacles_blobs";
     auto scale = ob.true_radius;
@@ -805,7 +805,7 @@ visualization_msgs::msg::Marker ObstacleTracker::getMarkerVelocityArrow(uid_t ui
     return arrow_marker; 
 }
 
-visualization_msgs::msg::Marker ObstacleTracker::getMarkerSegment(amr_interfaces::msg::SegmentObstacle& ob){
+visualization_msgs::msg::Marker ObstacleTracker::getMarkerSegment(interfaces::msg::SegmentObstacle& ob){
     auto seg_marker = getMarkerBase(ob.uid);
     seg_marker.ns = "tracked_obstacles_blobs";
     seg_marker.scale.x = 0.1;
@@ -845,7 +845,7 @@ void ObstacleTracker::publishVisualizationObstacles() {
   obstacles_vis_msg.markers.push_back(marker_d);
 
   for (auto& tracked_circle_obstacle : tracked_circle_obstacles_) {
-    amr_interfaces::msg::CircleObstacle ob = tracked_circle_obstacle.getObstacle();
+    interfaces::msg::CircleObstacle ob = tracked_circle_obstacle.getObstacle();
     auto circ_marker = getMarkerCircle(ob);
     auto text_marker = getMarkerText(ob.uid);
     text_marker.pose.position.z += ob.center.z;
@@ -859,7 +859,7 @@ void ObstacleTracker::publishVisualizationObstacles() {
   }
 
   for (auto& tracked_segment_obstacle : tracked_segment_obstacles_) {
-    amr_interfaces::msg::SegmentObstacle ob = tracked_segment_obstacle.getObstacle();
+    interfaces::msg::SegmentObstacle ob = tracked_segment_obstacle.getObstacle();
     auto seg_marker = getMarkerSegment(ob);
     auto text_marker = getMarkerText(ob.uid);
     double px = (ob.first_point.x + ob.last_point.x)/2.0;

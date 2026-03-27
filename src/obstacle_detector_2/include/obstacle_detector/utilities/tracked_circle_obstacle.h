@@ -35,9 +35,9 @@
 
 #pragma once
 
-#include "amr_interfaces/msg/obstacles.hpp"
-#include "amr_interfaces/msg/circle_obstacle.hpp"
-#include "amr_interfaces/msg/segment_obstacle.hpp"
+#include "interfaces/msg/obstacles.hpp"
+#include "interfaces/msg/circle_obstacle.hpp"
+#include "interfaces/msg/segment_obstacle.hpp"
 
 #include "obstacle_detector/utilities/tracked_obstacle.h"
 #include "obstacle_detector/utilities/kalman.h"
@@ -47,7 +47,7 @@ namespace obstacle_detector
 
 class TrackedCircleObstacle {
 public:
-  TrackedCircleObstacle(const amr_interfaces::msg::CircleObstacle& obstacle) : obstacle_(obstacle), kf_x_(0, 1, 2), kf_y_(0, 1, 2), kf_r_(0, 1, 2) {
+  TrackedCircleObstacle(const interfaces::msg::CircleObstacle& obstacle) : obstacle_(obstacle), kf_x_(0, 1, 2), kf_y_(0, 1, 2), kf_r_(0, 1, 2) {
     fade_counter_ = s_fade_counter_size_;
     setNewUid();
     initKF();
@@ -69,7 +69,7 @@ public:
     fade_counter_--;
   }
 
-  void correctState(const amr_interfaces::msg::CircleObstacle& new_obstacle) {
+  void correctState(const interfaces::msg::CircleObstacle& new_obstacle) {
     kf_x_.y(0) = new_obstacle.center.x;
     kf_y_.y(0) = new_obstacle.center.y;
     kf_r_.y(0) = new_obstacle.radius;
@@ -125,7 +125,7 @@ public:
 
   void setNewUid() { obstacle_.uid = uid_next_++; }
   bool hasFaded() const { return ((fade_counter_ <= 0) ? true : false); }
-  const amr_interfaces::msg::CircleObstacle& getObstacle() const { return obstacle_; }
+  const interfaces::msg::CircleObstacle& getObstacle() const { return obstacle_; }
   const KalmanFilter& getKFx() const { return kf_x_; }
   const KalmanFilter& getKFy() const { return kf_y_; }
   const KalmanFilter& getKFr() const { return kf_r_; }
@@ -167,7 +167,7 @@ private:
     kf_y_.q_est(1) = obstacle_.velocity.y;
   }
 
-  amr_interfaces::msg::CircleObstacle obstacle_;
+  interfaces::msg::CircleObstacle obstacle_;
 
   KalmanFilter kf_x_;
   KalmanFilter kf_y_;

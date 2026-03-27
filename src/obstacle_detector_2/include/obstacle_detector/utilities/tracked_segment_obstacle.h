@@ -35,9 +35,9 @@
 
 #pragma once
 
-#include "amr_interfaces/msg/obstacles.hpp"
-#include "amr_interfaces/msg/circle_obstacle.hpp"
-#include "amr_interfaces/msg/segment_obstacle.hpp"
+#include "interfaces/msg/obstacles.hpp"
+#include "interfaces/msg/circle_obstacle.hpp"
+#include "interfaces/msg/segment_obstacle.hpp"
 
 #include "obstacle_detector/utilities/tracked_obstacle.h"
 #include "obstacle_detector/utilities/kalman.h"
@@ -47,7 +47,7 @@ namespace obstacle_detector
 
 class TrackedSegmentObstacle {
 public:
-  TrackedSegmentObstacle(const amr_interfaces::msg::SegmentObstacle& obstacle) : obstacle_(obstacle), kf_x1_(0, 1, 2), kf_y1_(0, 1, 2), kf_x2_(0, 1, 2), kf_y2_(0, 1, 2) {
+  TrackedSegmentObstacle(const interfaces::msg::SegmentObstacle& obstacle) : obstacle_(obstacle), kf_x1_(0, 1, 2), kf_y1_(0, 1, 2), kf_x2_(0, 1, 2), kf_y2_(0, 1, 2) {
     fade_counter_ = s_fade_counter_size_;
     setNewUid();
     initKF();
@@ -72,7 +72,7 @@ public:
     fade_counter_--;
   }
 
-  void correctState(const amr_interfaces::msg::SegmentObstacle& new_obstacle) {
+  void correctState(const interfaces::msg::SegmentObstacle& new_obstacle) {
     kf_x1_.y(0) = new_obstacle.first_point.x;
     kf_y1_.y(0) = new_obstacle.first_point.y;
     kf_x2_.y(0) = new_obstacle.last_point.x;
@@ -136,7 +136,7 @@ public:
 
   void setNewUid() { obstacle_.uid = uid_next_++; }
   bool hasFaded() const { return ((fade_counter_ <= 0) ? true : false); }
-  const amr_interfaces::msg::SegmentObstacle& getObstacle() const { return obstacle_; }
+  const interfaces::msg::SegmentObstacle& getObstacle() const { return obstacle_; }
   const KalmanFilter& getKFx1() const { return kf_x1_; }
   const KalmanFilter& getKFy1() const { return kf_y1_; }
   const KalmanFilter& getKFx2() const { return kf_x2_; }
@@ -190,7 +190,7 @@ private:
     kf_y2_.q_est(1) = obstacle_.last_velocity.y;
   }
 
-  amr_interfaces::msg::SegmentObstacle obstacle_;
+  interfaces::msg::SegmentObstacle obstacle_;
 
   KalmanFilter kf_x1_;
   KalmanFilter kf_y1_;
