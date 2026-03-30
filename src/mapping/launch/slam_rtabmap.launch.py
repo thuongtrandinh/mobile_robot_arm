@@ -99,7 +99,7 @@ def generate_launch_description():
             "publish_svo_clock": "false",
         }.items(),
         condition=IfCondition(PythonExpression([
-            "'", use_sim_time, "' == 'false' and '", start_hardware, "' == 'true' and '", use_zed, "' == 'true'"
+            "'", use_sim_time, "' == 'false' and '", start_hardware, "' == 'true'"
         ])),
     )
 
@@ -112,7 +112,7 @@ def generate_launch_description():
             "frame_id": "laser",
         }.items(),
         condition=IfCondition(PythonExpression([
-            "'", use_sim_time, "' == 'false' and '", start_hardware, "' == 'true' and '", use_lidar, "' == 'true'"
+            "'", use_sim_time, "' == 'false' and '", start_hardware, "' == 'true'"
         ])),
     )
 
