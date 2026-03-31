@@ -37,7 +37,7 @@ def generate_launch_description():
     # Pipeline: [IMU + Encoder] → EKF → /odometry/filtered → SLAM Toolbox
     
     ekf_config_file = os.path.join(
-        get_package_share_directory("agv_localization"),
+        get_package_share_directory("localization"),
         "config",
         "ekf.yaml"
     )
