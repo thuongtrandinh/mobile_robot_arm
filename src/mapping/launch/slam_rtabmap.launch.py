@@ -2,9 +2,8 @@ import os
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
-from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration, PythonExpression
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
 
@@ -12,8 +11,6 @@ from ament_index_python.packages import get_package_share_directory
 def generate_launch_description():
     localization_dir = get_package_share_directory("localization")
     mapping_dir = get_package_share_directory("mapping")
-    zed2_dir = get_package_share_directory("zed2")
-    lidar_dir = get_package_share_directory("lidar")
     rtabmap_launch_dir = get_package_share_directory("rtabmap_launch")
 
     use_sim_time = LaunchConfiguration("use_sim_time")
@@ -22,17 +19,13 @@ def generate_launch_description():
     namespace = LaunchConfiguration("namespace")
     rtabmap_args = LaunchConfiguration("rtabmap_args")
     use_zed = LaunchConfiguration("use_zed")
-    use_lidar = LaunchConfiguration("use_lidar")
-    start_hardware = LaunchConfiguration("start_hardware")
     rgb_topic = LaunchConfiguration("rgb_topic")
     depth_topic = LaunchConfiguration("depth_topic")
     camera_info_topic = LaunchConfiguration("camera_info_topic")
 
-    ekf_config = os.path.join(mapping_dir, "config", "ekf_encoder_zed_vio.yaml")
-
     use_sim_time_arg = DeclareLaunchArgument(
         "use_sim_time",
-        default_value="true",
+        default_value="false",
         description="Use simulation clock",
     )
     cfg_arg = DeclareLaunchArgument(
@@ -60,16 +53,6 @@ def generate_launch_description():
         default_value="true",
         description="Enable ZED2 RGBD input for RTAB-Map (requires matching camera topics)",
     )
-    use_lidar_arg = DeclareLaunchArgument(
-        "use_lidar",
-        default_value="true",
-        description="Enable LiDAR input for RTAB-Map",
-    )
-    start_hardware_arg = DeclareLaunchArgument(
-        "start_hardware",
-        default_value="true",
-        description="If use_sim_time=false and start_hardware=true, launch ZED2 and LiDAR drivers automatically",
-    )
     rgb_topic_arg = DeclareLaunchArgument(
         "rgb_topic",
         default_value="/zed2/zed_node/rgb/color/rect/image",
@@ -86,90 +69,16 @@ def generate_launch_description():
         description="Camera info topic used when use_zed=true",
     )
 
-    zed2_hardware = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(zed2_dir, "launch", "zed2.launch.py")
-        ),
-        launch_arguments={
-            "namespace": "",
-            "camera_name": "zed2",
-            "node_name": "zed_node",
-            "use_sim_time": "false",
-            "sim_mode": "false",
-            "publish_svo_clock": "false",
-        }.items(),
-        condition=IfCondition(PythonExpression([
-            "'", use_sim_time, "' == 'false' and '", start_hardware, "' == 'true'"
-        ])),
-    )
-
-    lidar_hardware = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(lidar_dir, "launch", "a2m8.launch.py")
-        ),
-        launch_arguments={
-            "use_sim_time": "false",
-            "frame_id": "laser",
-        }.items(),
-        condition=IfCondition(PythonExpression([
-            "'", use_sim_time, "' == 'false' and '", start_hardware, "' == 'true'"
-        ])),
-    )
-
-    # Disabled old EKF pipeline (IMU + encoder only), kept here for reference.
     ekf_filter_node = Node(
         package="robot_localization",
         executable="ekf_node",
         name="ekf_filter_node",
         output="screen",
         parameters=[
-            os.path.join(localization_dir, "config", "ekf.yaml"),
+            os.path.join(localization_dir, "config", "ekf_zed2.yaml"),
             {"use_sim_time": use_sim_time},
         ],
     )
-
-    # zed2_rgbd_odometry = Node(
-    #     package="rtabmap_odom",
-    #     executable="rgbd_odometry",
-    #     name="zed2_rgbd_odometry",
-    #     output="screen",
-    #     condition=IfCondition(use_zed),
-    #     parameters=[
-    #         {
-    #             "use_sim_time": use_sim_time,
-    #             "frame_id": "base_footprint",
-    #             "odom_frame_id": "zed2_odom",
-    #             "publish_tf": False,
-    #             "publish_null_when_lost": False, # Thêm dòng này
-    #             "wait_for_transform": 0.2,
-    #             "approx_sync": True,
-    #             "topic_queue_size": 30,
-    #             "sync_queue_size": 30,
-    #             "qos": 2,
-    #             "qos_camera_info": 2,
-    #             "qos_imu": 2,
-    #             "Reg/Force3DoF": "true",
-    #         }
-    #     ],
-    #     remappings=[
-    #         ("rgb/image", rgb_topic),
-    #         ("depth/image", depth_topic),
-    #         ("rgb/camera_info", camera_info_topic),
-    #         ("imu", "/imu"),
-    #         ("odom", "/zed2/odom_vio"),
-    #     ],
-    # )
-
-    # ekf_filter_node = Node(
-    #     package="robot_localization",
-    #     executable="ekf_node",
-    #     name="ekf_filter_node",
-    #     output="screen",
-    #     parameters=[
-    #         ekf_config,
-    #         {"use_sim_time": use_sim_time},
-    #     ],
-    # )
 
     rtabmap_slam = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -220,14 +129,9 @@ def generate_launch_description():
             namespace_arg,
             rtabmap_args_arg,
             use_zed_arg,
-            use_lidar_arg,
-            start_hardware_arg,
             rgb_topic_arg,
             depth_topic_arg,
             camera_info_topic_arg,
-            zed2_hardware,
-            lidar_hardware,
-            # zed2_rgbd_odometry,
             ekf_filter_node,
             rtabmap_slam,
         ]
