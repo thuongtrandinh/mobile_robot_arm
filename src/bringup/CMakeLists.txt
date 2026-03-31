@@ -8,14 +8,23 @@ endif()
 # find dependencies
 find_package(ament_cmake REQUIRED)
 
+add_executable(joint_state_converter src/joint_state_converter.cpp)
+
+ament_target_dependencies(joint_state_converter
+  rclcpp
+  sensor_msgs
+  std_msgs
+)
+
 install(
-  DIRECTORY launch
+  DIRECTORY launch src
   DESTINATION share/${PROJECT_NAME}
 )
 
 # uncomment the following section in order to fill in
 # further dependencies manually.
 # find_package(<dependency> REQUIRED)
+
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
