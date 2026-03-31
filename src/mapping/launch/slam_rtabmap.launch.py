@@ -12,7 +12,7 @@ from ament_index_python.packages import get_package_share_directory
 def generate_launch_description():
     localization_dir = get_package_share_directory("localization")
     mapping_dir = get_package_share_directory("mapping")
-    zed2_dir = get_package_share_directory("zed2")
+    zed2_dir = get_package_share_directory("zed_wrapper")
     lidar_dir = get_package_share_directory("lidar")
     rtabmap_launch_dir = get_package_share_directory("rtabmap_launch")
 
