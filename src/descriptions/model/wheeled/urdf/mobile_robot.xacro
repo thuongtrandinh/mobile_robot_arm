@@ -400,7 +400,7 @@
         </inertial>
     </link>
 
-	<link name="zed2_camera_link">
+	<link name="zed_camera_link">
 		<visual>
 			<origin xyz="0 0 0" rpy="0 0 0"/>
 			<geometry>
@@ -423,20 +423,20 @@
 
 	<joint name="zed2_joint" type="fixed">
 		<parent link="base_link"/>
-		<child link="zed2_camera_link"/>
+		<child link="zed_camera_link"/>
 		<origin xyz="0.15 0.0 0.35"/>
 	</joint>
 
 	<link name="zed2_left_camera_frame"/>
 	<joint name="zed2_left_camera_joint" type="fixed">
-		<parent link="zed2_camera_link"/>
+		<parent link="zed_camera_link"/>
 		<child link="zed2_left_camera_frame"/>
 		<origin xyz="0 -0.07325 0"/>
 	</joint>
 
 	<link name="zed2_right_camera_frame"/>
 	<joint name="zed2_right_camera_joint" type="fixed">
-		<parent link="zed2_camera_link"/>
+		<parent link="zed_camera_link"/>
 		<child link="zed2_right_camera_frame"/>
 		<origin xyz="0 0.07325 0"/>
 	</joint>
