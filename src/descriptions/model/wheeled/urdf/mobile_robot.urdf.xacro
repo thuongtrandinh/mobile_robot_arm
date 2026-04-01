@@ -1,6 +1,14 @@
 <?xml version="1.0"?>
-<robot name="myrobotagv" xmlns:xacro="http://www.ros.org/wiki/xacro">
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="mobile_robot">
+
+    <xacro:arg name="is_sim" default="false"/>
+
+    <xacro:include filename="mobile_robot.xacro" />
     
-    <xacro:include filename="$(find descriptions)/model/wheeled/urdf/mobile_robot.xacro"/>
-    <xacro:include filename="$(find descriptions)/model/wheeled/urdf/gazebo.xacro"/>
+    <xacro:include filename="ros2_control.xacro" />
+
+    <xacro:if value="$(arg is_sim)">
+        <xacro:include filename="gazebo.xacro" />
+    </xacro:if>
+
 </robot>

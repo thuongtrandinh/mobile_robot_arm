@@ -24,7 +24,6 @@ def launch_setup(context, *args, **kwargs):
     launch_rviz = launch_rviz_str.lower() == 'true'
     headless = context.launch_configurations.get('headless', 'false').lower() == 'true'
     spawn_controllers = context.launch_configurations.get('spawn_controllers', 'true').lower() == 'true'
-    enable_human_animator = context.launch_configurations.get('enable_human_animator', 'true').lower() == 'true'
     enable_obstacle_extractor = context.launch_configurations.get('enable_obstacle_extractor', 'true').lower() == 'true'
 
     pkg_path = get_package_share_directory(package_name)
@@ -197,14 +196,6 @@ def launch_setup(context, *args, **kwargs):
         ]
     )
 
-    human_animator_node = Node(
-        package='descriptions',
-        executable='human_animator.py',
-        name='human_animator',
-        output='screen',
-        parameters=[{'use_sim_time': use_sim_time}]
-    )
-
     # Build launch list
     nodes_to_launch = [
         gazebo_launch,
@@ -236,8 +227,6 @@ def launch_setup(context, *args, **kwargs):
             )
         )
 
-    if enable_human_animator:
-        nodes_to_launch.append(human_animator_node)
 
     if launch_rviz:
         nodes_to_launch.append(rviz_node)
@@ -254,7 +243,6 @@ def generate_launch_description():
         DeclareLaunchArgument('launch_rviz', default_value='true', description='Launch RViz2'),
         DeclareLaunchArgument('headless', default_value='false', description='Run Gazebo in server-only mode'),
         DeclareLaunchArgument('spawn_controllers', default_value='true', description='Spawn ros2_control controllers'),
-        DeclareLaunchArgument('enable_human_animator', default_value='true', description='Enable human walking animator node'),
         DeclareLaunchArgument('enable_obstacle_extractor', default_value='true', description='Enable obstacle extractor node'),
         DeclareLaunchArgument('world', default_value='room_20x20.world',
                               description='World file to load',

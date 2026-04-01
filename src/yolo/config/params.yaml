@@ -5,7 +5,7 @@ detection_conf: 0.5          # YOLO confidence threshold
 person_radius: 0.3           # Estimated person radius (meters)
 
 # Model paths (absolute or relative to package share dir)
-hand_model_path: 'handsign_exp14_best.pt'
+hand_model_path: 'handsign.pt'
 person_model_path: 'yolov8n.pt'
 
 # Visualization
