@@ -1,0 +1,10 @@
+interfaces/JointState ob
+interfaces/Point sub_goal
+
+---
+bool success
+float64 al
+float64 ar
+interfaces/Point revised_goal
+interfaces/Point[] astar_path
+interfaces/ControlVar[] control_vars

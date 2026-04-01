@@ -1,0 +1,25 @@
+# ZED2 Hand Sign Detector Configuration
+
+# Detection parameters
+detection_conf: 0.5          # YOLO confidence threshold
+person_radius: 0.3           # Estimated person radius (meters)
+
+# Model paths (absolute or relative to package share dir)
+hand_model_path: 'handsign.pt'
+person_model_path: 'yolov8n.pt'
+
+# Visualization
+enable_visualization: false  # Show opencv window (requires display)
+
+# Tracking
+tracker:
+  track_thresh: 0.5
+  track_buffer: 30
+  match_thresh: 0.8
+
+# Velocity filtering
+velocity_filter:
+  alpha: 0.3                 # Smoothing factor (0.1-0.5 recommended)
+  
+# Publishing
+publish_rate: 30             # Hz
