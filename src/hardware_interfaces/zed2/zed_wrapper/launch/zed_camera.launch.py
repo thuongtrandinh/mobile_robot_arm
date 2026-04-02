@@ -137,7 +137,7 @@ def launch_setup(context, *args, **kwargs):
             }
 
     if (camera_name_val == ''):
-        camera_name_val = 'zed'
+        camera_name_val = 'zed2'
 
     if (camera_model_val == 'virtual'):
         # Virtual Stereo Camera setup
