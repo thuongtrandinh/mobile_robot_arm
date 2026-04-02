@@ -55,17 +55,17 @@ def generate_launch_description():
     )
     rgb_topic_arg = DeclareLaunchArgument(
         "rgb_topic",
-        default_value="/zed2/zed_node/rgb/color/rect/image",
+        default_value="/zed/zed_node/rgb/color/rect/image",
         description="RGB image topic used when use_zed=true",
     )
     depth_topic_arg = DeclareLaunchArgument(
         "depth_topic",
-        default_value="/zed2/zed_node/depth/depth_registered",
+        default_value="/zed/zed_node/depth/depth_registered",
         description="Depth image topic used when use_zed=true",
     )
     camera_info_topic_arg = DeclareLaunchArgument(
         "camera_info_topic",
-        default_value="/zed2/zed_node/rgb/color/rect/camera_info",
+        default_value="/zed/zed_node/rgb/color/rect/camera_info",
         description="Camera info topic used when use_zed=true",
     )
 
