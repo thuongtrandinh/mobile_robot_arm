@@ -41,7 +41,7 @@
             brightness: 4               # [DYNAMIC] Mặc định
             contrast: 6                 # [DYNAMIC] Tăng từ 4 → 6 để làm rõ nếp gấp ngón tay
             hue: 0                      # [DYNAMIC] Mặc định
-            saturation: 5               # [DYNAMIC] Tăng từ 4 → 5 để phân biệt màu da rõ hơn
+            saturation: 0               # [DYNAMIC] Tăng từ 4 → 5 để phân biệt màu da rõ hơn
             sharpness: 5                # [DYNAMIC] Tăng từ 4 → 5 để làm sắc nét viền tay
             gamma: 8                    # [DYNAMIC] Mặc định
             auto_exposure_gain: false   # [DYNAMIC] TẮT tự động bù sáng (fix washed-out)
@@ -85,7 +85,7 @@
             publish_roi_mask: false # Advertise the ROI mask image topic that is published only if a node subscribes to it
 
         depth:
-            depth_mode: 'NEURAL' # Optimized for performance: 'NEURAL_LIGHT' (fast), 'NEURAL' (accurate)
+            depth_mode: 'PERFORMANCE' # Optimized for performance: 'NEURAL_LIGHT' (fast), 'NEURAL' (accurate)
             depth_stabilization: 0 # Forces positional tracking to start if major thanF 0 - Range: [0,100]
             openni_depth_mode: false # 'false': 32bit float [meters], 'true': 16bit unsigned int [millimeters]
             point_cloud_freq: 2.0 # [DYNAMIC] Frequency of the pointcloud publishing. This value must be equal or less than the camera framerate.

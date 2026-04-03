@@ -446,14 +446,13 @@ class TrackingNode(Node):
                     px1, py1, px2, py2 = p_det['box']
                     pw, ph = px2 - px1, py2 - py1
                     
-                    # Nới rộng vùng cắt ra 40% chiều ngang để hứng trọn sải tay dài
-                    exp_x, exp_y = int(pw * 0.40), int(ph * 0.25)
+                    # Nới rộng vùng cắt ra 10% chiều ngang để hứng trọn sải tay dài
+                    exp_x, exp_y = int(pw * 0.10), int(ph * 0.05)
                     crop_x1, crop_y1 = max(0, int(px1) - exp_x), max(0, int(py1) - exp_y)
                     crop_x2, crop_y2 = min(w_img, int(px2) + exp_x), min(h_img, int(py2) + exp_y)
                     
                     crop_frame = frame[crop_y1:crop_y2, crop_x1:crop_x2]
                     if crop_frame.size > 0:
-                        crop_frame = cv2.convertScaleAbs(crop_frame, alpha=1.3, beta=-20)
                         hand_crops.append(crop_frame)
                         crop_infos.append((crop_x1, crop_y1))
                 
@@ -477,8 +476,8 @@ class TrackingNode(Node):
                                     x1, y1, x2, y2, conf, cls_id = box.cpu().numpy()
                                     cls_id_int = int(cls_id)
                                     
-                                    # Yêu cầu của bạn: Nâng độ tin cậy lên 0.50 cho START và 0.55 cho STOP
-                                    threshold = 0.50 if cls_id_int == 0 else 0.55
+                                    # Yêu cầu của bạn: Nâng độ tin cậy lên 0.45 cho START và 0.30 cho STOP
+                                    threshold = 0.45 if cls_id_int == 0 else 0.30
                                     if conf < threshold:
                                         continue
                                         
