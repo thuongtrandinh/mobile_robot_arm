@@ -24,7 +24,6 @@ def launch_setup(context, *args, **kwargs):
     launch_rviz = launch_rviz_str.lower() == 'true'
     headless = context.launch_configurations.get('headless', 'false').lower() == 'true'
     spawn_controllers = context.launch_configurations.get('spawn_controllers', 'true').lower() == 'true'
-    enable_obstacle_extractor = context.launch_configurations.get('enable_obstacle_extractor', 'true').lower() == 'true'
 
     pkg_path = get_package_share_directory(package_name)
     xacro_file = os.path.join(pkg_path, 'model', 'wheeled', 'urdf', 'mobile_robot.urdf.xacro')
@@ -130,56 +129,6 @@ def launch_setup(context, *args, **kwargs):
         output='screen'
     )
 
-    obstacle_extractor_node = Node(
-        package='obstacle_detector',
-        executable='obstacle_extractor_node',
-        name='obstacle_extractor',
-        output='screen',
-        parameters=[{
-            'use_sim_time': use_sim_time,
-            'active': True,
-            'use_scan': True,
-            'use_pcl': False,
-            'use_pcl2': False,
-            'transform_coordinates': False,
-            'frame_id': 'laser',
-        }]
-    )
-
-    obstacle_tracker_node = Node(
-        package='obstacle_detector',
-        executable='obstacle_tracker_node',
-        name='obstacle_tracker',
-        output='screen',
-        remappings=[
-            ('raw_obstacles', '/raw_obstacles'),
-            ('tracked_obstacles', '/obstacles'),
-            ('tracked_obstacles_visualization', '/obstacles_visualization'),
-        ],
-        parameters=[{
-            'use_sim_time': use_sim_time,
-            'active': True,
-            'frame_id': 'laser',
-            'loop_rate': 100.0,
-            'tracking_duration': 2.0,
-        }]
-    )
-
-    obstacle_publisher_node = Node(
-        package='obstacle_detector',
-        executable='obstacle_publisher_node',
-        name='obstacle_publisher',
-        output='screen',
-        remappings=[
-            ('obstacles', '/virtual_obstacles'),
-        ],
-        parameters=[{
-            'use_sim_time': use_sim_time,
-            'active': True,
-            'frame_id': 'laser',
-        }]
-    )
-
     # Gazebo launch
     gz_args = ('-r -s -v 4 ' if headless else '-r -v 4 ') + world_file
     gazebo_launch = IncludeLaunchDescription(
@@ -203,11 +152,6 @@ def launch_setup(context, *args, **kwargs):
         robot_state_publisher,
         spawn_entity,
     ]
-
-    if enable_obstacle_extractor:
-        nodes_to_launch.append(obstacle_extractor_node)
-        nodes_to_launch.append(obstacle_tracker_node)
-        nodes_to_launch.append(obstacle_publisher_node)
 
     if spawn_controllers:
         nodes_to_launch.append(
@@ -243,7 +187,6 @@ def generate_launch_description():
         DeclareLaunchArgument('launch_rviz', default_value='true', description='Launch RViz2'),
         DeclareLaunchArgument('headless', default_value='false', description='Run Gazebo in server-only mode'),
         DeclareLaunchArgument('spawn_controllers', default_value='true', description='Spawn ros2_control controllers'),
-        DeclareLaunchArgument('enable_obstacle_extractor', default_value='true', description='Enable obstacle extractor node'),
         DeclareLaunchArgument('world', default_value='room_20x20.world',
                               description='World file to load',
                               choices=['amr_simulation.world', 'empty.world', 'room_20x20.world', 'small_house.world', 'small_warehouse.world']),
