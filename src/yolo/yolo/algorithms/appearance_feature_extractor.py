@@ -135,17 +135,16 @@ class FeatureExtractor:
 class FeatureExtractorLightweight:
     """
     Ultra-lightweight feature extractor using color histograms
-    No deep learning required - CPU only
-    Default choice for real-time performance
+    Optimized for real-time performance with minimal CPU overhead
     """
     
-    def __init__(self, n_bins: int = 16):
+    def __init__(self, n_bins: int = 32):
         """
         Args:
-            n_bins: Histogram bins per channel (default 16 for RGB = 48-D)
+            n_bins: Histogram bins (32 = balanced speed/accuracy)
         """
         self.n_bins = n_bins
-        self.feature_dim = n_bins * 3  # RGB histogram
+        self.feature_dim = n_bins * 3  # RGB: 96-D feature vector
     
     def extract(self, frame: np.ndarray, bboxes: np.ndarray) -> np.ndarray:
         """

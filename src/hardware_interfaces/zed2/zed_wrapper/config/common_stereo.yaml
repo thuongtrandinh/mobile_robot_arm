@@ -25,10 +25,10 @@
             camera_flip: false
             self_calib: true # Enable the self-calibration process at camera opening. See https://www.stereolabs.com/docs/api/structsl_1_1InitParameters.html#affeaa06cfc1d849e311e484ceb8edcc5
             serial_number: 0 # overwritten by launch file
-            pub_resolution: 'CUSTOM' # The resolution used for image and depth map publishing. 'NATIVE' to use the same `general.grab_resolution` - `CUSTOM` to apply the `general.pub_downscale_factor` downscale factory to reduce bandwidth in transmission
-            pub_downscale_factor: 2.0 # rescale factor used to rescale image before publishing when 'pub_resolution' is 'CUSTOM'
+            pub_resolution: 'NATIVE' # Publish image and depth map at native grab resolution for gesture detection quality
+            pub_downscale_factor: 1.0 # Kept at native scale when `pub_resolution` is `NATIVE`
             grab_compute_capping_fps: 0.0 # Define a computation upper limit to the grab frequency. This can be useful to get a known constant fixed rate or limit the computation load while keeping a short exposure time by setting a high camera capture framerate. If set to 0, the grab compute capping will be disabled and the ZED SDK will process data at the grab rate.
-            pub_frame_rate: 30.0 # [DYNAMIC] Frequency of publishing of visual images and depth data (not the Point Cloud, see 'depth.point_cloud_freq'). This value must be equal or less than the camera framerate.
+            pub_frame_rate: 30.0 # [DYNAMIC] Frequency of publishing of visual images and depth data (not the Point Cloud, see 'depth.point_cloud_freq'). Synced with ZED2 grab_frame_rate=30 for optimal latency
             enable_image_validity_check: 1 # [SDK5 required] Sets the image validity check. If set to 1, the SDK will check if the frames are valid before processing.
             gpu_id: -1
             optional_opencv_calibration_file: '' # Optional path where the ZED SDK can find a file containing the calibration information of the camera computed by OpenCV. Read the ZED SDK documentation for more information: https://www.stereolabs.com/docs/api/structsl_1_1InitParameters.html#a9eab2753374ef3baec1d31960859ba19
@@ -38,15 +38,18 @@
             # 'zedx.yaml', 'zedxmini.yaml', 'virtual.yaml' files
 
         video:
-            saturation: 4 # [DYNAMIC]
-            sharpness: 4 # [DYNAMIC]
-            gamma: 8 # [DYNAMIC]
-            auto_exposure_gain: true # [DYNAMIC]
-            exposure: 80 # [DYNAMIC]
-            gain: 80 # [DYNAMIC]
-            auto_whitebalance: true # [DYNAMIC]
+            brightness: 4               # [DYNAMIC] Mặc định
+            contrast: 6                 # [DYNAMIC] Tăng từ 4 → 6 để làm rõ nếp gấp ngón tay
+            hue: 0                      # [DYNAMIC] Mặc định
+            saturation: 5               # [DYNAMIC] Tăng từ 4 → 5 để phân biệt màu da rõ hơn
+            sharpness: 5                # [DYNAMIC] Tăng từ 4 → 5 để làm sắc nét viền tay
+            gamma: 8                    # [DYNAMIC] Mặc định
+            auto_exposure_gain: false   # [DYNAMIC] TẮT tự động bù sáng (fix washed-out)
+            exposure: 60                # [DYNAMIC] Giảm từ 80 → 60 để tay không bị chói trắng
+            gain: 50                    # [DYNAMIC] Giảm từ 80 → 50 để giảm nhiễu hạt (noise) trong phòng
+            auto_whitebalance: true     # [DYNAMIC] Giữ tự động cân bằng trắng
             whitebalance_temperature: 42 # [DYNAMIC] - [28,65] x100 - works only if `auto_whitebalance` is false
-            enable_24bit_output: false # [SDK >= 5.1] Enable BGR 24-bit output for lower bandwidth usage. If false, BGRA 32-bit output is used (old way before SDK v5.1)
+            enable_24bit_output: true # [SDK >= 5.1] Enable BGR 24-bit output for lower bandwidth usage. YOLO-optimized: publish BGR directly for tracking_node
             publish_rgb: true # Advertise the RGB image topics that are published only if a node subscribes to them
             publish_left_right: false # Advertise the left and right image topics that are published only if a node subscribes to them
             publish_raw: false # Advertise the raw image topics that are published only if a node subscribes to them
@@ -58,7 +61,7 @@
         sensors:
             publish_imu_tf: false # [overwritten by launch file options] enable/disable the IMU TF broadcasting
             sensors_image_sync: false # Synchronize Sensors messages with latest published video/depth message
-            sensors_pub_rate: 100. # frequency of publishing of sensors data. MAX: 400. - MIN: grab rate
+            sensors_pub_rate: 200. # frequency of publishing of sensors data. MAX: 400. - MIN: grab rate
             publish_imu: true # Advertise the IMU topic that is published only if a node subscribes to it
             publish_imu_raw: false # Advertise the raw IMU topic that is published only if a node subscribes to it
             publish_cam_imu_transf: false # Advertise the CAMERA-IMU transformation topic that is published only if a node subscribes to it
@@ -76,13 +79,13 @@
             #manual_polygon: '[[0.5,0.25],[0.75,0.5],[0.5,0.75],[0.25,0.5]]' # A polygon defining the ROI where the ZED SDK perform the processing ignoring the rest. Coordinates must be normalized to '1.0' to be resolution independent.
             apply_to_depth: true # Apply ROI to depth processing
             apply_to_positional_tracking: true # Apply ROI to positional tracking processing
-            apply_to_object_detection: true # Apply ROI to object detection processing
-            apply_to_body_tracking: true # Apply ROI to body tracking processing
+            apply_to_object_detection: false # Apply ROI to object detection processing
+            apply_to_body_tracking: false # Apply ROI to body tracking processing
             apply_to_spatial_mapping: true # Apply ROI to spatial mapping processing
             publish_roi_mask: false # Advertise the ROI mask image topic that is published only if a node subscribes to it
 
         depth:
-            depth_mode: 'NEURAL_LIGHT' # Matches the ZED SDK setting: 'NONE', 'NEURAL_LIGHT', 'NEURAL', 'NEURAL_PLUS' - Note: if 'NONE' all the modules that requires depth extraction are disabled by default (Pos. Tracking, Obj. Detection, Mapping, ...)
+            depth_mode: 'NEURAL' # Optimized for performance: 'NEURAL_LIGHT' (fast), 'NEURAL' (accurate)
             depth_stabilization: 0 # Forces positional tracking to start if major thanF 0 - Range: [0,100]
             openni_depth_mode: false # 'false': 32bit float [meters], 'true': 16bit unsigned int [millimeters]
             point_cloud_freq: 2.0 # [DYNAMIC] Frequency of the pointcloud publishing. This value must be equal or less than the camera framerate.
@@ -118,9 +121,9 @@
             set_gravity_as_origin: true # If 'true' align the positional tracking world to imu gravity measurement. Keep the yaw from the user initial pose.
             floor_alignment: false # Enable to automatically calculate camera/floor offset
             initial_base_pose: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0] # Initial position of the `camera_link` frame in the map -> [X, Y, Z, R, P, Y]
-            path_pub_rate: 2.0 # [DYNAMIC] - Camera trajectory publishing frequency
+            path_pub_rate: 20.0 # [DYNAMIC] - Camera trajectory publishing frequency
             path_max_count: -1 # use '-1' for unlimited path size
-            two_d_mode: false # Force navigation on a plane. If true the Z value will be fixed to 'fixed_z_value', roll and pitch to zero
+            two_d_mode: true # Force navigation on a plane. If true the Z value will be fixed to 'fixed_z_value', roll and pitch to zero
             fixed_z_value: 0.0 # Value to be used for Z coordinate if `two_d_mode` is true
             transform_time_offset: 0.0 # The value added to the timestamp of `map->odom` and `odom->camera_link` transform being generated
             reset_pose_with_svo_loop: true # Reset the camera pose the `initial_base_pose` when the SVO loop is enabled and the SVO playback reaches the end of the file.
@@ -154,8 +157,8 @@
             publish_det_plane: false # Advertise the plane detection topics that is published only if a node subscribes to it
 
         object_detection:
-            od_enabled: true # True to enable Object Detection
-            enable_tracking: true # Whether the object detection system includes object tracking capabilities across a sequence of images.
+            od_enabled: false # True to enable Object Detection
+            enable_tracking: false # Whether the object detection system includes object tracking capabilities across a sequence of images.
             detection_model: 'MULTI_CLASS_BOX_FAST' # 'MULTI_CLASS_BOX_FAST', 'MULTI_CLASS_BOX_MEDIUM', 'MULTI_CLASS_BOX_ACCURATE', 'PERSON_HEAD_BOX_FAST', 'PERSON_HEAD_BOX_ACCURATE', 'CUSTOM_YOLOLIKE_BOX_OBJECTS'
             max_range: 20.0 # [m] Upper depth range for detections.The value cannot be greater than 'depth.max_depth'
             filtering_mode: 'NMS3D' # Filtering mode that should be applied to raw detections: 'NONE', 'NMS3D', 'NMS3D_PER_CLASS'
@@ -171,7 +174,7 @@
             max_range: 15.0 # [m] Defines a upper depth range for detections
             body_kp_selection: 'FULL' # 'FULL', 'UPPER_BODY'
             enable_body_fitting: false # Defines if the body fitting will be applied
-            enable_tracking: true # Defines if the object detection will track objects across images flow
+            enable_tracking: false # Defines if the object detection will track objects across images flow
             prediction_timeout_s: 0.5 # During this time [sec], the skeleton will have OK state even if it is not detected. Set this parameter to 0 to disable SDK predictions
             confidence_threshold: 50.0 # [DYNAMIC] - Minimum value of the detection confidence of skeleton key points [0,99]
             minimum_keypoints_threshold: 5 # [DYNAMIC] - Minimum number of skeleton key points to be detected for a valid skeleton

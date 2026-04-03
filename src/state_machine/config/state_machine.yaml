@@ -1,0 +1,15 @@
+robot_state_machine:
+  ros__parameters:
+    # Gesture timing
+    gesture_hold_time: 1.5       # seconds, hold gesture to confirm
+    
+    # Tracking timeouts
+    tracking_timeout: 0.3         # seconds, switch to RE_TRACKING
+    retracking_timeout: 3.0       # seconds, give up tracking
+    
+    # Velocity filtering
+    velocity_filter_alpha: 0.3    # exponential smoothing (0.1-0.5)
+    
+    # ZED2 specific
+    gesture_detection_margin: 150 # pixels, FOV compensation
+    max_tracking_distance: 5.0    # meters, max distance to track

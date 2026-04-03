@@ -1,0 +1,32 @@
+person_detector:
+  camera_image_topic: '/zed/zed_node/rgb/color/rect/image'  # Rectified image (undistorted) for better accuracy
+  person_model_path: 'yolov8n.pt'
+  detection_conf: 0.5
+  imgsz: 640  # YOLO will resize to 640x640 for inference
+  use_cuda: true
+
+person_selector:
+  gesture_selection_range: 0.2
+  tracking_distance_weight: 0.4
+  gesture_proximity_weight: 0.4
+  confidence_weight: 0.2
+  camera_width: 640.0    # VGA resolution width
+  camera_height: 480.0   # VGA resolution height
+
+handsign_detector:
+  camera_image_topic: '/zed/zed_node/rgb/color/rect/image'  # Rectified image (undistorted) for hand detection
+  hand_model_path: 'handsign.pt'
+  detection_conf: 0.35              # Reduced to 0.35 to detect small START gestures (ngón cái)
+  gesture_hold_time: 0.8            # Adjusted to 0.8s for balanced START/STOP detection
+  gesture_detection_margin: 150
+  imgsz: 640  # YOLO will resize to 640x640 for inference
+  use_cuda: true
+  enable_roi_crop: false
+  gesture_y_min_ratio: 0.10         # Covers high hand positions (10%-90% frame)
+  gesture_y_max_ratio: 0.90
+
+state_machine:
+  gesture_hold_time: 1.5
+  tracking_timeout: 0.3
+  retracking_timeout: 3.0
+  velocity_filter_alpha: 0.3
