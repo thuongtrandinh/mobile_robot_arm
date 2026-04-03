@@ -70,9 +70,9 @@ def generate_launch_description():
             "depth": "true",
             "subscribe_rgb": "true",
             "initial_pose": "0 0 0 0 0 0",  # Ép RTAB-Map hiểu robot xuất phát ở gốc tọa độ
-            "rgb_topic": "/zed2/zed_node/rgb/color/rect/image",
-            "depth_topic": "/zed2/zed_node/depth/depth_registered",
-            "camera_info_topic": "/zed2/zed_node/rgb/color/rect/camera_info",
+            "rgb_topic": "/zed/zed_node/rgb/color/rect/image",
+            "depth_topic": "/zed/zed_node/depth/depth_registered",
+            "camera_info_topic": "/zed/zed_node/rgb/color/rect/camera_info",
             "approx_sync": "true",
             "visual_odometry": "false",
             "icp_odometry": "false",

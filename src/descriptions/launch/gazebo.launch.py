@@ -41,8 +41,9 @@ def launch_setup(context, *args, **kwargs):
     print(f"✅ Xacro file: {xacro_file} (exists: {os.path.exists(xacro_file)})")
     print(f"✅ World file: {world_file} (exists: {os.path.exists(world_file)})")
 
-    # Process xacro to URDF
-    robot_description = xacro.process_file(xacro_file, mappings={'sim_mode': 'true'}).toxml()
+    # Process xacro to URDF.
+    # The root xacro expects argument name `is_sim`, not `sim_mode`.
+    robot_description = xacro.process_file(xacro_file, mappings={'is_sim': 'true'}).toxml()
     print(f"✅ URDF rendered: {len(robot_description)} characters")
 
     # RViz config
@@ -96,34 +97,25 @@ def launch_setup(context, *args, **kwargs):
         parameters=[{'use_sim_time': use_sim_time}],
     )
 
-    # Single bridge node for all topics
-    # Tên topic Depth trong Gazebo của bạn có thể khác một chút (tùy vào URDF).
-    # Thường nó sẽ là '/zed2/depth_image' hoặc '/zed2/depth/image_raw'.
-    # Giả sử ở đây Gazebo phát ra là '/zed2/depth_image'
-    
-   # Single bridge node for all topics
+    # Single bridge node for all topics.
+    # GZ camera topics are published by rgbd sensor under /zed/zed_node/left/image_rect_color/*
+    # and remapped here to RTAB-Map expected rgb/depth names.
     bridge = Node(
         package='ros_gz_bridge',
         executable='parameter_bridge',
         arguments=[
             '/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock',
             '/scan@sensor_msgs/msg/LaserScan[gz.msgs.LaserScan',
-            '/imu@sensor_msgs/msg/Imu[gz.msgs.IMU',
-            
-            # 1. Bắt đúng tên topic RGB từ Gazebo
-            '/zed2/left/image@sensor_msgs/msg/Image[gz.msgs.Image',
-            
-            # 2. Bắt đúng tên topic Camera Info từ Gazebo
-            '/zed2/left/camera_info@sensor_msgs/msg/CameraInfo[gz.msgs.CameraInfo',
-            
-            # 3. Bắt đúng tên topic Depth từ Gazebo
-            '/zed2/left/depth_image@sensor_msgs/msg/Image[gz.msgs.Image',
+            '/zed/zed_node/imu/data@sensor_msgs/msg/Imu[gz.msgs.IMU',
+            '/zed/zed_node/left/image_rect_color/image@sensor_msgs/msg/Image[gz.msgs.Image',
+            '/zed/zed_node/left/image_rect_color/camera_info@sensor_msgs/msg/CameraInfo[gz.msgs.CameraInfo',
+            '/zed/zed_node/left/image_rect_color/depth_image@sensor_msgs/msg/Image[gz.msgs.Image',
         ],
         remappings=[
-            # Đổi nhãn (Remap) sang đúng tên mà RTAB-Map đang há miệng chờ
-            ('/zed2/left/image', '/zed2/zed_node/rgb/color/rect/image'),
-            ('/zed2/left/camera_info', '/zed2/zed_node/rgb/color/rect/camera_info'),
-            ('/zed2/left/depth_image', '/zed2/zed_node/depth/depth_registered'),
+            ('/zed/zed_node/imu/data', '/imu'),
+            ('/zed/zed_node/left/image_rect_color/image', '/zed/zed_node/rgb/color/rect/image'),
+            ('/zed/zed_node/left/image_rect_color/camera_info', '/zed/zed_node/rgb/color/rect/camera_info'),
+            ('/zed/zed_node/left/image_rect_color/depth_image', '/zed/zed_node/depth/depth_registered'),
         ],
         parameters=[{'use_sim_time': use_sim_time}],
         output='screen'

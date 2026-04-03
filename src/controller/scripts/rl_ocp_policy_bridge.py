@@ -8,7 +8,7 @@ import sys
 from typing import List, Optional, Tuple
 
 import rclpy
-from interfaces.msg import ObstacleState, WallState
+from interfaces.msg import ObstacleState, WallState, PolyState, Point
 from interfaces.srv import OcpLocalPlann
 from geometry_msgs.msg import PoseStamped, TwistStamped
 from nav_msgs.msg import OccupancyGrid, Odometry
@@ -233,6 +233,37 @@ class RlOcpPolicyBridge(Node):
 
         return walls
 
+    def _build_poly_msgs(self) -> List[PolyState]:
+        """Tạo polygon từ map bounds hoặc config."""
+        # TODO: Load từ YAML config hoặc contour tracing từ occupancy grid
+        # Hiện tại: tạo hình vuông giữa map bounds (ví dụ minh họa)
+        if self.map_bounds is None:
+            if self.current_pose is None:
+                return []
+            else:
+                px, py, _ = self.current_pose
+                xmin, xmax, ymin, ymax = px - 5.0, px + 5.0, py - 5.0, py + 5.0
+        else:
+            xmin, xmax, ymin, ymax = self.map_bounds
+        
+        # Tạo 1 polygon vuông ở giữa (vùng "tử địa" ví dụ)
+        poly = PolyState()
+        poly.is_clockwise = True
+        
+        # 4 đỉnh của hình vuông
+        cx = (xmin + xmax) / 2.0
+        cy = (ymin + ymax) / 2.0
+        margin = 1.0  # Khoảng cách từ tâm tới đỉnh
+        
+        poly.vertices = [
+            Point(x=cx - margin, y=cy - margin),
+            Point(x=cx + margin, y=cy - margin),
+            Point(x=cx + margin, y=cy + margin),
+            Point(x=cx - margin, y=cy + margin),
+        ]
+        
+        return [poly]
+
     def _scan_to_obstacle_tuples(self) -> List[Tuple[float, float, float]]:
         obstacles = []
         if self.latest_scan is None or self.current_pose is None:
@@ -370,7 +401,8 @@ class RlOcpPolicyBridge(Node):
         req.ob.robot_state.radius = float(self.axle_half_width)
 
         req.ob.obstacle_states = self._scan_to_obstacle_msgs(px, py)
-        req.ob.walls = []
+        req.ob.walls = self._build_wall_msgs()
+        req.ob.poly_states = self._build_poly_msgs()
 
         req.sub_goal.x = float(sub_goal_local_x)
         req.sub_goal.y = float(sub_goal_local_y)
