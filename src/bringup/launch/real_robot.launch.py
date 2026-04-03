@@ -80,7 +80,7 @@ def generate_launch_description():
     return LaunchDescription([
         # Khởi động ngay lập tức
         robot_state_publisher_node,
-        micro_ros_agent_node,
+        # micro_ros_agent_node,
         controller_manager,
         
         # Đợi tuần tự để ổn định hệ thống
@@ -88,6 +88,6 @@ def generate_launch_description():
         TimerAction(period=5.0, actions=[diff_drive_spawner]),
         
         # Khởi động cảm biến sau cùng
-        TimerAction(period=5.0, actions=[lidar_launch]),
+        # TimerAction(period=5.0, actions=[lidar_launch]),
         TimerAction(period=10.0, actions=[zed2_launch])
     ])
