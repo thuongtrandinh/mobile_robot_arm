@@ -13,7 +13,7 @@ import numpy as np
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from std_msgs.msg import String
-from interfaces.msg import HumanState, Obstacles, Obstacles
+from interfaces.msg import HumanState
 
 from .state_manager import RobotStateMachine, StateConfig, TrackingTarget, RobotState
 
@@ -71,11 +71,7 @@ class RobotStateMachineNode(Node):
         self.predicted_target_pub = self.create_publisher(HumanState, '/tracking/predicted_target', qos_best)
         
         # ===== 6. SUBSCRIBERS =====
-        # Subscribe to selected person from person_selector_node
         self.create_subscription(HumanState, '/tracking/main_person', self._person_callback, qos_best)
-        # Subscribe to dynamic obstacles (other persons) for avoidance
-        self.create_subscription(Obstacles, '/tracking/dynamic_obstacles', self._obstacles_callback, qos_best)
-        # Subscribe to gesture commands from handsign_detector_node
         self.create_subscription(String, '/yolo/gesture_command', self._gesture_callback, 10)
         
         # ===== 7. CONTROL LOOP TIMER (20 Hz) =====
@@ -84,7 +80,6 @@ class RobotStateMachineNode(Node):
         # ===== 8. INTERNAL STATE =====
         self.last_detection_time = time.time()
         self.last_person_state = None
-        self.dynamic_obstacles = None  # Current obstacles for avoidance
         
         self.get_logger().info(
             f'✅ State Machine Node initialized (Decision Layer)\n'
@@ -126,12 +121,7 @@ class RobotStateMachineNode(Node):
         
         self.state_machine.update_tracked_target(target, current_time)
     
-    def _obstacles_callback(self, msg: Obstacles):
-        """Handle dynamic obstacles (other persons nearby for avoidance)"""
-        self.dynamic_obstacles = msg
-        if msg.circles:
-            self.get_logger().debug(f'⚠️ Dynamic obstacles detected: {len(msg.circles)} persons')
-    
+
     def _gesture_callback(self, msg: String):
         """
         Handle gesture detection from YOLO
