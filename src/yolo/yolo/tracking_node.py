@@ -804,21 +804,32 @@ class TrackingNode(Node):
                 else:
                     px_3d = float(depth_val)
                     py_3d = float(-(cx - cx_cam) * depth_val / fx)
+                    
+                    # [FIX ERROR 1]: Calculate velocity from position history to feed into EKF
+                    pos_3d = np.array([px_3d, py_3d])
+                    self.position_history[self.main_target_id].append(pos_3d)
+                    
+                    if len(self.position_history[self.main_target_id]) >= 2:
+                        prev_pos = self.position_history[self.main_target_id][-2]
+                        dt = 1/30.0  # Simulated dt at 30 FPS
+                        meas_vel = (pos_3d - prev_pos) / dt
+                    else:
+                        meas_vel = np.array([0.0, 0.0])  # First frame has no velocity yet
+                    
                     ekf.predict()
-                    ekf.update(np.array([px_3d, py_3d]))
+                    ekf.update(pos_3d, meas_vel)  # <--- Now passing both position and velocity
             
             elif self.current_state == 'Re-TRACKING':
                 ekf.predict()
             else:
                 return
             
-            # Lấy vector trạng thái an toàn (hỗ trợ cả thuộc tính x hoặc hàm get_state)
-            if hasattr(ekf, 'get_state'):
-                state = ekf.get_state()
-            else:
-                state = ekf.x.flatten()  # Lấy trực tiếp từ thuộc tính x của bộ lọc
-            
-            ekf_x, ekf_y, ekf_vx, ekf_vy = state[0], state[1], state[2], state[3]
+            # [FIX ERROR 2]: Extract state from Dataclass CTRVState in ctrv_ekf.py
+            ekf_x = ekf.state.x
+            ekf_y = ekf.state.y
+            # Calculate velocity vector (vx, vy) from velocity magnitude (v) and rotation angle (psi)
+            ekf_vx = ekf.state.v * np.cos(ekf.state.psi)
+            ekf_vy = ekf.state.v * np.sin(ekf.state.psi)
             
             vel_filter = self.velocity_filters[self.main_target_id]
             filtered_vel = vel_filter.update(np.array([ekf_vx, ekf_vy, 0.0]))
