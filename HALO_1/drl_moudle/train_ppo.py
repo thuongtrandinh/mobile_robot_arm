@@ -1,5 +1,4 @@
 import argparse
-import math
 import os.path
 import shutil
 import sys
@@ -14,61 +13,29 @@ from modules.policies import ExternalPolicy
 
 # from algorithms.graph_ppo import GraphPPO
 from algorithms.mpc_ppo import MpcPPO
-from modules.callbacks import CurriculumCallback, EvalCallback, CheckpointCallback, LastModelCheckpointCallback
+from modules.callbacks import CurriculumCallback, EvalCallback, CheckpointCallback
 from modules.evaluation import evaluate_policy
 from modules.utils import get_linear_fn
 
-
-def maybe_choose_resume_source(args, last_model_path, best_model_path):
-    if args.resume_from != "auto":
-        return args.resume_from
-
-    has_last = os.path.exists(last_model_path) or os.path.exists(last_model_path + ".zip")
-    has_best = os.path.exists(best_model_path) or os.path.exists(best_model_path + ".zip")
-    if not (has_last and has_best):
-        return "auto"
-
-    # If stdin is non-interactive, keep deterministic auto behavior (last then best).
-    if not sys.stdin.isatty():
-        return "auto"
-
-    print("Resume checkpoint found: both last_model and best_model are available.")
-    print("Choose checkpoint source: [1] last_model (default), [2] best_model")
-    try:
-        choice = input("Enter 1 or 2: ").strip()
-    except EOFError:
-        return "auto"
-
-    return "best" if choice == "2" else "last"
-
 def main(args):
     output_exists = os.path.exists(args.output_dir)
-    is_resuming = args.resume and output_exists
-
     if output_exists and not args.resume:
         shutil.rmtree(args.output_dir)
 
     os.makedirs(args.output_dir, exist_ok=True)
-
-    output_config = os.path.join(args.output_dir, "config.py")
-    # Resume: keep the existing config in output dir for consistency.
-    if is_resuming and os.path.exists(output_config):
-        args.config = output_config
+    output_config_path = os.path.join(args.output_dir, "config.py")
+    if args.resume and output_exists and os.path.exists(output_config_path):
+        args.config = output_config_path
     else:
-        shutil.copy(args.config, output_config)
-        args.config = output_config
+        # copy config file from ${args.config} to ${args.output_dir} as config.py
+        shutil.copy(args.config, output_config_path)
+        args.config = output_config_path
 
     # configure logging
     log_file = os.path.join(args.output_dir, "output.log")
     file_handler = logging.FileHandler(log_file, mode='a' if args.resume else 'w')
     stdout_handler = logging.StreamHandler(sys.stdout)
     level = logging.INFO if not args.debug else logging.DEBUG
-    
-    # Clear existing handlers to allow reconfiguration on resume
-    root_logger = logging.getLogger()
-    for handler in root_logger.handlers[:]:
-        root_logger.removeHandler(handler)
-    
     logging.basicConfig(
         level=level,
         handlers=[stdout_handler, file_handler],
@@ -100,18 +67,12 @@ def main(args):
     logging.info('Current goal_weight: {}'.format(args.goal_weight))
     logging.info('Current re_collision: {}'.format(args.re_collision))
     logging.info('Current re_arrival: {}'.format(args.re_arrival))
-    logging.info('Current n_steps: {}'.format(args.n_steps))
-    logging.info('Current batch_size: {}'.format(args.batch_size))
-    logging.info('Current n_epochs: {}'.format(args.n_epochs))
     device = th.device('cuda:0' if th.cuda.is_available() and args.gpu else 'cpu')
     logging.info('Using device: %s', device)
 
     env = gym.make("CrowdSim-v0", disable_env_checker=True)
     env.configure(env_config)
     env.set_phase(0)
-    if hasattr(env, "use_fov") and hasattr(env, "camera_fov_rad") and hasattr(env, "camera_range"):
-        logging.info('FOV enabled: %s, FOV angle: %.1f deg, range: %.1f m',
-                     env.use_fov, math.degrees(env.camera_fov_rad) * 2, env.camera_range)
 
     robot = Robot(env_config, "robot")
     robot.time_step = env.time_step
@@ -130,10 +91,6 @@ def main(args):
     env.use_AM = args.use_AM
     env.use_PL = args.use_PL
     env.PL_traj_length = args.PL_traj_length
-    # Set trực tiếp lên crowd_sim (unwrapped) để _update_action_mask() dùng đúng giá trị
-    env.unwrapped.num_actions_per_dim = action_dim
-    env.unwrapped.goal_coord_range = goal_range
-    env.unwrapped.use_AM = args.use_AM
     env.PL_traj_gamma = args.PL_traj_gamma
 
     lr_schedule = get_linear_fn(2.5e-4, 1.0e-4, 0.5)
@@ -142,9 +99,8 @@ def main(args):
         "GraphPolicy",
         env,
         learning_rate=lr_schedule,
-        n_steps=args.n_steps,
-        batch_size=args.batch_size,
-        n_epochs=args.n_epochs,
+        n_steps=2048,
+        batch_size=64,
         ent_coef=0.001,
         tensorboard_log=args.output_dir,
         seed=args.randomseed,
@@ -159,12 +115,11 @@ def main(args):
         best_model_path = os.path.join(args.output_dir, "best_model")
         last_episode_file = os.path.join(args.output_dir, "last_episode_num.txt")
         best_episode_file = os.path.join(args.output_dir, "episode_num.txt")
-        resume_source = maybe_choose_resume_source(args, last_model_path, best_model_path)
 
         resumed_ok = False
-        if resume_source == "last":
+        if args.resume_from == "last":
             checkpoint_candidates = [(last_model_path, "last")]
-        elif resume_source == "best":
+        elif args.resume_from == "best":
             checkpoint_candidates = [(best_model_path, "best")]
         else:
             checkpoint_candidates = [(last_model_path, "last"), (best_model_path, "best")]
@@ -182,7 +137,7 @@ def main(args):
 
         if not resumed_ok:
             logging.warning("Resume requested (%s) but no valid checkpoint found in %s. Training from scratch.",
-                            resume_source, args.output_dir)
+                            args.resume_from, args.output_dir)
 
         resume_episode = args.start_episode
         if resume_episode == 0:
@@ -195,29 +150,12 @@ def main(args):
 
         model._episode_num = resume_episode
         logging.info("Resumed from episode: %d", model._episode_num)
-        ep = resume_episode
-        if ep >= 19999:
-            env.set_phase(3)
-            logging.info("Restored curriculum: Phase 3 (ep >= 19999)")
-        elif ep >= 11999:
-            env.set_phase(2)
-            logging.info("Restored curriculum: Phase 2 (ep >= 11999)")
-        elif ep >= 3999:
-            env.set_phase(1)
-            logging.info("Restored curriculum: Phase 1 (ep >= 3999)")
-        else:
-            logging.info("Restored curriculum: Phase 0 (ep < 3999)")
 
     curriculum_callback = CurriculumCallback(verbose=0)
-    eval_callback = EvalCallback(eval_env=env, n_eval_episodes=args.n_eval_episodes, eval_freq=args.eval_freq,
+    eval_callback = EvalCallback(eval_env=env, n_eval_episodes=100, eval_freq=500,
                                  best_model_save_path=args.output_dir, verbose=1)
-    last_model_callback = LastModelCheckpointCallback(
-        save_path=args.output_dir,
-        save_freq_episodes=args.last_save_freq,
-        verbose=1,
-    )
     try:
-        model.learn(int(args.total_timesteps), callback=[eval_callback, curriculum_callback, last_model_callback],
+        model.learn(int(5e6), callback=[eval_callback, curriculum_callback],
                     reset_num_timesteps=not args.resume)
     except KeyboardInterrupt:
         logging.info("Training interrupted by user. Saving last model checkpoint...")
@@ -242,10 +180,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser("Parse configuration file")
     parser.add_argument('--config', type=str, default='configs/mpc_rl.py')
     # parser.add_argument('--output_dir', type=str, default='data/output_eval_ipopt_theta_4_yaw_penalize')
-    parser.add_argument('--output_dir', type=str, default='train_data/run_05')
+    parser.add_argument('--output_dir', type=str, default='train_data/run_01')
     
     # parser.add_argument('--output_dir', type=str, default='data/output_test')
-    parser.add_argument('--resume', default=False, action='store_true')
+    parser.add_argument('--resume', default=True, action='store_true')
     parser.add_argument('--resume_from', type=str, default='auto', choices=['auto', 'last', 'best'],
                         help='Checkpoint source for resume: auto tries last then best')
     parser.add_argument('--start_episode', type=int, default=0,
@@ -266,14 +204,6 @@ if __name__ == "__main__":
     parser.add_argument('--use_PL', type=bool, default=True, help="enable Privileged Learning")
     parser.add_argument('--PL_traj_length', type=int, default=4)
     parser.add_argument('--PL_traj_gamma', type=float, default=0.9)
-    parser.add_argument('--n_steps', type=int, default=2048)
-    parser.add_argument('--batch_size', type=int, default=64)
-    parser.add_argument('--n_epochs', type=int, default=10)
-    parser.add_argument('--total_timesteps', type=int, default=int(5e6))
-    parser.add_argument('--eval_freq', type=int, default=500)
-    parser.add_argument('--n_eval_episodes', type=int, default=100)
-    parser.add_argument('--last_save_freq', type=int, default=50,
-                        help='Auto-save last_model every N episodes')
     # parser.add_argument('--checkpt_dir', type=str, default='data/output_eval_ipopt_theta_4_yaw_penalize_pt1')
 
 
