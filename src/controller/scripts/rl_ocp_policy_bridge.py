@@ -8,12 +8,16 @@ import sys
 from typing import List, Optional, Tuple
 
 import rclpy
-from interfaces.msg import ObstacleState, WallState, PolyState, Point
+from interfaces.msg import ObstacleState, WallState, PolyState, Point as PolyPoint
+from interfaces.msg import JointState as InterfaceJointState
 from interfaces.srv import OcpLocalPlann
-from geometry_msgs.msg import PoseStamped, TwistStamped
+from geometry_msgs.msg import PoseStamped, TwistStamped, Point as RosPoint
 from nav_msgs.msg import OccupancyGrid, Odometry
+from rcl_interfaces.msg import SetParametersResult
 from rclpy.node import Node
 from sensor_msgs.msg import LaserScan
+from std_msgs.msg import String
+from visualization_msgs.msg import Marker, MarkerArray
 
 
 class RlOcpPolicyBridge(Node):
@@ -40,6 +44,18 @@ class RlOcpPolicyBridge(Node):
 
         self.declare_parameter("planner_half_width", 5.8)
         self.declare_parameter("planner_half_height", 9.8)
+        self.declare_parameter("planner_hard_half_width", 5.99)
+        self.declare_parameter("planner_hard_half_height", 9.99)
+        self.declare_parameter("use_wall_constraints", True)
+        self.declare_parameter("use_demo_poly_obstacle", True)
+        self.declare_parameter("visualize_actions", True)
+        self.declare_parameter("action_marker_topic", "/policy/action_markers")
+        self.declare_parameter("action_marker_frame", "odom")
+        self.declare_parameter("action_mask_clearance", 0.05)
+        self.declare_parameter("publish_debug_joint_state", True)
+        self.declare_parameter("debug_joint_state_topic", "/debug/joint_state_req")
+        self.declare_parameter("publish_policy_debug_status", True)
+        self.declare_parameter("policy_debug_status_topic", "/debug/policy_status")
 
         self.declare_parameter("odom_topic", "/odometry/filtered")
         self.declare_parameter("scan_topic", "/scan")
@@ -66,6 +82,20 @@ class RlOcpPolicyBridge(Node):
         self.max_angular_speed = self.get_parameter("max_angular_speed").get_parameter_value().double_value
         self.planner_half_width = self.get_parameter("planner_half_width").get_parameter_value().double_value
         self.planner_half_height = self.get_parameter("planner_half_height").get_parameter_value().double_value
+        self.planner_hard_half_width = self.get_parameter("planner_hard_half_width").get_parameter_value().double_value
+        self.planner_hard_half_height = self.get_parameter("planner_hard_half_height").get_parameter_value().double_value
+        self.effective_half_width = min(self.planner_half_width, self.planner_hard_half_width)
+        self.effective_half_height = min(self.planner_half_height, self.planner_hard_half_height)
+        self.use_wall_constraints = self.get_parameter("use_wall_constraints").get_parameter_value().bool_value
+        self.use_demo_poly_obstacle = self.get_parameter("use_demo_poly_obstacle").get_parameter_value().bool_value
+        self.visualize_actions = self.get_parameter("visualize_actions").get_parameter_value().bool_value
+        self.action_marker_topic = self.get_parameter("action_marker_topic").get_parameter_value().string_value
+        self.action_marker_frame = self.get_parameter("action_marker_frame").get_parameter_value().string_value
+        self.action_mask_clearance = self.get_parameter("action_mask_clearance").get_parameter_value().double_value
+        self.publish_debug_joint_state = self.get_parameter("publish_debug_joint_state").get_parameter_value().bool_value
+        self.debug_joint_state_topic = self.get_parameter("debug_joint_state_topic").get_parameter_value().string_value
+        self.publish_policy_debug_status = self.get_parameter("publish_policy_debug_status").get_parameter_value().bool_value
+        self.policy_debug_status_topic = self.get_parameter("policy_debug_status_topic").get_parameter_value().string_value
 
         self.odom_topic = self.get_parameter("odom_topic").get_parameter_value().string_value
         self.scan_topic = self.get_parameter("scan_topic").get_parameter_value().string_value
@@ -92,7 +122,11 @@ class RlOcpPolicyBridge(Node):
         self.create_subscription(OccupancyGrid, self.map_topic, self._map_callback, 10)
 
         self.cmd_pub = self.create_publisher(TwistStamped, self.cmd_topic, 10)
+        self.action_viz_pub = self.create_publisher(MarkerArray, self.action_marker_topic, 10)
+        self.debug_joint_state_pub = self.create_publisher(InterfaceJointState, self.debug_joint_state_topic, 10)
+        self.policy_debug_status_pub = self.create_publisher(String, self.policy_debug_status_topic, 10)
         self.ocp_client = self.create_client(OcpLocalPlann, self.planner_service)
+        self.add_on_set_parameters_callback(self._on_parameters_changed)
 
         timer_period = self.get_parameter("timer_period").get_parameter_value().double_value
         self.create_timer(timer_period, self._control_loop)
@@ -100,6 +134,49 @@ class RlOcpPolicyBridge(Node):
         self.get_logger().info("RL OCP policy bridge started")
         self.get_logger().info(f"Model: {self.model_path}")
         self.get_logger().info(f"Service: {self.planner_service}")
+        self.get_logger().info(f"Action visualization: {self.visualize_actions} ({self.action_marker_topic})")
+        self.get_logger().info(
+            f"JointState debug topic: {self.publish_debug_joint_state} ({self.debug_joint_state_topic})"
+        )
+        self.get_logger().info(
+            f"Policy status topic: {self.publish_policy_debug_status} ({self.policy_debug_status_topic})"
+        )
+
+    def _on_parameters_changed(self, params):
+        update_effective_bounds = False
+        for p in params:
+            if p.name == "use_demo_poly_obstacle":
+                self.use_demo_poly_obstacle = bool(p.value)
+            elif p.name == "use_wall_constraints":
+                self.use_wall_constraints = bool(p.value)
+            elif p.name == "visualize_actions":
+                self.visualize_actions = bool(p.value)
+            elif p.name == "publish_debug_joint_state":
+                self.publish_debug_joint_state = bool(p.value)
+            elif p.name == "publish_policy_debug_status":
+                self.publish_policy_debug_status = bool(p.value)
+            elif p.name == "action_dim":
+                self.action_dim = max(2, int(p.value))
+            elif p.name == "action_range":
+                self.action_range = float(p.value)
+            elif p.name == "planner_half_width":
+                self.planner_half_width = float(p.value)
+                update_effective_bounds = True
+            elif p.name == "planner_half_height":
+                self.planner_half_height = float(p.value)
+                update_effective_bounds = True
+            elif p.name == "planner_hard_half_width":
+                self.planner_hard_half_width = float(p.value)
+                update_effective_bounds = True
+            elif p.name == "planner_hard_half_height":
+                self.planner_hard_half_height = float(p.value)
+                update_effective_bounds = True
+
+        if update_effective_bounds:
+            self.effective_half_width = min(self.planner_half_width, self.planner_hard_half_width)
+            self.effective_half_height = min(self.planner_half_height, self.planner_hard_half_height)
+
+        return SetParametersResult(successful=True)
 
     def _start_policy_worker(self) -> None:
         worker_script = os.path.join(os.path.dirname(__file__), "rl_policy_worker.py")
@@ -213,30 +290,46 @@ class RlOcpPolicyBridge(Node):
         ]
 
     def _build_wall_msgs(self) -> List[WallState]:
-        if self.map_bounds is None:
-            if self.current_pose is None:
-                xmin, xmax, ymin, ymax = -10.0, 10.0, -10.0, 10.0
-            else:
-                px, py, _ = self.current_pose
-                xmin, xmax, ymin, ymax = px - 10.0, px + 10.0, py - 10.0, py + 10.0
-        else:
+        if not self.use_wall_constraints:
+            return []
+
+        if self.map_bounds is not None:
             xmin, xmax, ymin, ymax = self.map_bounds
+        elif self.current_pose is not None:
+            px, py, _ = self.current_pose
+            xmin = px - self.planner_half_width
+            xmax = px + self.planner_half_width
+            ymin = py - self.planner_half_height
+            ymax = py + self.planner_half_height
+        else:
+            xmin, xmax = -self.planner_half_width, self.planner_half_width
+            ymin, ymax = -self.planner_half_height, self.planner_half_height
+
+        eps = 1e-3
+        wall_segments = [
+            (xmin, ymin, xmin, ymax),
+            (xmax, ymin, xmax, ymax),
+            (xmin, ymin, xmax, ymin),
+            (xmin, ymax, xmax, ymax),
+        ]
 
         walls = []
-        for sx, sy, ex, ey in self._build_wall_tuples():
+        for sx, sy, ex, ey in wall_segments:
             wall = WallState()
-            wall.sx = float(sx)
-            wall.sy = float(sy)
-            wall.ex = float(ex)
-            wall.ey = float(ey)
+            wall.sx = self._clamp(float(sx), -self.effective_half_width + eps, self.effective_half_width - eps)
+            wall.sy = self._clamp(float(sy), -self.effective_half_height + eps, self.effective_half_height - eps)
+            wall.ex = self._clamp(float(ex), -self.effective_half_width + eps, self.effective_half_width - eps)
+            wall.ey = self._clamp(float(ey), -self.effective_half_height + eps, self.effective_half_height - eps)
             walls.append(wall)
 
         return walls
 
     def _build_poly_msgs(self) -> List[PolyState]:
-        """Tạo polygon từ map bounds hoặc config."""
-        # TODO: Load từ YAML config hoặc contour tracing từ occupancy grid
-        # Hiện tại: tạo hình vuông giữa map bounds (ví dụ minh họa)
+        """Optional demo polygon obstacle for debugging planner constraints."""
+        if not self.use_demo_poly_obstacle:
+            return []
+
+        # TODO: Load polygon constraints from config/map processing when needed.
         if self.map_bounds is None:
             if self.current_pose is None:
                 return []
@@ -245,23 +338,22 @@ class RlOcpPolicyBridge(Node):
                 xmin, xmax, ymin, ymax = px - 5.0, px + 5.0, py - 5.0, py + 5.0
         else:
             xmin, xmax, ymin, ymax = self.map_bounds
-        
-        # Tạo 1 polygon vuông ở giữa (vùng "tử địa" ví dụ)
+
+        # Build one square polygon in map center only when explicitly enabled.
         poly = PolyState()
         poly.is_clockwise = True
-        
-        # 4 đỉnh của hình vuông
+
         cx = (xmin + xmax) / 2.0
         cy = (ymin + ymax) / 2.0
-        margin = 1.0  # Khoảng cách từ tâm tới đỉnh
-        
+        margin = 1.0
+
         poly.vertices = [
-            Point(x=cx - margin, y=cy - margin),
-            Point(x=cx + margin, y=cy - margin),
-            Point(x=cx + margin, y=cy + margin),
-            Point(x=cx - margin, y=cy + margin),
+            PolyPoint(x=cx - margin, y=cy - margin),
+            PolyPoint(x=cx + margin, y=cy - margin),
+            PolyPoint(x=cx + margin, y=cy + margin),
+            PolyPoint(x=cx - margin, y=cy + margin),
         ]
-        
+
         return [poly]
 
     def _scan_to_obstacle_tuples(self) -> List[Tuple[float, float, float]]:
@@ -290,7 +382,183 @@ class RlOcpPolicyBridge(Node):
 
         return obstacles
 
-    def _scan_to_obstacle_msgs(self, origin_x: float, origin_y: float) -> List[ObstacleState]:
+    @staticmethod
+    def _rotate_to_world(px: float, py: float, yaw: float, lx: float, ly: float) -> Tuple[float, float]:
+        wx = px + lx * math.cos(yaw) - ly * math.sin(yaw)
+        wy = py + lx * math.sin(yaw) + ly * math.cos(yaw)
+        return wx, wy
+
+    def _generate_action_candidates(self) -> List[Tuple[float, float, float, float]]:
+        """Returns candidates as (local_x, local_y, world_x, world_y)."""
+        if self.current_pose is None:
+            return []
+
+        px, py, yaw = self.current_pose
+        dim = max(2, int(self.action_dim))
+        step = (2.0 * self.action_range) / float(dim - 1)
+
+        candidates = []
+        for iy in range(dim):
+            ly = -self.action_range + step * iy
+            for ix in range(dim):
+                lx = -self.action_range + step * ix
+                wx, wy = self._rotate_to_world(px, py, yaw, lx, ly)
+                candidates.append((lx, ly, wx, wy))
+        return candidates
+
+    def _is_action_masked(
+        self,
+        local_x: float,
+        local_y: float,
+        world_x: float,
+        world_y: float,
+        obstacles: List[Tuple[float, float, float]],
+    ) -> bool:
+        if abs(local_x) > self.planner_half_width or abs(local_y) > self.planner_half_height:
+            return True
+
+        if self.map_bounds is not None:
+            xmin, xmax, ymin, ymax = self.map_bounds
+            if world_x < xmin or world_x > xmax or world_y < ymin or world_y > ymax:
+                return True
+
+        inflate = self.robot_radius + self.action_mask_clearance
+        for ox, oy, radius in obstacles:
+            if math.hypot(world_x - ox, world_y - oy) < (inflate + radius):
+                return True
+
+        return False
+
+    def _publish_action_visualization(self, selected_sub_goal: Optional[Tuple[float, float]]) -> None:
+        if self.current_pose is None:
+            return
+
+        now = self.get_clock().now().to_msg()
+        candidates = self._generate_action_candidates()
+        obstacles = self._scan_to_obstacle_tuples()
+
+        valid_points: List[RosPoint] = []
+        masked_points: List[RosPoint] = []
+        closest_selected: Optional[Tuple[float, float]] = None
+        best_dist = float("inf")
+
+        for lx, ly, wx, wy in candidates:
+            p = RosPoint(x=float(wx), y=float(wy), z=0.05)
+            if self._is_action_masked(lx, ly, wx, wy, obstacles):
+                masked_points.append(p)
+            else:
+                valid_points.append(p)
+
+            if selected_sub_goal is not None:
+                dist = math.hypot(selected_sub_goal[0] - wx, selected_sub_goal[1] - wy)
+                if dist < best_dist:
+                    best_dist = dist
+                    closest_selected = (wx, wy)
+
+        if self.publish_policy_debug_status:
+            status = {
+                "action_dim": int(self.action_dim),
+                "candidate_count": len(candidates),
+                "expected_count": int(self.action_dim) * int(self.action_dim),
+                "valid_count": len(valid_points),
+                "masked_count": len(masked_points),
+                "walls_enabled": bool(self.use_wall_constraints),
+                "poly_enabled": bool(self.use_demo_poly_obstacle),
+                "selected_sub_goal": list(selected_sub_goal) if selected_sub_goal is not None else None,
+            }
+            msg = String()
+            msg.data = json.dumps(status)
+            self.policy_debug_status_pub.publish(msg)
+
+        if not self.visualize_actions:
+            return
+
+        markers = MarkerArray()
+
+        delete_all = Marker()
+        delete_all.header.frame_id = self.action_marker_frame
+        delete_all.header.stamp = now
+        delete_all.action = Marker.DELETEALL
+        markers.markers.append(delete_all)
+
+        valid_marker = Marker()
+        valid_marker.header.frame_id = self.action_marker_frame
+        valid_marker.header.stamp = now
+        valid_marker.ns = "policy_actions"
+        valid_marker.id = 1
+        valid_marker.type = Marker.SPHERE_LIST
+        valid_marker.action = Marker.ADD
+        valid_marker.scale.x = 0.10
+        valid_marker.scale.y = 0.10
+        valid_marker.scale.z = 0.10
+        valid_marker.color.r = 0.0
+        valid_marker.color.g = 1.0
+        valid_marker.color.b = 0.25
+        valid_marker.color.a = 0.85
+        valid_marker.points = valid_points
+        markers.markers.append(valid_marker)
+
+        masked_marker = Marker()
+        masked_marker.header.frame_id = self.action_marker_frame
+        masked_marker.header.stamp = now
+        masked_marker.ns = "policy_actions"
+        masked_marker.id = 2
+        masked_marker.type = Marker.SPHERE_LIST
+        masked_marker.action = Marker.ADD
+        masked_marker.scale.x = 0.08
+        masked_marker.scale.y = 0.08
+        masked_marker.scale.z = 0.08
+        masked_marker.color.r = 1.0
+        masked_marker.color.g = 0.1
+        masked_marker.color.b = 0.1
+        masked_marker.color.a = 0.65
+        masked_marker.points = masked_points
+        markers.markers.append(masked_marker)
+
+        selected_marker = Marker()
+        selected_marker.header.frame_id = self.action_marker_frame
+        selected_marker.header.stamp = now
+        selected_marker.ns = "policy_actions"
+        selected_marker.id = 3
+        selected_marker.type = Marker.SPHERE
+        selected_marker.action = Marker.ADD
+        selected_marker.scale.x = 0.18
+        selected_marker.scale.y = 0.18
+        selected_marker.scale.z = 0.18
+        selected_marker.color.r = 0.1
+        selected_marker.color.g = 0.4
+        selected_marker.color.b = 1.0
+        selected_marker.color.a = 1.0
+        if closest_selected is not None:
+            selected_marker.pose.position.x = float(closest_selected[0])
+            selected_marker.pose.position.y = float(closest_selected[1])
+            selected_marker.pose.position.z = 0.12
+        else:
+            selected_marker.action = Marker.DELETE
+        markers.markers.append(selected_marker)
+
+        info_marker = Marker()
+        info_marker.header.frame_id = self.action_marker_frame
+        info_marker.header.stamp = now
+        info_marker.ns = "policy_actions"
+        info_marker.id = 4
+        info_marker.type = Marker.TEXT_VIEW_FACING
+        info_marker.action = Marker.ADD
+        info_marker.scale.z = 0.25
+        info_marker.color.r = 1.0
+        info_marker.color.g = 1.0
+        info_marker.color.b = 1.0
+        info_marker.color.a = 0.95
+        px, py, _ = self.current_pose
+        info_marker.pose.position.x = float(px)
+        info_marker.pose.position.y = float(py)
+        info_marker.pose.position.z = 0.6
+        info_marker.text = f"actions={len(candidates)} valid={len(valid_points)} masked={len(masked_points)}"
+        markers.markers.append(info_marker)
+
+        self.action_viz_pub.publish(markers)
+
+    def _scan_to_obstacle_msgs(self) -> List[ObstacleState]:
         obstacles = []
         if self.latest_scan is None or self.current_pose is None:
             return obstacles
@@ -310,13 +578,15 @@ class RlOcpPolicyBridge(Node):
                 continue
 
             ang = yaw + angle_min + i * angle_inc
-            rel_x = px + r * math.cos(ang) - origin_x
-            rel_y = py + r * math.sin(ang) - origin_y
-            if abs(rel_x) > self.planner_half_width or abs(rel_y) > self.planner_half_height:
+            obs_x = px + r * math.cos(ang)
+            obs_y = py + r * math.sin(ang)
+            if abs(obs_x - px) > self.effective_half_width or abs(obs_y - py) > self.effective_half_height:
+                continue
+            if abs(obs_x) >= self.effective_half_width or abs(obs_y) >= self.effective_half_height:
                 continue
             obstacle = ObstacleState()
-            obstacle.px = float(rel_x)
-            obstacle.py = float(rel_y)
+            obstacle.px = float(obs_x)
+            obstacle.py = float(obs_y)
             obstacle.radius = float(self.obstacle_radius)
             obstacles.append(obstacle)
 
@@ -381,31 +651,31 @@ class RlOcpPolicyBridge(Node):
             return
         v_left, v_right = wheel_speeds
 
-        goal_local_x = gx - px
-        goal_local_y = gy - py
-        sub_goal_local_x = sub_goal[0] - px
-        sub_goal_local_y = sub_goal[1] - py
-
-        sub_goal_local_x = self._clamp(sub_goal_local_x, -self.planner_half_width, self.planner_half_width)
-        sub_goal_local_y = self._clamp(sub_goal_local_y, -self.planner_half_height, self.planner_half_height)
+        sub_goal_x = self._clamp(sub_goal[0], -self.effective_half_width, self.effective_half_width)
+        sub_goal_y = self._clamp(sub_goal[1], -self.effective_half_height, self.effective_half_height)
 
         req = OcpLocalPlann.Request()
-        req.ob.robot_state.pose.x = 0.0
-        req.ob.robot_state.pose.y = 0.0
+        req.ob.robot_state.pose.x = float(px)
+        req.ob.robot_state.pose.y = float(py)
         req.ob.robot_state.pose.theta = float(yaw)
         req.ob.robot_state.vl = float(v_left)
         req.ob.robot_state.vr = float(v_right)
-        req.ob.robot_state.gx = float(goal_local_x)
-        req.ob.robot_state.gy = float(goal_local_y)
+        req.ob.robot_state.gx = float(gx)
+        req.ob.robot_state.gy = float(gy)
         req.ob.robot_state.v_pref = float(self.v_pref)
         req.ob.robot_state.radius = float(self.axle_half_width)
 
-        req.ob.obstacle_states = self._scan_to_obstacle_msgs(px, py)
+        req.ob.obstacle_states = self._scan_to_obstacle_msgs()
         req.ob.walls = self._build_wall_msgs()
         req.ob.poly_states = self._build_poly_msgs()
+        req.ob.header.stamp = self.get_clock().now().to_msg()
+        req.ob.header.frame_id = "map"
 
-        req.sub_goal.x = float(sub_goal_local_x)
-        req.sub_goal.y = float(sub_goal_local_y)
+        if self.publish_debug_joint_state:
+            self.debug_joint_state_pub.publish(req.ob)
+
+        req.sub_goal.x = float(sub_goal_x)
+        req.sub_goal.y = float(sub_goal_y)
 
         self.last_wheel_speed = (v_left, v_right)
 
@@ -466,7 +736,9 @@ class RlOcpPolicyBridge(Node):
         try:
             sub_goal = self._get_sub_goal_from_policy()
             if sub_goal is None:
+                self._publish_action_visualization(None)
                 return
+            self._publish_action_visualization(sub_goal)
             self._send_planner_request(sub_goal)
         except Exception as exc:
             self.get_logger().error(f"Control loop failed: {exc}")

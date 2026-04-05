@@ -312,6 +312,7 @@ bool Planner::CheckNavGoal(Eigen::Vector2d &sub_goal,
 void Planner::UpdateCostMap(const JointState &state) {
   // TODO:
   cost_map_ = map_.clone();
+  std::size_t skipped_invalid_points = 0;
 
   std::vector<std::vector<cv::Point>> wall_contours;
   // draw walls
@@ -326,15 +327,31 @@ void Planner::UpdateCostMap(const JointState &state) {
   cv::drawContours(cost_map_, wall_contours, -1, cv::Scalar(0), 1);
 
   std::vector<cv::Point> contour;
-  Vertices2Contour(state.rect.vertices, contour);
+  contour.reserve(state.rect.vertices.size());
+  for (const auto &vertex : state.rect.vertices) {
+    try {
+      contour.push_back(MapCoord2ImgIdx(vertex));
+    } catch (const std::string &) {
+      skipped_invalid_points++;
+    }
+  }
   std::vector<std::vector<cv::Point>> contours = {contour};
   if (!contour.empty()) {
     cv::drawContours(cost_map_, contours, -1, cv::Scalar(0), 1);
   }
 
   for (auto &iter: state.obst) {
-    cv::circle(cost_map_, MapCoord2ImgIdx({iter.px, iter.py}), 
-               (int)round(iter.radius / kMapResol), cv::Scalar(0), 1);
+    try {
+      cv::circle(cost_map_, MapCoord2ImgIdx({iter.px, iter.py}), 
+                 (int)round(iter.radius / kMapResol), cv::Scalar(0), 1);
+    } catch (const std::string &) {
+      skipped_invalid_points++;
+    }
+  }
+
+  if (verbose_ >= 1 && skipped_invalid_points > 0) {
+    std::cout << "Skip " << skipped_invalid_points
+              << " invalid map points in UpdateCostMap" << std::endl;
   }
 
   visual_map_ = cost_map_.clone();
