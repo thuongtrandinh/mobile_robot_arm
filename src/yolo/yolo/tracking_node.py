@@ -133,22 +133,27 @@ class TrackingNode(Node):
             self.get_logger().warn(f'⚠️  Warm-up failed (non-critical): {e}')
 
         # ===== 3. INITIALIZE TRACKERS =====
+        # Optimization for GRAYSCALE input:
+        # - Reduce appearance_weight: Color not reliable on grayscale
+        # - Increase track_buffer: Rely more on motion model, less on appearance
+        # - CTRV EKF provides strong motion prediction, reducing appearance dependency
+
         self._person_tracker = BoTSortTracker(
             track_thresh=0.5,
-            track_buffer=100,  # Increased from 30 to 100 to prevent ID jumping
-            match_thresh=0.8,  # Increased from 0.3 to 0.8 for stricter matching
+            track_buffer=150,  # Increased: gives CTRV EKF more time to predict trajectory
+            match_thresh=0.8,
             use_appearance=True,
-            appearance_weight=0.3,
-            max_age_before_predict=15
+            appearance_weight=0.2,  # REDUCED: grayscale has weak color features
+            max_age_before_predict=20
         )
 
         self._hand_tracker = BoTSortTracker(
             track_thresh=0.4,
-            track_buffer=100,  # Increased from 60 to 100 to prevent jitter/dropout
+            track_buffer=150,  # Increased: for stability during occlusion/blinks
             match_thresh=0.4,
             use_appearance=True,
-            appearance_weight=0.5,
-            max_age_before_predict=10
+            appearance_weight=0.3,  # REDUCED: same reasoning as persons
+            max_age_before_predict=15
         )
 
         # ===== 4. APPEARANCE FEATURES =====
@@ -165,7 +170,11 @@ class TrackingNode(Node):
         self.last_stop_seen_time = None
         self.signal_timeout = 1.0  # Cho phép mất tín hiệu tay 1s mà không bị reset timer
 
-        # ===== 5b. TARGET PERSON LOCKING (START/STOP control) =====
+        # ===== 5b. SYSTEM STATE (from state_machine_node) =====
+        # Manage detection logic based on robot state
+        self.current_robot_state = 'IDLE'  # IDLE | TRACKING | RE_TRACKING
+
+        # ===== 5c. TARGET PERSON LOCKING (START/STOP control) =====
         # When START gesture is detected, robot locks onto this person ID
         self.main_target_id: Optional[int] = None
         self.target_lock_time: float = 0.0  # Timestamp when target was locked (for START 1s detection)
@@ -187,6 +196,10 @@ class TrackingNode(Node):
         # Store position history for velocity calculation
         self.position_history: Dict[int, deque] = {}
         self.max_position_history = 10  # Keep last 10 positions for velocity estimation
+
+        # ===== 5e. TIMESTAMP TRACKING FOR REAL DT =====
+        # Track frame timestamps to compute real dt instead of assuming 1/30.0
+        self.last_frame_timestamp_per_track: Dict[int, float] = {}  # {track_id: ts_seconds}
 
         # ===== 6. FRAME STORAGE =====
         self._current_persons = []
@@ -226,10 +239,20 @@ class TrackingNode(Node):
         self._pub_gesture = self.create_publisher(String, '/yolo/gesture_command', 10)
         # ===== 9b. HUMAN STATE PUBLISHER (for state machine integration) =====
         self._pub_human_state = self.create_publisher(HumanState, '/tracking/main_person', 10)
-        # ===== 9c. ANNOTATED IMAGE PUBLISHER (for debugging/visualization) =====
+        # ===== 9c. OBSTACLES PUBLISHER (for perception layer) =====
+        self._pub_obstacles = self.create_publisher(HumanState, '/tracking/obstacles', 10)
+        # ===== 9d. ANNOTATED IMAGE PUBLISHER (for debugging/visualization) =====
         self._pub_annotated_image = self.create_publisher(Image, '/tracking/annotated_image', 10)
 
-        # ===== 10. SUBSCRIBERS (RGB-DEPTH SYNCHRONIZED) =====
+        # ===== 10. SUBSCRIBERS (RGB-DEPTH SYNCHRONIZED & SYSTEM STATE) =====
+        # Subscribe to system state (IDLE | TRACKING | RE_TRACKING)
+        self.create_subscription(
+            String,
+            '/system_state',
+            self._system_state_callback,
+            10
+        )
+
         # Create subscribers without immediate callbacks
         self.image_sub = message_filters.Subscriber(
             self, Image, camera_topic, qos_profile=qos_img
@@ -291,8 +314,114 @@ class TrackingNode(Node):
             f'   Gesture Hold Time: {self.gesture_hold_time}s (fast response)\n'
             f'   Y-Position Range: {self.gesture_y_min_ratio}-{self.gesture_y_max_ratio} (extended)\n'
             f'   Training Mode: OPTIMIZED (No visualization, state-based logging)\n'
-            f'   Performance Metrics: {"ENABLED" if self.enable_perf_metrics else "DISABLED"}'  
+            f'   Performance Metrics: {"ENABLED" if self.enable_perf_metrics else "DISABLED"}'
         )
+
+    def _system_state_callback(self, msg: String):
+        """Update robot state from state_machine_node"""
+        self.current_robot_state = msg.data
+        self.get_logger().debug(f'📡 System state updated: {self.current_robot_state}')
+
+    def _get_real_dt(self, track_id: int, current_timestamp: float) -> float:
+        """Calculate real dt from frame timestamps instead of assuming 1/30.0
+
+        This accounts for actual frame rate variation due to GPU load, camera sync, etc.
+
+        Args:
+            track_id: Track ID to look up previous timestamp
+            current_timestamp: Current frame timestamp (seconds)
+
+        Returns:
+            dt: Real time delta in seconds, or 1/30.0 if first measurement
+        """
+        if track_id in self.last_frame_timestamp_per_track:
+            prev_ts = self.last_frame_timestamp_per_track[track_id]
+            dt = current_timestamp - prev_ts
+
+            # Sanity check: dt should be reasonable (0.01 to 0.2 seconds for ~5-100 FPS)
+            if 0.005 < dt < 0.5:
+                self.last_frame_timestamp_per_track[track_id] = current_timestamp
+                return dt
+            else:
+                # Bad dt (clock jump, frame skipped), fallback to default
+                self.get_logger().warn(
+                    f'⚠️  Unusual dt detected: {dt:.4f}s for track {track_id}, using default 1/30'
+                )
+                self.last_frame_timestamp_per_track[track_id] = current_timestamp
+                return 1/30.0
+        else:
+            # First measurement for this track
+            self.last_frame_timestamp_per_track[track_id] = current_timestamp
+            return 1/30.0
+
+    def _get_weighted_depth_in_bbox(self, bbox: Tuple[int, int, int, int],
+                                    depth_map: np.ndarray, h_img: int, w_img: int) -> Optional[float]:
+        """Extract robust depth value using weighted average across entire bbox
+
+        Instead of sampling at just the center or upper chest, this method:
+        1. Samples depth at multiple points across the bbox
+        2. Uses weighted average (closer to center = higher weight)
+        3. Filters out invalid values (NaN, outliers)
+
+        This prevents accidental depth changes when person raises arm/hand in front.
+
+        Args:
+            bbox: (x1, y1, x2, y2) bounding box
+            depth_map: ZED2 depth registration image
+            h_img, w_img: Image dimensions
+
+        Returns:
+            depth_val: Weighted median depth value in meters, or None if invalid
+        """
+        if depth_map is None or depth_map.size == 0:
+            return None
+
+        x1, y1, x2, y2 = bbox
+        x1, x2, y1, y2 = int(x1), int(x2), int(y1), int(y2)
+
+        # Ensure within bounds
+        if not (0 <= x1 < w_img and 0 <= x2 <= w_img and
+                0 <= y1 < h_img and 0 <= y2 <= h_img):
+            return None
+
+        # Extract bbox region
+        roi_depth = depth_map[y1:y2, x1:x2]
+        if roi_depth.size == 0:
+            return None
+
+        # Filter valid depths: no NaN, positive, reasonable range (0.3-8.0m)
+        valid_mask = ~np.isnan(roi_depth) & (roi_depth > 0.3) & (roi_depth < 8.0)
+        valid_depths = roi_depth[valid_mask]
+
+        if len(valid_depths) == 0:
+            return None
+
+        # Calculate weighted average using distance from center as weight
+        # Closer to center = higher weight (inverse squared distance)
+        bbox_h = y2 - y1
+        bbox_w = x2 - x1
+        cy_center = bbox_h / 2.0
+        cx_center = bbox_w / 2.0
+
+        # Create coordinate grids for weighted calculation
+        y_coords, x_coords = np.where(valid_mask)
+        distances = np.sqrt((x_coords - cx_center)**2 + (y_coords - cy_center)**2)
+
+        # Inverse squared distance weighting (closer points have more influence)
+        # Add small epsilon to prevent division by zero
+        weights = 1.0 / (1.0 + distances**2)
+        weights = weights / np.sum(weights)  # Normalize
+
+        # Weighted median: sort by depth and accumulate weights
+        sorted_indices = np.argsort(valid_depths)
+        sorted_depths = valid_depths[sorted_indices]
+        sorted_weights = weights[sorted_indices]
+
+        cumsum_weights = np.cumsum(sorted_weights)
+        median_idx = np.searchsorted(cumsum_weights, 0.5)
+        median_idx = min(median_idx, len(sorted_depths) - 1)
+
+        return float(sorted_depths[median_idx])
 
     def _synced_callback(self, img_msg: Image, depth_msg: Image):
         """Process RGB and Depth simultaneously (perfectly synchronized by message_filters)
@@ -765,96 +894,139 @@ class TrackingNode(Node):
         
         return None
 
-    def _publish_human_state(self, person_tracks: List[Dict], 
+    def _publish_human_state(self, person_tracks: List[Dict],
                              h_img: int, w_img: int, ts_now: float):
         """Extract 3D coordinates, run EKF filtering, and publish HumanState for state machine
-        
-        Fixed version with proper cy initialization to prevent UnboundLocalError crashes.
+
+        Optimizations (from Gemini feedback):
+        1. Use weighted depth across entire bbox instead of single point
+        2. Calculate real dt from frame timestamps instead of assuming 1/30.0
+        3. Pass real dt to EKF for accurate prediction
+
+        Logic:
+        - IDLE state: Publish all people as obstacles to /tracking/obstacles
+        - TRACKING state:
+          * Publish main_person to /tracking/main_person with radius=1.5m
+          * Publish other people to /tracking/obstacles
         """
         try:
-            if self.main_target_id is None:
-                return
-            
             fx = self.fx
             cx_cam = self.cx_cam
             cy_cam = self.cy_cam
-            
-            if self.main_target_id not in self.ekfs:
-                self.ekfs[self.main_target_id] = CTRV_EKF(dt=1/30.0)
-                self.velocity_filters[self.main_target_id] = VelocityFilter(alpha=0.3)
-                self.position_history[self.main_target_id] = deque(maxlen=self.max_position_history)
-            
-            ekf = self.ekfs[self.main_target_id]
-            
-            # Khởi tạo cy mặc định để chống crash UnboundLocalError làm đứng hình Node
-            cy = int(h_img / 2) 
-            
-            if self.current_state == 'TRACKING':
-                target_track = next((t for t in person_tracks if t['track_id'] == self.main_target_id), None)
-                if target_track is None:
-                    return
-                
-                x1, y1, x2, y2 = target_track['bbox']
-                cx = (int(x1) + int(x2)) // 2
-                cy = int(y1 + (y2 - y1) * 0.3)
-                depth_val = self._get_depth_at_center((x1, y1, x2, y2), self._current_depth_map, h_img, w_img, cy_override=cy)
-                
+
+            # ===== HELPER LAMBDA FOR COMMON PROCESSING =====
+            def process_person_track(tid: int, bbox: Tuple, is_main_target: bool = False):
+                """Process a single person track and return HumanState message"""
+
+                x1, y1, x2, y2 = bbox
+
+                # Initialize EKF if needed
+                if tid not in self.ekfs:
+                    self.ekfs[tid] = CTRV_EKF(dt=1/30.0)
+                    self.velocity_filters[tid] = VelocityFilter(alpha=0.3)
+                    self.position_history[tid] = deque(maxlen=self.max_position_history)
+
+                ekf = self.ekfs[tid]
+
+                # === OPTIMIZATION 1: Calculate real dt from timestamps ===
+                real_dt = self._get_real_dt(tid, ts_now)
+
+                # Update EKF dt to real value instead of assuming 1/30.0
+                ekf.dt = real_dt
+
+                # === OPTIMIZATION 2: Use weighted depth across entire bbox ===
+                depth_val = self._get_weighted_depth_in_bbox(bbox, self._current_depth_map, h_img, w_img)
+
                 if depth_val is None:
+                    # No depth measurement, just predict
                     ekf.predict()
                 else:
+                    # Compute 3D position from depth measurement
+                    cx = (int(x1) + int(x2)) // 2
+                    cy = int(y1 + (y2 - y1) * 0.3)  # Upper chest region
+
                     px_3d = float(depth_val)
                     py_3d = float(-(cx - cx_cam) * depth_val / fx)
-                    
-                    # [FIX ERROR 1]: Calculate velocity from position history to feed into EKF
+
+                    # Track position history for velocity estimation
                     pos_3d = np.array([px_3d, py_3d])
-                    self.position_history[self.main_target_id].append(pos_3d)
-                    
-                    if len(self.position_history[self.main_target_id]) >= 2:
-                        prev_pos = self.position_history[self.main_target_id][-2]
-                        dt = 1/30.0  # Simulated dt at 30 FPS
-                        meas_vel = (pos_3d - prev_pos) / dt
+                    self.position_history[tid].append(pos_3d)
+
+                    # Calculate velocity from position history using real dt
+                    if len(self.position_history[tid]) >= 2:
+                        prev_pos = self.position_history[tid][-2]
+                        meas_vel = (pos_3d - prev_pos) / real_dt  # Use real dt
+
+                        if np.linalg.norm(meas_vel) > 10.0:  # Sanity check (10 m/s max)
+                            meas_vel = np.array([0.0, 0.0])
                     else:
-                        meas_vel = np.array([0.0, 0.0])  # First frame has no velocity yet
-                    
+                        meas_vel = np.array([0.0, 0.0])
+
+                    # EKF predict then update
                     ekf.predict()
-                    ekf.update(pos_3d, meas_vel)  # <--- Now passing both position and velocity
-            
-            elif self.current_state == 'Re-TRACKING':
-                ekf.predict()
-            else:
+                    ekf.update(pos_3d, meas_vel)
+
+                # Extract filtered state
+                ekf_x = ekf.state.x
+                ekf_y = ekf.state.y
+                ekf_vx = ekf.state.v * np.cos(ekf.state.psi)
+                ekf_vy = ekf.state.v * np.sin(ekf.state.psi)
+
+                # Apply velocity filter
+                vel_filter = self.velocity_filters[tid]
+                filtered_vel = vel_filter.update(np.array([ekf_vx, ekf_vy, 0.0]))
+                final_vx, final_vy = filtered_vel[0], filtered_vel[1]
+
+                # Create HumanState message
+                msg = HumanState()
+                msg.px = float(ekf_x)
+                msg.py = float(ekf_y)
+                msg.vx = float(final_vx)
+                msg.vy = float(final_vy)
+                msg.trajectory = []
+
+                # Set radius based on target type
+                if is_main_target:
+                    msg.radius = 1.5  # Safety distance for main person
+                else:
+                    # Calculate obstacle radius from bbox width
+                    msg.radius = float(abs(x2 - x1) * depth_val / fx / 2.0 * 0.85) if depth_val else 0.5
+
+                return msg
+
+            # ===== CASE 1: IDLE STATE - Publish all people as obstacles =====
+            if self.current_robot_state == 'IDLE':
+                for person_track in person_tracks:
+                    tid = person_track['track_id']
+                    msg = process_person_track(tid, person_track['bbox'], is_main_target=False)
+                    self._pub_obstacles.publish(msg)
+                    self.get_logger().debug(f'📌 IDLE obstacle (ID={tid}): px={msg.px:.2f}, py={msg.py:.2f}, r={msg.radius:.2f}m')
+
                 return
-            
-            # [FIX ERROR 2]: Extract state from Dataclass CTRVState in ctrv_ekf.py
-            ekf_x = ekf.state.x
-            ekf_y = ekf.state.y
-            # Calculate velocity vector (vx, vy) from velocity magnitude (v) and rotation angle (psi)
-            ekf_vx = ekf.state.v * np.cos(ekf.state.psi)
-            ekf_vy = ekf.state.v * np.sin(ekf.state.psi)
-            
-            vel_filter = self.velocity_filters[self.main_target_id]
-            filtered_vel = vel_filter.update(np.array([ekf_vx, ekf_vy, 0.0]))
-            final_vx, final_vy = filtered_vel[0], filtered_vel[1]
-            
-            radius = 0.3
-            if person_tracks:
-                target_track = next((t for t in person_tracks if t['track_id'] == self.main_target_id), None)
-                if target_track:
-                    x1, y1, x2, y2 = target_track['bbox']
-                    # Biến cy lúc này đã an toàn tuyệt đối
-                    depth_val = self._get_depth_at_center((x1, y1, x2, y2), self._current_depth_map, h_img, w_img, cy_override=cy)
-                    if depth_val is not None:
-                        radius = float(abs(x2 - x1) * depth_val / fx / 2.0 * 0.85)
-            
-            msg = HumanState()
-            msg.px = float(ekf_x)
-            msg.py = float(ekf_y)
-            msg.vx = float(final_vx)
-            msg.vy = float(final_vy)
-            msg.radius = float(radius)
-            msg.trajectory = [] 
-            
-            self._pub_human_state.publish(msg)
-            
+
+            # ===== CASE 2: TRACKING STATE - Publish main_person + other obstacles =====
+            elif self.current_robot_state in ['TRACKING', 'RE_TRACKING']:
+                if self.main_target_id is None:
+                    return
+
+                # Process ALL people in frame
+                for person_track in person_tracks:
+                    tid = person_track['track_id']
+                    msg = process_person_track(tid, person_track['bbox'], is_main_target=(tid == self.main_target_id))
+
+                    if tid == self.main_target_id:
+                        # Publish main target
+                        self._pub_human_state.publish(msg)
+                        self.get_logger().debug(f'🎯 Main target (ID={tid}): px={msg.px:.2f}, py={msg.py:.2f}, vx={msg.vx:.2f}, vy={msg.vy:.2f}, r=1.5m')
+                    else:
+                        # Publish other people as obstacles
+                        self._pub_obstacles.publish(msg)
+                        self.get_logger().debug(f'⚠️  Obstacle (ID={tid}): px={msg.px:.2f}, py={msg.py:.2f}, r={msg.radius:.2f}m')
+
+                return
+
+            # No-op for other states
+
         except Exception as e:
             self.get_logger().error(f'Error in _publish_human_state: {e}', throttle_duration_sec=2.0)
 
