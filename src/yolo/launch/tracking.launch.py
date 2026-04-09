@@ -54,12 +54,6 @@ def generate_launch_description():
         description='Enable robot state machine node'
     )
 
-    declare_gesture_hold_time = DeclareLaunchArgument(
-        'gesture_hold_time',
-        default_value='0.8',
-        description='Time (seconds) to hold gesture for confirmation (0.5-2.0)'
-    )
-
     declare_tracking_timeout = DeclareLaunchArgument(
         'tracking_timeout',
         default_value='0.3',
@@ -96,16 +90,10 @@ def generate_launch_description():
         description='Person detection confidence threshold (lowered for grayscale robustness)'
     )
 
-    declare_hand_conf_start = DeclareLaunchArgument(
-        'hand_conf_start',
-        default_value='0.85',
-        description='START gesture confidence threshold (high for reliability)'
-    )
-
-    declare_hand_conf_stop = DeclareLaunchArgument(
-        'hand_conf_stop',
-        default_value='0.55',
-        description='STOP gesture confidence threshold (conservative for palm detection)'
+    declare_hand_conf = DeclareLaunchArgument(
+        'hand_conf_thresh',
+        default_value='0.35',
+        description='Hand gesture confidence threshold (from params.yaml, allows weak detections)'
     )
 
     # ===== NODE 1: TRACKING NODE =====
@@ -122,47 +110,21 @@ def generate_launch_description():
             'camera_image_topic': '/zed/zed_node/rgb/color/rect/image',
             'depth_topic': '/zed/zed_node/depth/depth_registered',
             
-            # Model paths (relative to package share directory, auto-loaded)
+            # Model paths
             'person_model_path': 'yolov8n.pt',
             'hand_model_path': 'handsign.pt',
-            
-            # Confidence thresholds - OPTIMIZED for grayscale robustness (Gemini recommendations)
-            'person_conf_thresh': LaunchConfiguration('person_conf_thresh'),  # 0.50 - easier person detection in gray
-            'hand_conf_start': LaunchConfiguration('hand_conf_start'),         # 0.85 - START gesture (high confidence)
-            'hand_conf_stop': LaunchConfiguration('hand_conf_stop'),           # 0.55 - STOP gesture (conservative)
-            
-            # YOLO settings
-            'person_imgsz': 416,              # Person model input size
-            'hand_imgsz': 640,                # Hand model input size
             
             # Hardware acceleration
             'use_cuda': LaunchConfiguration('use_cuda'),
             'use_fp16': LaunchConfiguration('use_fp16'),
             
-            # Gesture recognition
-            'gesture_hold_time': LaunchConfiguration('gesture_hold_time'),
-            'gesture_temporal_buffer': 20,    # 20 frames for temporal voting (12/20 confirmation)
-            
-            # Tracking stability - IMPROVED for grayscale (Gemini optimizations)
-            'hand_person_match_buffer': 100,  # BoT-SORT track buffer
-            'gesture_y_min_ratio': 0.10,      # Extended Y range: 10%-90%
-            'gesture_y_max_ratio': 0.90,
-            
-            # Depth-Aware NMS - OPTIMIZED for grayscale and NEURAL depth mode
-            'depth_aware_nms_enabled': True,
-            'nms_threshold': 0.65,            # Relaxed (from 0.60) for NEURAL depth mode
-            'depth_threshold': 0.70,          # Relaxed (from 0.80) for more flexibility
-            
-            # 3D estimation (CTRV-EKF + velocity filter)
-            'ekf_enabled': True,
-            'velocity_filter_alpha': LaunchConfiguration('velocity_filter_alpha'),
-            'ekf_process_noise': 0.1,
-            'ekf_measurement_noise': 0.5,
-            
             # Performance
-            'max_inference_time': 200,        # Max 200ms per frame
-            'enable_frame_skip': True,        # ✅ Drop frames when GPU overloaded (GPU bottleneck fix)
+            'max_inference_time': 200,
+            'enable_frame_skip': True,
             'enable_performance_metrics': True,
+            
+            # NOTE: All detection thresholds, tracking parameters, and ROI settings
+            # are loaded from config/params.yaml at runtime (NO HARDCODING)
         }],
         remappings=[
             ('/yolo/gesture_command', '/yolo/gesture_command'),
@@ -182,24 +144,12 @@ def generate_launch_description():
         output='screen',
         condition=IfCondition(LaunchConfiguration('enable_state_machine')),
         parameters=[{
-            # Gesture recognition
-            'gesture_hold_time': LaunchConfiguration('gesture_hold_time'),
-            
-            # State timeouts
+            # State timeouts (detection lost, re-tracking)
             'tracking_timeout': LaunchConfiguration('tracking_timeout'),
             'retracking_timeout': LaunchConfiguration('retracking_timeout'),
             
             # Motion filtering
             'velocity_filter_alpha': LaunchConfiguration('velocity_filter_alpha'),
-            
-            # Subscribers (match tracking_node publishers)
-            'gesture_topic': '/yolo/gesture_command',
-            'human_state_topic': '/tracking/main_person',
-            
-            # Publishers (for robot control)
-            'control_command_topic': '/robot/control_command',
-            'state_topic': '/robot/state',
-            'debug_enabled': True,
         }],
         remappings=[
             ('/yolo/gesture_command', '/yolo/gesture_command'),
@@ -213,15 +163,13 @@ def generate_launch_description():
     return LaunchDescription([
         declare_enable_tracking,
         declare_enable_state_machine,
-        declare_gesture_hold_time,
         declare_tracking_timeout,
         declare_retracking_timeout,
         declare_velocity_filter_alpha,
         declare_use_cuda,
         declare_use_fp16,
         declare_person_conf,
-        declare_hand_conf_start,
-        declare_hand_conf_stop,
+        declare_hand_conf,
         
         tracking_node,
         state_machine_node,
