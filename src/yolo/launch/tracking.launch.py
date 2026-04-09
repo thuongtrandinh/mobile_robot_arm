@@ -92,20 +92,20 @@ def generate_launch_description():
 
     declare_person_conf = DeclareLaunchArgument(
         'person_conf_thresh',
-        default_value='0.85',
-        description='Person detection confidence threshold'
+        default_value='0.50',
+        description='Person detection confidence threshold (lowered for grayscale robustness)'
     )
 
     declare_hand_conf_start = DeclareLaunchArgument(
         'hand_conf_start',
-        default_value='0.35',
-        description='START gesture confidence threshold (sensitive for small thumbs up)'
+        default_value='0.85',
+        description='START gesture confidence threshold (high for reliability)'
     )
 
     declare_hand_conf_stop = DeclareLaunchArgument(
         'hand_conf_stop',
         default_value='0.55',
-        description='STOP gesture confidence threshold (conservative for palm)'
+        description='STOP gesture confidence threshold (conservative for palm detection)'
     )
 
     # ===== NODE 1: TRACKING NODE =====
@@ -126,10 +126,10 @@ def generate_launch_description():
             'person_model_path': 'yolov8n.pt',
             'hand_model_path': 'handsign.pt',
             
-            # Confidence thresholds (OPTIMIZED)
-            'person_conf_thresh': LaunchConfiguration('person_conf_thresh'),
-            'hand_conf_start': LaunchConfiguration('hand_conf_start'),   # START gesture (0.35)
-            'hand_conf_stop': LaunchConfiguration('hand_conf_stop'),     # STOP gesture (0.55)
+            # Confidence thresholds - OPTIMIZED for grayscale robustness (Gemini recommendations)
+            'person_conf_thresh': LaunchConfiguration('person_conf_thresh'),  # 0.50 - easier person detection in gray
+            'hand_conf_start': LaunchConfiguration('hand_conf_start'),         # 0.85 - START gesture (high confidence)
+            'hand_conf_stop': LaunchConfiguration('hand_conf_stop'),           # 0.55 - STOP gesture (conservative)
             
             # YOLO settings
             'person_imgsz': 416,              # Person model input size
@@ -143,15 +143,15 @@ def generate_launch_description():
             'gesture_hold_time': LaunchConfiguration('gesture_hold_time'),
             'gesture_temporal_buffer': 20,    # 20 frames for temporal voting (12/20 confirmation)
             
-            # Tracking optimization
+            # Tracking stability - IMPROVED for grayscale (Gemini optimizations)
             'hand_person_match_buffer': 100,  # BoT-SORT track buffer
             'gesture_y_min_ratio': 0.10,      # Extended Y range: 10%-90%
             'gesture_y_max_ratio': 0.90,
             
-            # Depth-Aware NMS (noise reduction for NEURAL depth mode)
+            # Depth-Aware NMS - OPTIMIZED for grayscale and NEURAL depth mode
             'depth_aware_nms_enabled': True,
-            'nms_threshold': 0.60,            # Aggressive box merging
-            'depth_threshold': 0.80,          # Relaxed for NEURAL depth noise
+            'nms_threshold': 0.65,            # Relaxed (from 0.60) for NEURAL depth mode
+            'depth_threshold': 0.70,          # Relaxed (from 0.80) for more flexibility
             
             # 3D estimation (CTRV-EKF + velocity filter)
             'ekf_enabled': True,

@@ -76,6 +76,7 @@ class BoTSortTracker:
     
     def __init__(self, 
                  track_thresh: float = 0.5,
+                 track_low_thresh: float = 0.1,  # NEW: Low threshold for keeping weak detections
                  track_buffer: int = 30,
                  match_thresh: float = 0.8,
                  use_appearance: bool = True,
@@ -83,7 +84,8 @@ class BoTSortTracker:
                  max_age_before_predict: int = 5):
         """
         Args:
-            track_thresh: Detection confidence threshold
+            track_thresh: Detection confidence threshold for starting new tracks
+            track_low_thresh: Low threshold for BYTE Association Stage 2 (keep weak dets)
             track_buffer: Frames to keep lost tracks for re-identification
             match_thresh: IOU threshold for matching
             use_appearance: Use appearance features for active tracks
@@ -91,6 +93,7 @@ class BoTSortTracker:
             max_age_before_predict: Use motion prediction after this many frames
         """
         self.track_thresh = track_thresh
+        self.track_low_thresh = track_low_thresh  # BYTE Association low threshold
         self.track_buffer = track_buffer
         self.match_thresh = match_thresh
         self.use_appearance = use_appearance
@@ -104,61 +107,86 @@ class BoTSortTracker:
     def update(self, detections: np.ndarray, 
                features: Optional[np.ndarray] = None) -> np.ndarray:
         """
-        Update tracker with new detections
+        Update tracker with Two-Stage Matching (BYTE Association)
+        
+        STAGE 1: Match HIGH confidence detections (conf > track_thresh)
+        STAGE 2: Match LOW confidence detections (track_low_thresh < conf <= track_thresh)
+                 to unmatched tracks to prevent flickering
         
         Args:
             detections: Nx5 array [x1, y1, x2, y2, confidence]
-            features: Nx256 array of appearance features (optional, only for active tracks)
+            features: Nx256 array of appearance features (optional)
         
         Returns:
             Mx5 array of tracks [x1, y1, x2, y2, track_id]
         """
         self.frame_count += 1
         
-        # Filter detections by confidence
+        # STEP 1: Separate detections into HIGH and LOW confidence
         if len(detections) > 0:
-            activated_detections = detections[detections[:, 4] > self.track_thresh]
+            scores = detections[:, 4]
+            det_high_idx = scores > self.track_thresh
+            det_low_idx = (scores > self.track_low_thresh) & (scores <= self.track_thresh)
+            
+            det_high = detections[det_high_idx]
+            feat_high = features[det_high_idx] if features is not None else None
+            
+            det_low = detections[det_low_idx]
+            feat_low = features[det_low_idx] if features is not None else None
         else:
-            activated_detections = np.empty((0, 5))
+            det_high = np.empty((0, 5))
+            det_low = np.empty((0, 5))
+            feat_high = None
+            feat_low = None
         
-        # Predict tracks using BOTH velocity and motion history
+        # STEP 2: Predict track positions
         predictions = self._predict_tracks()
         
-        # Associate detections to tracks with motion-aware matching
-        matched_idx, unmatched_detections, unmatched_tracks = self._associate_detections(
-            activated_detections, predictions, features
+        # STAGE 1: Match HIGH confidence detections with active tracks
+        matched_idx_high, unmatched_dets_high, unmatched_tracks = self._associate_detections(
+            det_high, predictions, feat_high
         )
         
-        # Update matched tracks - store features ONLY for active tracks
-        for det_idx, track_idx in matched_idx:
-            if features is not None and det_idx < len(features):
-                self.tracks[track_idx].update(
-                    activated_detections[det_idx],
-                    features[det_idx]  # Store features for active tracks
-                )
-            else:
-                self.tracks[track_idx].update(activated_detections[det_idx], None)
+        # Update tracks matched in STAGE 1
+        for det_idx, track_idx in matched_idx_high:
+            feat = feat_high[det_idx] if feat_high is not None else None
+            self.tracks[track_idx].update(det_high[det_idx], feat)
         
-        # Create new tracks from unmatched detections
-        for det_idx in unmatched_detections:
-            self._create_track(
-                activated_detections[det_idx],
-                features[det_idx] if features is not None and det_idx < len(features) else None
+        # STAGE 2: Match LOW confidence detections with unmatched tracks (BYTE Association)
+        # This is the KEY to preventing flickering: use weak detections to keep tracks alive
+        if len(det_low) > 0 and len(unmatched_tracks) > 0:
+            unmatched_predictions = predictions[unmatched_tracks]
+            
+            # Associate det_low with unmatched tracks (IOU only, no appearance)
+            matched_idx_low, _, unmatched_tracks_final = self._associate_detections(
+                det_low, unmatched_predictions, features=None  # No appearance for low conf
             )
+            
+            # Update unmatched tracks with LOW detections (3-point rule: use weak detections)
+            for det_idx, local_track_idx in matched_idx_low:
+                real_track_idx = unmatched_tracks[local_track_idx]
+                self.tracks[real_track_idx].update(det_low[det_idx], None)  # None for feature = no appearance update
+            
+            # Update unmatched_tracks to reflect STAGE 2 matches
+            unmatched_tracks = [unmatched_tracks[i] for i in unmatched_tracks_final]
         
-        # Mark unmatched tracks as lost (but keep motion history)
+        # STEP 3: Create new tracks from unmatched HIGH detections
+        for det_idx in unmatched_dets_high:
+            feat = feat_high[det_idx] if feat_high is not None else None
+            self._create_track(det_high[det_idx], feat)
+        
+        # STEP 4: Mark completely unmatched tracks as lost
         for track_idx in unmatched_tracks:
             self.tracks[track_idx].time_since_update += 1
-            # Don't clear features - keep them for re-identification
         
-        # Remove dead tracks (after track_buffer + some grace period)
+        # STEP 5: Remove dead tracks
         self.tracks = [t for t in self.tracks 
                       if t.time_since_update <= self.track_buffer + 10]
         
         # Return active tracks (recently matched)
         active_tracks = []
         for track in self.tracks:
-            if track.time_since_update == 0:  # Recently updated
+            if track.time_since_update == 0:
                 bbox = track.bbox
                 active_tracks.append([
                     bbox[0], bbox[1], bbox[2], bbox[3], track.track_id
@@ -351,7 +379,12 @@ class BoTSortTracker:
 
 # Extend Track class with update method
 def _track_update(self, detection: np.ndarray, feature: Optional[np.ndarray] = None):
-    """Update track with new detection - maintain motion history"""
+    """
+    Update track with new detection + EMA Smoothing (Anti-Jitter)
+    
+    Key optimization: Apply Exponential Moving Average (EMA) to bounding box
+    to prevent jerky movements while keeping responsiveness to actual motion.
+    """
     # Update velocity and store in motion history
     center_new = np.array([(detection[0] + detection[2])/2, 
                           (detection[1] + detection[3])/2])
@@ -362,8 +395,17 @@ def _track_update(self, detection: np.ndarray, feature: Optional[np.ndarray] = N
     # Store motion in history (persistent even when occluded)
     self.motion_history.add(center_new, self.velocity)
     
-    # Update bbox
-    self.bbox = detection[:4].copy()
+    # ===== EMA SMOOTHING (Anti-Jitter) =====
+    # Only smooth if this is an active track update (time_since_update == 0 and has history)
+    if self.time_since_update == 0 and self.hit_streak > 1:
+        # Exponential Moving Average: trust new detection 70%, keep momentum 30%
+        # This prevents jittering while maintaining responsiveness
+        alpha = 0.7  # Higher alpha = more responsive to new detections
+        self.bbox = alpha * detection[:4] + (1 - alpha) * self.bbox
+    else:
+        # First detection or after gap: use detection directly
+        self.bbox = detection[:4].copy()
+    
     self.confidence = detection[4]
     self.time_since_update = 0
     self.hit_streak += 1
@@ -372,7 +414,7 @@ def _track_update(self, detection: np.ndarray, feature: Optional[np.ndarray] = N
     # Update feature ONLY if provided (only for active tracks)
     if feature is not None and len(feature) > 0:
         if len(self.features) > 0:
-            # Exponential moving average for appearance
+            # Exponential moving average for appearance features
             self.features = 0.9 * self.features + 0.1 * feature
         else:
             self.features = feature.copy()

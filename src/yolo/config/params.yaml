@@ -1,25 +1,67 @@
-# ZED2 Hand Sign Detector Configuration
+# ZED2 Hand Sign Detector Configuration (Optimized)
 
-# Detection parameters
-detection_conf: 0.5          # YOLO confidence threshold
-person_radius: 0.3           # Estimated person radius (meters)
-
-# Model paths (absolute or relative to package share dir)
-hand_model_path: 'handsign.pt'
-person_model_path: 'yolov8n.pt'
-
-# Visualization
-enable_visualization: false  # Show opencv window (requires display)
-
-# Tracking
-tracker:
-  track_thresh: 0.5
-  track_buffer: 30
-  match_thresh: 0.8
-
-# Velocity filtering
-velocity_filter:
-  alpha: 0.3                 # Smoothing factor (0.1-0.5 recommended)
+# ===== YOLO DETECTION PARAMETERS =====
+yolo:
+  # Person detection (LOWERED for grayscale robustness - critical fix for 100+ FPS systems)
+  person_conf_thresh: 0.80       # CRITICAL: Lower threshold prevents flickering in grayscale
+                                 # At 100+ FPS, 0.55 was too high. Lowering to 0.45 provides more detections
+                                 # Tracker interpolates across frames → stable bbox, even when 1-2 frames miss
   
-# Publishing
-publish_rate: 30             # Hz
+  # Hand gesture detection
+  handsign_conf_thresh: 0.35     # CỰC KỲ QUAN TRỌNG: Hạ xuống 0.45 để không miss tay nhỏ ở độ phân giải VGA/WVGA
+  
+  # Non-Maximum Suppression
+  iou_thresh: 0.45               # IOU threshold for NMS
+
+# ===== TRACKING PARAMETERS =====
+tracking:
+  # Gesture recognition timing (reduced due to buffer filtering)
+  gesture_hold_time: 1.0          # Reduced from 1.2 (voting buffer compensates)
+  tracking_timeout: 0.5           # Max time (s) person can be lost before re-tracking
+  
+  # BoT-SORT tracking parameters
+  track_thresh: 0.40              # CRITICAL: Lower threshold for patient tracking
+  track_buffer: 150               # Keep track ID for 150 frames
+  match_thresh: 0.8               # Strict location matching
+  max_age_before_predict: 60      # Use EKF prediction for 60 frames if YOLO temporarily misses
+  
+  # Gesture buffer (VOTING MECHANISM - 9/15 consensus for rock-solid detection)
+  gesture_buffer_size: 15         # Keep last 15 frames (~0.5s @ 30 FPS)
+  gesture_confirmation_ratio: 0.60  # Need 9/15 frames agreement (60%) for confirmation
+                                   # Eliminates single-frame noise, "detect then disappear" issue
+  
+  # ROI scanning optimization (EXPANDED FOR CONTINUOUS HAND DETECTION)
+  roi_margin_x_ratio: 0.35        # Nới rộng ngang 35% cho ảnh WVGA
+  roi_margin_y_top_ratio: 0.30    # Nới lên trên 30% để đảm bảo bắt trọn tay giơ cao START
+  roi_body_height_ratio: 0.80     # Scan 80% of body height (more generous, less noise from legs)
+
+# ===== DEPTH FILTERING (Hand-person spatial validation) =====
+depth_filter:
+  # Hand-person spatial relationship
+  max_hand_person_depth_diff: 0.85  # Hand within 60cm of person (depth consistency check)
+                                    # BoT-SORT Two-Stage Matching provides person validation
+
+# ===== HISTOGRAM EQUALIZATION (Grayscale enhancement) =====
+image_processing:
+  enable_histogram_equalization: true  # Apply CLAHE to enhance grayscale contrast
+  clahe_clip_limit: 2.0                # Contrast limiting (2.0-4.0 recommended)
+  clahe_tile_size: 8                   # Tile size for local contrast enhancement
+
+# ===== VELOCITY FILTERING =====
+velocity_filter:
+  alpha: 0.3                      # Smoothing factor (0.1-0.5 recommended)
+  
+# ===== PUBLISHING =====
+publishing:
+  publish_rate: 30                # Hz
+  enable_visualization: false     # Show opencv window (requires display)
+  enable_performance_metrics: true  # Log FPS and latency
+
+# ===== ZED 2 CAMERA INTRINSICS (WVGA - 672x376) =====
+camera:
+  width: 672
+  height: 376
+  fx: 263.127
+  fy: 263.127
+  cx: 346.277
+  cy: 187.776
