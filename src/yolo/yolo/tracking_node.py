@@ -695,14 +695,14 @@ class TrackingNode(Node):
 
         # ===== DETECT HANDS (FULL FRAME INFERENCE - KHỚP VỚI REF_YOLO) =====
         # Chạy mô hình Hand trực tiếp trên TOÀN BỘ khung hình gốc (giống hệt detect_handsign.py)
-        # Nguyên nhân fix: Batched ROI crop gây Scale Distortion (bàn tay bị phóng to, YOLO không nhận ra)
-        # Giải pháp: Full-frame inference như ref_yolo - mô hình được huấn luyện trên toàn khung hình
+        # Full-frame inference: mô hình được huấn luyện trên toàn khung hình, không bị scale distortion
+        # Sử dụng self.hand_conf từ params.yaml - NO HARDCODING
         hand_detections = []
         try:
-            # Chạy trực tiếp trên khung hình gốc, không crop ROI
+            # Dùng đúng self.hand_conf lấy từ params.yaml (không hardcode 0.30/0.85/0.55)
             hand_results = self._hand_yolo.predict(
                 frame, 
-                conf=0.30,  # Lower threshold at GPU level to get candidates
+                conf=self.hand_conf,  # From params.yaml - allows START gesture (~0.40-0.50) to pass
                 verbose=False, 
                 device=self._device, 
                 half=self.use_fp16
@@ -713,19 +713,16 @@ class TrackingNode(Node):
                     x1, y1, x2, y2, conf, cls_id = box.cpu().numpy()
                     cls_id_int = int(cls_id)
                     
-                    # OPTIMIZATION per Gemini: Higher thresholds to reduce false positives
-                    # START (class 0) = 0.85: Very confident (small thumbs-up is hard to see)
-                    # STOP (class 1) = 0.55: Conservative for open palm detection
-                    threshold = 0.85 if cls_id_int == 0 else 0.55
-                    if conf < threshold:
-                        continue
+                    # ❌ REMOVED HARDCODED 0.85/0.55 THRESHOLDS ❌
+                    # Thresholds are now set only in params.yaml via self.hand_conf
+                    # This allows START gesture (thumbs-up ~0.40-0.50) to pass through
                     
                     # Validate coordinates
                     if not (0 <= x1 < w_img and 0 <= x2 < w_img and 
                             0 <= y1 < h_img and 0 <= y2 < h_img):
                         continue
                     
-                    # Lọc theo chiều cao y_ratio để bỏ qua nhiễu dưới chân/trần nhà
+                    # Filter by Y-position to ignore ceiling/floor noise
                     hcy = (y1 + y2) / 2
                     if not (self.gesture_y_min_ratio * h_img <= hcy <= self.gesture_y_max_ratio * h_img):
                         continue
