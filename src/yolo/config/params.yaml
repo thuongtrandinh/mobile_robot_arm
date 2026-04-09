@@ -38,8 +38,9 @@ tracking:
 # ===== DEPTH FILTERING (Hand-person spatial validation) =====
 depth_filter:
   # Hand-person spatial relationship
-  max_hand_person_depth_diff: 0.85  # Hand within 60cm of person (depth consistency check)
-                                    # BoT-SORT Two-Stage Matching provides person validation
+  max_hand_person_depth_diff: 0.85  # Hand within 85cm of person (depth consistency check)
+                                     # Increased from 0.6 to 0.85 for START gesture (extended arm far forward)
+                                     # BoT-SORT Two-Stage Matching provides person validation
 
 # ===== HISTOGRAM EQUALIZATION (Grayscale enhancement) =====
 image_processing:
