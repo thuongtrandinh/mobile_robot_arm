@@ -35,7 +35,7 @@ from ament_index_python.packages import get_package_share_directory
 
 # BoT-SORT tracking with appearance features
 from yolo.algorithms.botsort_handler import BoTSortTracker
-from yolo.algorithms.appearance_feature_extractor import FeatureExtractorLightweight
+from yolo.algorithms.appearance_feature_extractor import FeatureExtractorDeep
 from yolo.algorithms.ctrv_ekf import CTRV_EKF
 from yolo.algorithms.velocity_filter import VelocityFilter
 
@@ -193,8 +193,8 @@ class TrackingNode(Node):
             track_low_thresh=0.10,      # LOW THRESHOLD: keep tracks alive with only 10% confidence (BYTE Association)
             track_buffer=500,           # 500 frames ≈ 5s at 100 FPS
             match_thresh=0.8,
-            use_appearance=True,
-            appearance_weight=0.2,
+            use_appearance=True,        # ENABLED: Deep learning Re-ID features
+            appearance_weight=0.6,      # Trust ResNet18 features 60% (improved from 0.2)
             max_age_before_predict=150
         )
         
@@ -214,8 +214,14 @@ class TrackingNode(Node):
             max_age_before_predict=20
         )
 
-        # ===== 4. APPEARANCE FEATURES =====
-        self._appearance_extractor = FeatureExtractorLightweight(n_bins=32)
+        # ===== 4. APPEARANCE FEATURES (DEEP LEARNING ON RTX A4000) =====
+        # ResNet18 backbone extracts 512-dim features from person crops
+        # RTX A4000 Tensor Cores (FP16) accelerate extraction to ~1.5ms/person
+        # Enables robust Re-ID after occlusion/re-entrance
+        self._appearance_extractor = FeatureExtractorDeep(
+            device=self._device,
+            half=self.use_fp16  # Tensor Core FP16 acceleration
+        )
 
         # ===== 5. GESTURE STATE MACHINE (ROBUST - GLOBAL TIMERS + CONSECUTIVE FRAMES + HYSTERESIS BUFFER) =====
         # NO PER-TRACK TIMING: Use global timers instead (like ref_yolo does)
@@ -749,10 +755,29 @@ class TrackingNode(Node):
         except Exception as e:
             self.get_logger().error(f'Hand detection root error: {e}', throttle_duration_sec=2.0)
 
-        # ===== TRACKING NGƯỜI (BỎ TRACKING TAY) =====
-        # Person tracking via BoTSort (keep this - works well for persons)
+        # ===== TRÍCH XUẤT ĐẶC TRƯNG ẢNH (DEEP LEARNING RE-ID) =====
+        # Extract ResNet18 512-dim features for each person detection via GPU
+        features_list = []
+        for det in person_detections:
+            # Only extract features for confident detections (optimization)
+            if det['confidence'] >= self._person_tracker.track_thresh:
+                x1, y1, x2, y2 = det['box']
+                # Crop person region from frame
+                crop_img = frame[max(0, int(y1)):min(h_img, int(y2)), max(0, int(x1)):min(w_img, int(x2))]
+                # Extract 512-dim appearance feature using ResNet18 on RTX A4000 (Tensor Cores FP16)
+                feat = self._appearance_extractor.extract(crop_img)
+            else:
+                # Low confidence detection gets empty feature vector
+                feat = self._appearance_extractor.get_empty_feature()
+            features_list.append(feat)
+            
+        features_np = np.array(features_list) if len(features_list) > 0 else None
+
+        # ===== TRACKING NGƯỜI (ĐÃ KÍCH HOẠT RE-ID) =====
+        # Person tracking via BoT-SORT with deep learning appearance features enabled
         person_dets_np = self._dicts_to_numpy(person_detections)
-        person_tracks_np = self._person_tracker.update(person_dets_np, features=None)
+        # ✅ NOW PASSING FEATURES: ResNet18 enables robust Re-ID after occlusion/re-entrance
+        person_tracks_np = self._person_tracker.update(person_dets_np, features=features_np)
         person_tracks = self._numpy_to_dicts(person_tracks_np, person_detections)
         
         # ĐỐI VỚI TAY: Dùng trực tiếp kết quả YOLO, bỏ qua BoTSort để không bị mất nhãn START/STOP

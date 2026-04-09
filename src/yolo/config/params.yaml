@@ -17,7 +17,7 @@ yolo:
 tracking:
   # Gesture recognition timing (reduced due to buffer filtering)
   gesture_hold_time: 1.0          # Reduced from 1.2 (voting buffer compensates)
-  tracking_timeout: 0.5           # Max time (s) person can be lost before re-tracking
+  tracking_timeout: 10.0           # Max time (s) person can be lost before re-tracking
   
   # BoT-SORT tracking parameters
   track_thresh: 0.40              # CRITICAL: Lower threshold for patient tracking
