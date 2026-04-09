@@ -19,6 +19,7 @@ import os
 import cv2
 import numpy as np
 import time
+import yaml
 from collections import deque
 from typing import Dict, List, Tuple, Optional
 from rclpy.node import Node
@@ -52,38 +53,88 @@ class TrackingNode(Node):
     def __init__(self):
         super().__init__('tracking_node')
 
-        # ===== 1. PARAMETERS (DYNAMIC) =====
+        # ===== 1. PARAMETERS (DYNAMIC + YAML CONFIG) =====
+        # --- Runtime parameters ---
         self.declare_parameter('camera_image_topic', '/zed/zed_node/rgb/color/rect/image')
         self.declare_parameter('person_model_path', 'yolov8n.pt')
         self.declare_parameter('hand_model_path', 'handsign.pt')
-        self.declare_parameter('person_conf_thresh', 0.70)
-        self.declare_parameter('hand_conf_thresh', 0.5)  # Reduced to detect START/STOP more reliably
         self.declare_parameter('use_cuda', True)
         self.declare_parameter('use_fp16', True)
-        self.declare_parameter('gesture_hold_time', 1.5)  # NEURAL optimized: 1.5s for robust detection
         self.declare_parameter('hand_person_match_buffer', 100)
-        self.declare_parameter('gesture_y_min_ratio', 0.0)
-        self.declare_parameter('gesture_y_max_ratio', 0.90)
-        self.declare_parameter('max_inference_time_ms', 200.0)  # Increased from 100 to process all frames
-        self.declare_parameter('enable_frame_skip', True)  # ✅ ENABLED: Drop frames when GPU overloaded (GPU bottleneck fix)
-        self.declare_parameter('enable_performance_metrics', True)  # Log FPS/latency
+        self.declare_parameter('max_inference_time_ms', 200.0)
+        self.declare_parameter('enable_frame_skip', True)
+        self.declare_parameter('enable_performance_metrics', True)
+
+        # Load YAML config for tunable parameters
+        try:
+            config_path = os.path.join(get_package_share_directory('yolo'), 'config', 'params.yaml')
+            import yaml
+            with open(config_path, 'r') as f:
+                config = yaml.safe_load(f)
+            
+            # YOLO detection parameters
+            self.person_conf = config['yolo']['person_conf_thresh']
+            self.hand_conf = config['yolo']['handsign_conf_thresh']
+            
+            # Tracking parameters
+            self.gesture_hold_time = config['tracking']['gesture_hold_time']
+            self.tracking_timeout = config['tracking']['tracking_timeout']
+            self.gesture_buffer_size = config['tracking']['gesture_buffer_size']
+            self.gesture_confirmation_ratio = config['tracking']['gesture_confirmation_ratio']
+            
+            # ROI optimization
+            self.roi_margin_x_ratio = config['tracking']['roi_margin_x_ratio']
+            self.roi_margin_y_top_ratio = config['tracking']['roi_margin_y_top_ratio']
+            self.roi_body_height_ratio = config['tracking']['roi_body_height_ratio']
+            
+            # Depth filtering
+            self.max_hand_person_depth_diff = config['depth_filter']['max_hand_person_depth_diff']
+            
+            # Histogram equalization
+            self.enable_histogram_equalization = config['image_processing']['enable_histogram_equalization']
+            self.clahe_clip_limit = config['image_processing']['clahe_clip_limit']
+            self.clahe_tile_size = config['image_processing']['clahe_tile_size']
+            
+            # ===== CAMERA INTRINSICS (WVGA - 672x376) =====
+            # Load directly from config dict (no ROS parameter declaration needed)
+            self.cam_w = config['camera']['width']
+            self.cam_h = config['camera']['height']
+            self.fx = config['camera']['fx']
+            self.fy = config['camera']['fy']
+            self.cx = config['camera']['cx']
+            self.cy = config['camera']['cy']
+            
+            self.get_logger().info(f'✅ Loaded configuration from {config_path}')
+            self.get_logger().info(
+                f'✅ Loaded ZED2 Camera Config: {self.cam_w}x{self.cam_h}, '
+                f'fx={self.fx:.2f}, fy={self.fy:.2f}, cx={self.cx:.2f}, cy={self.cy:.2f}'
+            )
+        except Exception as e:
+            self.get_logger().warn(f'⚠️  Failed to load params.yaml: {e}. Using defaults.')
 
         camera_topic = self.get_parameter('camera_image_topic').value
         person_model_name = self.get_parameter('person_model_path').value
         hand_model_name = self.get_parameter('hand_model_path').value
-        self.person_conf = self.get_parameter('person_conf_thresh').value
-        self.hand_conf = self.get_parameter('hand_conf_thresh').value
         use_cuda = self.get_parameter('use_cuda').value
         self.use_fp16 = self.get_parameter('use_fp16').value
-        self.gesture_hold_time = self.get_parameter('gesture_hold_time').value
         self.hand_person_buffer = self.get_parameter('hand_person_match_buffer').value
-        self.gesture_y_min_ratio = self.get_parameter('gesture_y_min_ratio').value
-        self.gesture_y_max_ratio = self.get_parameter('gesture_y_max_ratio').value
+        self.gesture_y_min_ratio = 0.10
+        self.gesture_y_max_ratio = 0.90
         self.max_inference_time = self.get_parameter('max_inference_time_ms').value / 1000.0
         self.enable_frame_skip = self.get_parameter('enable_frame_skip').value
         self.enable_perf_metrics = self.get_parameter('enable_performance_metrics').value
 
         self._device = 'cuda' if use_cuda else 'cpu'
+        
+        # Initialize CLAHE for histogram equalization (if enabled)
+        if self.enable_histogram_equalization:
+            self._clahe = cv2.createCLAHE(
+                clipLimit=self.clahe_clip_limit,
+                tileGridSize=(self.clahe_tile_size, self.clahe_tile_size)
+            )
+            self.get_logger().info(f'✅ CLAHE histogram equalization enabled (clip={self.clahe_clip_limit}, tile={self.clahe_tile_size})')
+        else:
+            self._clahe = None
 
         # ===== 2. LOAD YOLO MODELS =====
         try:
@@ -133,42 +184,57 @@ class TrackingNode(Node):
             self.get_logger().warn(f'⚠️  Warm-up failed (non-critical): {e}')
 
         # ===== 3. INITIALIZE TRACKERS =====
-        # Optimization for GRAYSCALE input:
-        # - Reduce appearance_weight: Color not reliable on grayscale
-        # - Increase track_buffer: Rely more on motion model, less on appearance
-        # - CTRV EKF provides strong motion prediction, reducing appearance dependency
+        # CRITICAL FOR FLICKERING FIX: Lower track_thresh for patience + higher max_age_before_predict
+        # This ensures person bbox stays visible even when YOLO temporarily misses detection
+        # Parameters loaded from config/params.yaml
 
         self._person_tracker = BoTSortTracker(
-            track_thresh=0.5,
-            track_buffer=150,  # Increased: gives CTRV EKF more time to predict trajectory
+            track_thresh=0.45,          # High threshold: require 45% confidence for new tracks
+            track_low_thresh=0.10,      # LOW THRESHOLD: keep tracks alive with only 10% confidence (BYTE Association)
+            track_buffer=500,           # 500 frames ≈ 5s at 100 FPS
             match_thresh=0.8,
             use_appearance=True,
-            appearance_weight=0.2,  # REDUCED: grayscale has weak color features
-            max_age_before_predict=20
+            appearance_weight=0.2,
+            max_age_before_predict=150
+        )
+        
+        self.get_logger().info(
+            f'✅ Person Tracker initialized (FLICKERING FIX v3 - BYTE Association):'
+            f' track_thresh=0.45, track_low_thresh=0.10, track_buffer=500 frames (~5s@100FPS), '
+            f'max_age_before_predict=150 (Two-Stage matching + EMA smoothing)'
         )
 
         self._hand_tracker = BoTSortTracker(
-            track_thresh=0.4,
-            track_buffer=150,  # Increased: for stability during occlusion/blinks
-            match_thresh=0.4,
+            track_thresh=0.35,
+            track_low_thresh=0.05,      # Lower threshold for hands (weaker detections)
+            track_buffer=100,
+            match_thresh=0.7,
             use_appearance=True,
-            appearance_weight=0.3,  # REDUCED: same reasoning as persons
-            max_age_before_predict=15
+            appearance_weight=0.25,
+            max_age_before_predict=20
         )
 
         # ===== 4. APPEARANCE FEATURES =====
         self._appearance_extractor = FeatureExtractorLightweight(n_bins=32)
 
-        # ===== 5. GESTURE STATE MACHINE (ROBUST - GLOBAL TIMERS) =====
+        # ===== 5. GESTURE STATE MACHINE (ROBUST - GLOBAL TIMERS + CONSECUTIVE FRAMES + HYSTERESIS BUFFER) =====
         # NO PER-TRACK TIMING: Use global timers instead (like ref_yolo does)
         # This avoids BoTSort tracking jitter from resetting gesture detection
+        # OPTIMIZATION: Add consecutive frame counter to eliminate noise (per Gemini)
+        # NEW: Add gesture buffer (deque voting) for hysteresis - eliminate flickering
+        
+        self.gesture_buffer = deque(maxlen=self.gesture_buffer_size)  # Keep last N gesture detections
+        self.confirmed_gesture = "NONE"  # Current confirmed gesture state
+        
         self.start_signal_detected = False
         self.start_signal_time = None
         self.last_start_seen_time = None
+        self.start_consecutive_count = 0
         
         self.stop_detected_time = None
         self.last_stop_seen_time = None
-        self.signal_timeout = 1.0  # Cho phép mất tín hiệu tay 1s mà không bị reset timer
+        self.stop_consecutive_count = 0
+        self.signal_timeout = 1.0  # Allow 1s signal loss without timer reset
 
         # ===== 5b. SYSTEM STATE (from state_machine_node) =====
         # Manage detection logic based on robot state
@@ -326,6 +392,7 @@ class TrackingNode(Node):
         """Calculate real dt from frame timestamps instead of assuming 1/30.0
 
         This accounts for actual frame rate variation due to GPU load, camera sync, etc.
+        CRITICAL FIX: Always update timestamp IMMEDIATELY to prevent dt accumulation bug
 
         Args:
             track_id: Track ID to look up previous timestamp
@@ -334,25 +401,45 @@ class TrackingNode(Node):
         Returns:
             dt: Real time delta in seconds, or 1/30.0 if first measurement
         """
-        if track_id in self.last_frame_timestamp_per_track:
-            prev_ts = self.last_frame_timestamp_per_track[track_id]
-            dt = current_timestamp - prev_ts
-
-            # Sanity check: dt should be reasonable (0.01 to 0.2 seconds for ~5-100 FPS)
-            if 0.005 < dt < 0.5:
-                self.last_frame_timestamp_per_track[track_id] = current_timestamp
-                return dt
-            else:
-                # Bad dt (clock jump, frame skipped), fallback to default
-                self.get_logger().warn(
-                    f'⚠️  Unusual dt detected: {dt:.4f}s for track {track_id}, using default 1/30'
-                )
-                self.last_frame_timestamp_per_track[track_id] = current_timestamp
-                return 1/30.0
-        else:
-            # First measurement for this track
+        if track_id not in self.last_frame_timestamp_per_track:
             self.last_frame_timestamp_per_track[track_id] = current_timestamp
-            return 1/30.0
+            return 1.0 / 30.0
+        
+        dt = current_timestamp - self.last_frame_timestamp_per_track[track_id]
+        
+        # ⚠️  CRITICAL: MUST UPDATE TIMESTAMP IMMEDIATELY to prevent dt accumulation (KẸTDT bug)
+        # This ensures next frame calculation is fresh, not stale
+        self.last_frame_timestamp_per_track[track_id] = current_timestamp
+        
+        # Accept dt up to 2.0 seconds (covers frame drops, multi-frame occlusion)
+        if 0.005 < dt < 2.0:
+            return dt
+        
+        # If dt outside range (clock jump, extreme frame skip), use default
+        # No warning printed anymore since timestamp is now always fresh
+        return 1.0 / 30.0
+
+    def get_3d_coordinates(self, u: float, v: float, z: float) -> Tuple[float, float, float]:
+        """Convert 2D pixel coordinates to 3D world coordinates using pinhole camera model.
+        
+        This uses the camera intrinsics (fx, fy, cx, cy) to transform from image space
+        to 3D camera-relative coordinates. Essential for MPC control loop that needs
+        world coordinates of detected person.
+        
+        Args:
+            u: Pixel X coordinate (0 to 672)
+            v: Pixel Y coordinate (0 to 376)
+            z: Depth value from ZED2 depth map (meters)
+        
+        Returns:
+            (X, Y, Z): 3D coordinates in camera frame (meters)
+                X: Horizontal offset from camera principal axis
+                Y: Vertical offset from camera principal axis  
+                Z: Depth along camera Z axis
+        """
+        X = (u - self.cx) * z / self.fx
+        Y = (v - self.cy) * z / self.fy
+        return X, Y, z
 
     def _get_weighted_depth_in_bbox(self, bbox: Tuple[int, int, int, int],
                                     depth_map: np.ndarray, h_img: int, w_img: int) -> Optional[float]:
@@ -422,6 +509,50 @@ class TrackingNode(Node):
         median_idx = min(median_idx, len(sorted_depths) - 1)
 
         return float(sorted_depths[median_idx])
+
+    def _update_gesture_buffer(self, raw_gesture: str) -> str:
+        """Update gesture buffer with voting mechanism (Hysteresis - Anti-Flickering)
+        
+        Per Gemini recommendation: Use buffer voting to eliminate gesture flickering.
+        Only confirm gesture when it appears in ≥60% of buffer frames (9/15 at default).
+        
+        This prevents "detect then immediately disappear" issue by requiring consensus
+        across multiple frames before confirming a command.
+        
+        Args:
+            raw_gesture: Current frame's detected gesture ("START", "STOP", or "NONE")
+            
+        Returns:
+            confirmed_gesture: Gesture confirmed by voting ("START", "STOP", or "NONE")
+        """
+        # Add current gesture to buffer
+        self.gesture_buffer.append(raw_gesture)
+        
+        # Count occurrences in buffer
+        start_count = self.gesture_buffer.count("START")
+        stop_count = self.gesture_buffer.count("STOP")
+        
+        # Determine confirmed gesture based on majority voting threshold (Gemini's voting mechanism)
+        # Need 60% consensus (9/15 frames by default) for confirmation
+        min_required = int(self.gesture_buffer_size * self.gesture_confirmation_ratio)
+        
+        if start_count >= min_required:
+            self.confirmed_gesture = "START"
+        elif stop_count >= min_required:
+            self.confirmed_gesture = "STOP"
+        else:
+            self.confirmed_gesture = "NONE"
+        
+        # Debug: Log voting state occasionally
+        if len(self.gesture_buffer) == self.gesture_buffer_size:  # Only when buffer full
+            if raw_gesture != "NONE":
+                self.get_logger().debug(
+                    f'📊 Gesture Voting: START={start_count}/{self.gesture_buffer_size}, '
+                    f'STOP={stop_count}/{self.gesture_buffer_size}, '
+                    f'CONFIRMED={self.confirmed_gesture} (need {min_required})'
+                )
+        
+        return self.confirmed_gesture
 
     def _synced_callback(self, img_msg: Image, depth_msg: Image):
         """Process RGB and Depth simultaneously (perfectly synchronized by message_filters)
@@ -549,6 +680,9 @@ class TrackingNode(Node):
                             0 <= y1 < h_img and 0 <= y2 < h_img):
                         continue
                     
+                    # BoT-SORT with Two-Stage Matching is sufficient for person validation
+                    # (No need for height check - triggers frozen bbox when raising arms)
+                    
                     person_detections.append({
                         'box': (int(x1), int(y1), int(x2), int(y2)),
                         'confidence': float(conf),
@@ -559,89 +693,61 @@ class TrackingNode(Node):
         except Exception as e:
             self.get_logger().warn(f'Person detection error: {e}', throttle_duration_sec=2.0)
 
-        # ===== DETECT HANDS (BATCHED ROI CROP - Tối ưu GPU & Độ chính xác) =====
+        # ===== DETECT HANDS (FULL FRAME INFERENCE - KHỚP VỚI REF_YOLO) =====
+        # Chạy mô hình Hand trực tiếp trên TOÀN BỘ khung hình gốc (giống hệt detect_handsign.py)
+        # Nguyên nhân fix: Batched ROI crop gây Scale Distortion (bàn tay bị phóng to, YOLO không nhận ra)
+        # Giải pháp: Full-frame inference như ref_yolo - mô hình được huấn luyện trên toàn khung hình
         hand_detections = []
         try:
-            if len(person_detections) > 0:
-                hand_crops = []
-                crop_infos = []
-                
-                # Sắp xếp ưu tiên 2 người to nhất (gần camera nhất) để quét tay, tránh lãng phí VRAM
-                person_detections_sorted = sorted(person_detections, 
-                    key=lambda det: (det['box'][2]-det['box'][0]) * (det['box'][3]-det['box'][1]), 
-                    reverse=True)
-                
-                for person_idx, p_det in enumerate(person_detections_sorted[:2]):
-                    px1, py1, px2, py2 = p_det['box']
-                    pw, ph = px2 - px1, py2 - py1
+            # Chạy trực tiếp trên khung hình gốc, không crop ROI
+            hand_results = self._hand_yolo.predict(
+                frame, 
+                conf=0.30,  # Lower threshold at GPU level to get candidates
+                verbose=False, 
+                device=self._device, 
+                half=self.use_fp16
+            )[0]
+            
+            if hand_results is not None and len(hand_results.boxes) > 0:
+                for box in hand_results.boxes.data:
+                    x1, y1, x2, y2, conf, cls_id = box.cpu().numpy()
+                    cls_id_int = int(cls_id)
                     
-                    # Nới rộng vùng cắt ra 10% chiều ngang để hứng trọn sải tay dài
-                    exp_x, exp_y = int(pw * 0.10), int(ph * 0.05)
-                    crop_x1, crop_y1 = max(0, int(px1) - exp_x), max(0, int(py1) - exp_y)
-                    crop_x2, crop_y2 = min(w_img, int(px2) + exp_x), min(h_img, int(py2) + exp_y)
+                    # OPTIMIZATION per Gemini: Higher thresholds to reduce false positives
+                    # START (class 0) = 0.85: Very confident (small thumbs-up is hard to see)
+                    # STOP (class 1) = 0.55: Conservative for open palm detection
+                    threshold = 0.85 if cls_id_int == 0 else 0.55
+                    if conf < threshold:
+                        continue
                     
-                    crop_frame = frame[crop_y1:crop_y2, crop_x1:crop_x2]
-                    if crop_frame.size > 0:
-                        hand_crops.append(crop_frame)
-                        crop_infos.append((crop_x1, crop_y1))
-                
-                # GỌI YOLO 1 LẦN DUY NHẤT CHO TẤT CẢ CÁC ẢNH CROP (Chạy CUDA song song)
-                if hand_crops:
-                    try:
-                        batch_results = self._hand_yolo.predict(
-                            hand_crops, 
-                            conf=0.45,  # Hạ nhẹ ở cấp độ GPU để lấy đủ Data
-                            verbose=False, 
-                            device=self._device, 
-                            half=self.use_fp16
-                        )
-                        
-                        # Xử lý kết quả trả về tương ứng với từng ảnh cắt
-                        for idx, result in enumerate(batch_results):
-                            offset_x, offset_y = crop_infos[idx]
-                            
-                            if result is not None and len(result.boxes) > 0:
-                                for box in result.boxes.data:
-                                    x1, y1, x2, y2, conf, cls_id = box.cpu().numpy()
-                                    cls_id_int = int(cls_id)
-                                    
-                                    # Yêu cầu của bạn: Nâng độ tin cậy lên 0.45 cho START và 0.30 cho STOP
-                                    threshold = 0.45 if cls_id_int == 0 else 0.30
-                                    if conf < threshold:
-                                        continue
-                                        
-                                    # Chuyển tọa độ từ ảnh Crop về lại hệ quy chiếu khung hình gốc
-                                    x1_full = int(x1 + offset_x)
-                                    y1_full = int(y1 + offset_y)
-                                    x2_full = int(x2 + offset_x)
-                                    y2_full = int(y2 + offset_y)
-                                    
-                                    # Lọc theo chiều cao y_ratio để bỏ qua nhiễu dưới chân/trần nhà
-                                    hcy = (y1_full + y2_full) / 2
-                                    if not (self.gesture_y_min_ratio * h_img <= hcy <= self.gesture_y_max_ratio * h_img):
-                                        continue
-                                        
-                                    hand_detections.append({
-                                        'box': (x1_full, y1_full, x2_full, y2_full),
-                                        'confidence': float(conf),
-                                        'conf': float(conf),
-                                        'class_id': cls_id_int,
-                                        'label': "START" if cls_id_int == 0 else "STOP"
-                                    })
-                    except Exception as e:
-                        self.get_logger().debug(f'Batched hand detection error: {e}')
+                    # Validate coordinates
+                    if not (0 <= x1 < w_img and 0 <= x2 < w_img and 
+                            0 <= y1 < h_img and 0 <= y2 < h_img):
+                        continue
+                    
+                    # Lọc theo chiều cao y_ratio để bỏ qua nhiễu dưới chân/trần nhà
+                    hcy = (y1 + y2) / 2
+                    if not (self.gesture_y_min_ratio * h_img <= hcy <= self.gesture_y_max_ratio * h_img):
+                        continue
+                    
+                    hand_detections.append({
+                        'box': (int(x1), int(y1), int(x2), int(y2)),
+                        'confidence': float(conf),
+                        'conf': float(conf),
+                        'class_id': cls_id_int,
+                        'label': "START" if cls_id_int == 0 else "STOP"
+                    })
 
-                # ===== APPLY DEPTH-AWARE NMS =====
-                if HAS_DEPTH_NMS and self._depth_nms and self._current_depth_map is not None and len(hand_detections) > 0:
-                    try:
-                        # conf_threshold = 0.0 do ta đã tự lọc ngưỡng 0.35/0.55 ở trên
-                        hand_detections = self._depth_nms.apply(
-                            hand_detections, 
-                            self._current_depth_map,
-                            conf_threshold=0.0
-                        )
-                    except Exception as e:
-                        self.get_logger().warn(f'Depth-Aware NMS error: {e}', throttle_duration_sec=5.0)
+            # ===== APPLY DEPTH-AWARE NMS =====
+            if HAS_DEPTH_NMS and self._depth_nms and self._current_depth_map is not None and len(hand_detections) > 0:
+                try:
+                    hand_detections = self._depth_nms.apply(
+                        hand_detections, 
+                        self._current_depth_map,
+                        conf_threshold=0.0
+                    )
+                except Exception as e:
+                    self.get_logger().warn(f'Depth-Aware NMS error: {e}', throttle_duration_sec=5.0)
 
         except Exception as e:
             self.get_logger().error(f'Hand detection root error: {e}', throttle_duration_sec=2.0)
@@ -701,10 +807,14 @@ class TrackingNode(Node):
             self.target_lost_time = None
             self.get_logger().info('✅ Target reacquired, back to TRACKING')
 
-        # ===== GESTURE STATE MACHINE (ROBUST LOGIC TỪ REF_YOLO) =====
-        # Use GLOBAL timers instead of per-track timers (no BoTSort jitter!)
-        start_found_in_frame = False
-        stop_found_in_frame = False
+        # ===== GESTURE STATE MACHINE (WITH HYSTERESIS BUFFER VOTING) =====
+        # Use gesture buffer voting mechanism per Gemini recommendation:
+        # Confirms gesture only when it appears in 70%+ of recent frames
+        # This eliminates "detect then disappear" flickering
+        
+        # Detect raw gesture from current frame
+        raw_gesture_this_frame = "NONE"
+        matched_person_for_gesture = None
         
         for hand_track in hand_tracks:
             label = hand_track['label'].upper()
@@ -713,71 +823,99 @@ class TrackingNode(Node):
             
             if matched_person_id is None:
                 continue
+            
+            # OPTIMIZATION: Check depth consistency (hand must be reasonably close to person)
+            # This eliminates false positives from background objects with similar geometry
+            person_bbox = next((p['bbox'] for p in person_tracks if p['track_id'] == matched_person_id), None)
+            if person_bbox and self._current_depth_map is not None:
+                hand_depth = self._get_depth_at_center(hand_track['bbox'], self._current_depth_map, h_img, w_img)
+                person_depth = self._get_depth_at_center(person_bbox, self._current_depth_map, h_img, w_img)
                 
-            # --- XỬ LÝ LỆNH START ---
+                # If hand is more than 60cm away from person, reject it (likely false positive)
+                if hand_depth is not None and person_depth is not None:
+                    if abs(hand_depth - person_depth) > self.max_hand_person_depth_diff:
+                        continue
+            
+            # Detect which gesture (START or STOP)
             if label == "START" and self.current_state == 'IDLE':
-                start_found_in_frame = True
-                self.last_start_seen_time = ts_now
-                
-                if not self.start_signal_detected:
-                    self.start_signal_detected = True
-                    self.start_signal_time = ts_now
-                    self.get_logger().info(f'▶ START signal detected (Person #{matched_person_id}). Holding for {self.gesture_hold_time}s...')
-                else:
-                    elapsed = ts_now - self.start_signal_time
-                    if elapsed >= self.gesture_hold_time:
-                        self.main_target_id = matched_person_id
-                        self.current_state = 'TRACKING'
-                        self.target_lock_time = ts_now
-                        self.target_visible = True
-                        
-                        if matched_person_id not in self.ekfs:
-                            self.ekfs[matched_person_id] = CTRV_EKF(dt=1/30.0)
-                            self.velocity_filters[matched_person_id] = VelocityFilter(alpha=0.3)
-                            self.position_history[matched_person_id] = deque(maxlen=self.max_position_history)
-                            
-                        self.get_logger().info(f'🔒 LOCKED onto Person #{matched_person_id}')
-                        self.start_signal_detected = False
-                        self.start_signal_time = None
-                        
-                        msg = String()
-                        msg.data = f"START(1000ms)<p={matched_person_id}>"
-                        self._pub_gesture.publish(msg)
-                        
-            # --- XỬ LÝ LỆNH STOP ---
+                raw_gesture_this_frame = "START"
+                matched_person_for_gesture = matched_person_id
+                break  # Take first valid gesture in frame
             elif label == "STOP" and self.current_state in ['TRACKING', 'Re-TRACKING']:
-                # Chỉ nhận STOP từ người đang bị theo dõi
                 if matched_person_id == self.main_target_id:
-                    stop_found_in_frame = True
-                    self.last_stop_seen_time = ts_now
-                    
-                    if self.stop_detected_time is None:
-                        self.stop_detected_time = ts_now
-                        self.get_logger().info(f'⏹ STOP signal detected from Target #{matched_person_id}. Holding for {self.gesture_hold_time}s...')
-                    else:
-                        elapsed = ts_now - self.stop_detected_time
-                        if elapsed >= self.gesture_hold_time:
-                            self.current_state = 'IDLE'
-                            self.main_target_id = None
-                            self.target_lost_time = None
-                            self.get_logger().info('🔓 Tracking STOPPED by user')
-                            self.stop_detected_time = None
-                            
-                            msg = String()
-                            msg.data = f"STOP(1000ms)<p={matched_person_id}>"
-                            self._pub_gesture.publish(msg)
-
-        # --- XỬ LÝ TIMEOUT (CHỐNG MẤT TÍN HIỆU GIỮA CHỚP NHÁNG) ---
-        if self.start_signal_detected and not start_found_in_frame:
-            if self.last_start_seen_time and (ts_now - self.last_start_seen_time > self.signal_timeout):
-                self.start_signal_detected = False
-                self.start_signal_time = None
-                self.get_logger().info('⏳ START signal lost (mất tín hiệu > 1s). Timer reset.')
+                    raw_gesture_this_frame = "STOP"
+                    matched_person_for_gesture = matched_person_id
+                    break
+        
+        # Update gesture buffer with voting mechanism (Hysteresis filter)
+        confirmed_gesture = self._update_gesture_buffer(raw_gesture_this_frame)
+        
+        # Now check if confirmed gesture meets timing requirement
+        if confirmed_gesture == "START" and self.current_state == 'IDLE':
+            if not self.start_signal_detected:
+                self.start_signal_detected = True
+                self.start_signal_time = ts_now
+                self.last_start_seen_time = ts_now
+                self.get_logger().info(f'▶ START signal CONFIRMED via buffer voting (Person #{matched_person_for_gesture}). Holding for {self.gesture_hold_time}s...')
+            else:
+                self.last_start_seen_time = ts_now
+                elapsed = ts_now - self.start_signal_time
                 
-        if self.stop_detected_time is not None and not stop_found_in_frame:
-            if self.last_stop_seen_time and (ts_now - self.last_stop_seen_time > self.signal_timeout):
-                self.stop_detected_time = None
-                self.get_logger().info('⏳ STOP signal lost (mất tín hiệu > 1s). Timer reset.')
+                # Only time check now (buffer voting already filters noise)
+                if elapsed >= self.gesture_hold_time:
+                    self.main_target_id = matched_person_for_gesture
+                    self.current_state = 'TRACKING'
+                    self.target_lock_time = ts_now
+                    self.target_visible = True
+                    
+                    if matched_person_for_gesture not in self.ekfs:
+                        self.ekfs[matched_person_for_gesture] = CTRV_EKF(dt=1/30.0)
+                        self.velocity_filters[matched_person_for_gesture] = VelocityFilter(alpha=0.3)
+                        self.position_history[matched_person_for_gesture] = deque(maxlen=self.max_position_history)
+                    
+                    self.get_logger().info(f'🔒 LOCKED onto Person #{matched_person_for_gesture} via START gesture')
+                    self.start_signal_detected = False
+                    self.start_signal_time = None
+                    self.gesture_buffer.clear()  # Clear buffer after confirming action
+                    
+                    msg = String()
+                    msg.data = f"START(1000ms)<p={matched_person_for_gesture}>"
+                    self._pub_gesture.publish(msg)
+        
+        elif confirmed_gesture == "STOP" and self.current_state in ['TRACKING', 'Re-TRACKING']:
+            if self.stop_detected_time is None:
+                self.stop_detected_time = ts_now
+                self.last_stop_seen_time = ts_now
+                self.get_logger().info(f'⏹ STOP signal CONFIRMED via buffer voting from Target #{matched_person_for_gesture}. Holding for {self.gesture_hold_time}s...')
+            else:
+                self.last_stop_seen_time = ts_now
+                elapsed = ts_now - self.stop_detected_time
+                
+                # Only time check now (buffer voting already filters noise)
+                if elapsed >= self.gesture_hold_time:
+                    self.current_state = 'IDLE'
+                    self.main_target_id = None
+                    self.target_lost_time = None
+                    self.get_logger().info(f'🔓 Tracking STOPPED by user via STOP gesture')
+                    self.stop_detected_time = None
+                    self.gesture_buffer.clear()  # Clear buffer after confirming action
+                    
+                    msg = String()
+                    msg.data = f"STOP(1000ms)<p={matched_person_for_gesture}>"
+                    self._pub_gesture.publish(msg)
+        
+        else:
+            # Gesture no longer confirmed via voting buffer
+            if self.start_signal_detected and confirmed_gesture != "START":
+                if self.last_start_seen_time and (ts_now - self.last_start_seen_time > self.signal_timeout):
+                    self.start_signal_detected = False
+                    self.start_signal_time = None
+                    self.get_logger().info('⏳ START gesture lost (not confirmed by buffer). Timer reset.')
+            
+            if self.stop_detected_time is not None and confirmed_gesture != "STOP":
+                if self.last_stop_seen_time and (ts_now - self.last_stop_seen_time > self.signal_timeout):
+                    self.stop_detected_time = None
+                    self.get_logger().info('⏳ STOP gesture lost (not confirmed by buffer). Timer reset.')
 
         # ===== PUBLISH KẾT QUẢ ĐỂ HIỂN THỊ VÀ STATE MACHINE =====
         self._publish_annotated_image(frame, person_tracks, hand_tracks, h_img, w_img)
