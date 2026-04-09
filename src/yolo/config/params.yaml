@@ -8,7 +8,7 @@ yolo:
                                  # Tracker interpolates across frames → stable bbox, even when 1-2 frames miss
   
   # Hand gesture detection
-  handsign_conf_thresh: 0.35     # CỰC KỲ QUAN TRỌNG: Hạ xuống 0.45 để không miss tay nhỏ ở độ phân giải VGA/WVGA
+  handsign_conf_thresh: 0.50     # CỰC KỲ QUAN TRỌNG: Hạ xuống 0.45 để không miss tay nhỏ ở độ phân giải VGA/WVGA
   
   # Non-Maximum Suppression
   iou_thresh: 0.45               # IOU threshold for NMS

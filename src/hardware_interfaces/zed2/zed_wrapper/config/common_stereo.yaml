@@ -85,7 +85,7 @@
             publish_roi_mask: false # Advertise the ROI mask image topic that is published only if a node subscribes to it
 
         depth:
-            depth_mode: 'PERFORMANCE' # Optimized for performance: 'NEURAL_LIGHT' (fast), 'NEURAL' (accurate)
+            depth_mode: 'NEURAL' # Optimized for performance: 'NEURAL_LIGHT' (fast), 'NEURAL' (accurate)
             depth_stabilization: 0 # Forces positional tracking to start if major thanF 0 - Range: [0,100]
             openni_depth_mode: false # 'false': 32bit float [meters], 'true': 16bit unsigned int [millimeters]
             point_cloud_freq: 2.0 # [DYNAMIC] Frequency of the pointcloud publishing. This value must be equal or less than the camera framerate.
