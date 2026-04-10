@@ -14,7 +14,7 @@ import time
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from std_msgs.msg import String
-from interfaces.msg import HumanState
+from interfaces.msg import HumanState, SystemState
 
 from .state_manager import RobotStateMachine, StateConfig, TrackingTarget, RobotState
 
@@ -56,7 +56,7 @@ class RobotStateMachineNode(Node):
         )
         
         self.state_pub = self.create_publisher(String, '/system/robot_status', 10)
-        self.system_state_pub = self.create_publisher(String, '/system_state', 10) 
+        self.system_state_pub = self.create_publisher(SystemState, '/system_state', 10) 
         self.predicted_target_pub = self.create_publisher(HumanState, '/tracking/predicted_target', qos_best)
         
         self.create_subscription(HumanState, '/tracking/main_person', self._person_callback, qos_best)
@@ -115,7 +115,11 @@ class RobotStateMachineNode(Node):
         state_msg = String()
         state_msg.data = self.state_machine.current_state.value
         self.state_pub.publish(state_msg)
-        self.system_state_pub.publish(state_msg)
+        
+        # Publish system state using SystemState interface
+        system_state_msg = SystemState()
+        system_state_msg.state = self.state_machine.current_state.value
+        self.system_state_pub.publish(system_state_msg)
         
         if self.state_machine.current_state == RobotState.RE_TRACKING and self.last_person_state:
             self._publish_prediction()
