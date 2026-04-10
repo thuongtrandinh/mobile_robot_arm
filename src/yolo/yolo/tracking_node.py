@@ -314,6 +314,8 @@ class TrackingNode(Node):
         self._pub_gesture = self.create_publisher(String, '/yolo/gesture_command', 10)
         # ===== 9b. HUMAN STATE PUBLISHER (for state machine integration) =====
         self._pub_human_state = self.create_publisher(HumanState, '/tracking/main_person', 10)
+        # ===== 9b2. GOAL POSE PUBLISHER (for controller/nav2) =====
+        self._pub_goal_pose = self.create_publisher(PoseStamped, '/goal_pose', 10)
         # ===== 9c. OBSTACLES PUBLISHER (for perception layer) =====
         # Updated: Use ObstacleArray for multiple dynamic obstacles
         self._pub_obstacles = self.create_publisher(ObstacleArray, '/tracking/obstacles', 10)
@@ -1228,11 +1230,50 @@ class TrackingNode(Node):
                         msg.py = ekf_y
                         msg.vx = final_vx
                         msg.vy = final_vy
-                        msg.radius = 1.5  # Safety distance for main person
+                        msg.radius = float(radius)  # Use actual physical size from bbox (goal_pose already maintains 1.5m safety distance)
                         msg.trajectory = [predicted_path]
                         
                         self._pub_human_state.publish(msg)
-                        self.get_logger().debug(f'🎯 Main target (ID={tid}): px={msg.px:.2f}, py={msg.py:.2f}, vx={msg.vx:.2f}, vy={msg.vy:.2f}')
+                        self.get_logger().debug(f'🎯 Main target (ID={tid}): px={msg.px:.2f}, py={msg.py:.2f}, radius={msg.radius:.2f}m, vx={msg.vx:.2f}, vy={msg.vy:.2f}')
+                        
+                        # ===== PUBLISH GOAL POSE FOR CONTROLLER (WITH 1.5M SAFETY DISTANCE) ===== 
+                        goal_msg = PoseStamped()
+                        goal_msg.header = obstacle_array_msg.header  # Inherit stamp and frame_id
+                        
+                        # Configure safe stopping distance: robot keeps 1.5m away from person
+                        SAFE_DISTANCE = 1.5
+                        distance_to_person = math.sqrt(ekf_x**2 + ekf_y**2)
+                        
+                        # Calculate goal position maintaining safe distance from person
+                        if distance_to_person > SAFE_DISTANCE:
+                            # Use proportional scaling: pull goal point back to maintain SAFE_DISTANCE
+                            # Example: if person at 3m, goal positioned at 1.5m from origin (robot center)
+                            ratio = (distance_to_person - SAFE_DISTANCE) / distance_to_person
+                            goal_x = ekf_x * ratio
+                            goal_y = ekf_y * ratio
+                        else:
+                            # Robot already within safe zone: set goal to current position (0,0)
+                            # This triggers emergency brake to prevent collision
+                            goal_x = 0.0
+                            goal_y = 0.0
+                        
+                        goal_msg.pose.position.x = float(goal_x)
+                        goal_msg.pose.position.y = float(goal_y)
+                        goal_msg.pose.position.z = 0.0
+                        
+                        # Calculate yaw angle using ACTUAL person position (not adjusted goal)
+                        # This ensures robot always faces toward the person for tracking stability
+                        yaw = math.atan2(ekf_y, ekf_x)
+                        
+                        # Convert Euler angle (yaw) to Quaternion
+                        goal_msg.pose.orientation.x = 0.0
+                        goal_msg.pose.orientation.y = 0.0
+                        goal_msg.pose.orientation.z = math.sin(yaw / 2.0)
+                        goal_msg.pose.orientation.w = math.cos(yaw / 2.0)
+                        
+                        self._pub_goal_pose.publish(goal_msg)
+                        self.get_logger().debug(f'📍 Goal Pose (safety={SAFE_DISTANCE}m): dist={distance_to_person:.2f}m, ' 
+                                              f'goal=({goal_x:.2f}, {goal_y:.2f}), yaw={math.degrees(yaw):.1f}°')
                     else:
                         # Publish other people as obstacles
                         obs = DynaObstacle()
