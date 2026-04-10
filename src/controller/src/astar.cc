@@ -125,16 +125,32 @@ std::vector<struct Point> AStar::SearchPath(const cv::Mat& costmap,
 std::vector<struct Point> AStar::SearchPath(const cv::Mat &costmap,
                                             const Eigen::Vector2d &start, 
                                             const Eigen::Vector2d &goal) {
+  return SearchPath(costmap, start, goal, 0.0, 0.0);
+}
+
+std::vector<struct Point> AStar::SearchPath(const cv::Mat &costmap,
+                                            const Eigen::Vector2d &start,
+                                            const Eigen::Vector2d &goal,
+                                            double origin_x,
+                                            double origin_y) {
   /*
       The coord system used in geometric plann has its origin at the
     bottom-left corner, with y axis increasing upwards and x increasing 
     to the right, which is different from cv::Mat.
   */
-  int idx_sx = (int)round((start(0) + kHalfMapWidth) / kMapResol);
-  int idx_sy = (int)round((start(1) + kHalfMapHeight) / kMapResol);
+  int idx_sx = static_cast<int>(std::round((start(0) - origin_x) / kMapResol)) + costmap.cols / 2;
+  int idx_sy = static_cast<int>(std::round((start(1) - origin_y) / kMapResol)) + costmap.rows / 2;
   
-  int idx_gx = (int)round((goal(0) + kHalfMapWidth) / kMapResol);
-  int idx_gy = (int)round((goal(1) + kHalfMapHeight) / kMapResol);
+  int idx_gx = static_cast<int>(std::round((goal(0) - origin_x) / kMapResol)) + costmap.cols / 2;
+  int idx_gy = static_cast<int>(std::round((goal(1) - origin_y) / kMapResol)) + costmap.rows / 2;
+
+  if (idx_sx < 0) idx_sx = 0;
+  if (idx_sy < 0) idx_sy = 0;
+  if (idx_gx < 0) idx_gx = 0;
+  if (idx_gy < 0) idx_gy = 0;
+
+  if (idx_sx >= costmap.cols) idx_sx = costmap.cols - 1;
+  if (idx_gx >= costmap.cols) idx_gx = costmap.cols - 1;
 
   if (idx_sy >= costmap.rows) idx_sy = costmap.rows - 1;
   if (idx_gy >= costmap.rows) idx_gy = costmap.rows - 1;
@@ -144,7 +160,12 @@ std::vector<struct Point> AStar::SearchPath(const cv::Mat &costmap,
         idx_gx << ", " << idx_gy << ")" << std::endl;
   }
 
-  return SearchPath(costmap, idx_sx, idx_sy, idx_gx, idx_gy);
+  auto path = SearchPath(costmap, idx_sx, idx_sy, idx_gx, idx_gy);
+  for (auto &pt : path) {
+    pt.x += (origin_x - (costmap.cols / 2) * kMapResol);
+    pt.y += (origin_y - (costmap.rows / 2) * kMapResol);
+  }
+  return path;
 }
 
 std::vector<std::vector<int>> AStar::GetNeighbors(int x, int y) {

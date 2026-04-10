@@ -31,8 +31,8 @@ static constexpr float kDT = 0.25;
 
 static constexpr double kMaxLinearVel  = 1.0;
 static constexpr double kMaxLinearAcc  = 1.0;
-static constexpr double kMaxAngularVel = 3.0;
-static constexpr double kMaxAngularAcc = 3.0;
+static constexpr double kMaxAngularVel = 1.0;
+static constexpr double kMaxAngularAcc = 1.0;
 
 // st search
 static constexpr double kSTHalfLocalRange = kDT * (kNP - 1) * 1.0;

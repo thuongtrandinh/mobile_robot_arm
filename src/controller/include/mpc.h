@@ -33,8 +33,8 @@ class Mpc {
     params_->np = kNP;
     params_->max_linear_vel = 1.0;
     params_->max_linear_acc = 1.0;
-    params_->max_angular_vel = 3.0;
-    params_->max_angular_acc = 3.0;
+    params_->max_angular_vel = 1.0;
+    params_->max_angular_acc = 1.0;
     params_->local_obst_num = 6;
   }
 

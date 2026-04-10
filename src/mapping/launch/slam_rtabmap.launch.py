@@ -22,10 +22,13 @@ def generate_launch_description():
     rgb_topic = LaunchConfiguration("rgb_topic")
     depth_topic = LaunchConfiguration("depth_topic")
     camera_info_topic = LaunchConfiguration("camera_info_topic")
+    # topic_queue_size = LaunchConfiguration("topic_queue_size")
+    # sync_queue_size = LaunchConfiguration("sync_queue_size")
+    # approx_sync_max_interval = LaunchConfiguration("approx_sync_max_interval")
 
     use_sim_time_arg = DeclareLaunchArgument(
         "use_sim_time",
-        default_value="false",
+        default_value="true",
         description="Use simulation clock",
     )
     cfg_arg = DeclareLaunchArgument(
@@ -68,6 +71,21 @@ def generate_launch_description():
         default_value="/zed/zed_node/rgb/color/rect/camera_info",
         description="Camera info topic used when use_zed=true",
     )
+    # topic_queue_size_arg = DeclareLaunchArgument(
+    #     "topic_queue_size",
+    #     default_value="30",
+    #     description="RTAB-Map topic queue size for each subscribed input",
+    # )
+    # sync_queue_size_arg = DeclareLaunchArgument(
+    #     "sync_queue_size",
+    #     default_value="30",
+    #     description="RTAB-Map synchronization queue size",
+    # )
+    # approx_sync_max_interval_arg = DeclareLaunchArgument(
+    #     "approx_sync_max_interval",
+    #     default_value="0.2",
+    #     description="Max interval (s) allowed for approximate synchronization",
+    # )
 
     ekf_filter_node = Node(
         package="robot_localization",
@@ -75,7 +93,7 @@ def generate_launch_description():
         name="ekf_filter_node",
         output="screen",
         parameters=[
-            os.path.join(localization_dir, "config", "ekf_zed2.yaml"),
+            os.path.join(localization_dir, "config", "ekf.yaml"),
             {"use_sim_time": use_sim_time},
         ],
     )
@@ -103,7 +121,9 @@ def generate_launch_description():
             "depth_topic": depth_topic,
             "camera_info_topic": camera_info_topic,
             "approx_sync": "true",
-            "approx_sync_max_interval": "0.05",
+            # "approx_sync_max_interval": approx_sync_max_interval,
+            # "topic_queue_size": topic_queue_size,
+            # "sync_queue_size": sync_queue_size,
             "odom_sensor_sync": "false",
             "visual_odometry": "false",
             "icp_odometry": "false",
@@ -132,6 +152,9 @@ def generate_launch_description():
             rgb_topic_arg,
             depth_topic_arg,
             camera_info_topic_arg,
+            # topic_queue_size_arg,
+            # sync_queue_size_arg,
+            # approx_sync_max_interval_arg,
             ekf_filter_node,
             rtabmap_slam,
         ]

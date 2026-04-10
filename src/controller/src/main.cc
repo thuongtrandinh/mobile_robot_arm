@@ -107,7 +107,6 @@ void PlannSrvCallback(
     res->ar = -req->ob.robot_state.vr / kDT;
     res->revised_goal.x = sub_goal.x();
     res->revised_goal.y = sub_goal.y();
-    if (_verbose >= 1) std::cout << "Ocp plann failed!" << std::endl;
     cur_control_var.al = res->al;
     cur_control_var.ar = res->ar;
     for (int i = 0; i < kNP; ++i) {
