@@ -61,7 +61,7 @@
 	<xacro:property name="wheel_radius" value="0.05"/>
 	<xacro:property name="wheel_width" value="0.03"/>
 	<xacro:property name="wheel_mass" value="0.3"/>
-	<xacro:property name="wheel_separation" value="0.42"/>
+	<xacro:property name="wheel_separation" value="0.5"/>
 	<xacro:property name="PI" value="3.1415926535897931"/>
 	    
 	<xacro:macro name="cylinder_inertia" params="m r h">
@@ -355,20 +355,20 @@
 <joint name="caster_wheel_joint" type="fixed">
 		<parent link="base_link"/>
 		<child link="caster_wheel"/>
-		<origin xyz="-0.1 0.0 -0.015"/>
+		<origin xyz="-0.1 0.0 -0.022"/>
 	</joint>
 
 	<link name="caster_wheel">
 		<visual>
 			<geometry>
-				<sphere radius="0.015"/>
+				<sphere radius="0.03"/>
 			</geometry>
 			<material name="red"/>
 		</visual>
 
 		<collision>
 			<geometry>
-				<sphere radius="0.015"/>
+				<sphere radius="0.03"/>
 			</geometry>
 		</collision>
 

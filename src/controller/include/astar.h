@@ -46,6 +46,12 @@ class AStar {
                                        const Eigen::Vector2d &start, 
                                        const Eigen::Vector2d &goal);
 
+  std::vector<struct Point> SearchPath(const cv::Mat &costmap,
+                                       const Eigen::Vector2d &start,
+                                       const Eigen::Vector2d &goal,
+                                       double origin_x,
+                                       double origin_y);
+
  private:
   std::vector<std::vector<struct AStarNode>> nodes_;
   std::vector<std::vector<int>> GetNeighbors(int x, int y);

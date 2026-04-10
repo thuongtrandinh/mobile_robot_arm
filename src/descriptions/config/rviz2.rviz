@@ -6,7 +6,7 @@ Panels:
       Expanded:
         - /Global Options1
         - /ParticleCloud1/Topic1
-        - /MarkerArray2
+        - /MarkerArray3
       Splitter Ratio: 0.5
     Tree Height: 356
   - Class: rviz_common/Selection
@@ -396,6 +396,18 @@ Visualization Manager:
         Reliability Policy: Reliable
         Value: /a_star_path
       Value: true
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: MarkerArray
+      Namespaces:
+        {}
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /planner/debug_markers
+      Value: true
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48
@@ -442,7 +454,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz_default_plugins/Orbit
-      Distance: 39.89702224731445
+      Distance: 27.188703536987305
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -457,10 +469,10 @@ Visualization Manager:
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 1.2997965812683105
+      Pitch: 1.5697963237762451
       Target Frame: <Fixed Frame>
       Value: Orbit (rviz)
-      Yaw: 3.325378179550171
+      Yaw: 3.205378293991089
     Saved: ~
 Window Geometry:
   Displays:
@@ -480,5 +492,5 @@ Window Geometry:
   Views:
     collapsed: false
   Width: 1200
-  X: 2133
+  X: 720
   Y: 113

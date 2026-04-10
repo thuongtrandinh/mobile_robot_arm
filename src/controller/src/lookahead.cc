@@ -112,11 +112,7 @@ std::vector<struct Point> LookAhead::UpdateVelocity(
     }
   }
   if (final_path.size() != 0) final_path.back().v = 0;
-  // simple coord trans
-  for (auto &pt: final_path) {
-    pt.x -= kHalfMapWidth;
-    pt.y -= kHalfMapHeight;
-  }
+  // Path points are already in world coordinates from A* sliding-window mapping.
   return final_path;
 }
 /* (params.l - params.d) represent segment_len_sum */

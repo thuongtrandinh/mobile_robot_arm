@@ -28,43 +28,6 @@
 
 namespace robot_plann {
 
-inline cv::Point MapCoord2ImgIdx(const Eigen::Vector2d &pt, bool vis = false) {
-  if (abs(pt(0)) > kHalfMapWidth || abs(pt(1)) > kHalfMapHeight) {
-    std::stringstream err;
-    err << "Invalid coord: " << pt(0) << ", " << pt(1);
-    throw err.str();
-  }
-  cv::Point idx;
-  idx.x = (int)round((pt(0) + kHalfMapWidth) / kMapResol);
-  idx.y = (int)round((kHalfMapHeight - pt(1)) / kMapResol);
-  if (vis) {
-    idx.x = (int)round(idx.x * kVisualScale);
-    idx.y = (int)round(idx.y * kVisualScale);
-  }
-  return idx;
-}
-
-inline Eigen::Vector2d ImgIdx2MapCoord(const cv::Point &idx,
-                                       bool vis = false) {
-  Eigen::Vector2d pt;
-  if (vis) {
-    pt(0) = idx.x / kVisualScale * kMapResol - kHalfMapWidth;
-    pt(1) = kHalfMapHeight - idx.y / kVisualScale * kMapResol;
-  } else {
-    pt(0) = idx.x * kMapResol - kHalfMapWidth;
-    pt(1) = kHalfMapHeight - idx.y * kMapResol;
-  }
-  return pt;
-}
-
-inline void Vertices2Contour(const std::vector<Eigen::Vector2d> &vertices,
-                             std::vector<cv::Point> &contour) {
-  if (contour.size()) contour.clear();
-  for (int i = 0; i < (int)vertices.size(); i++) {
-    contour.push_back(MapCoord2ImgIdx(vertices[i]));
-  }
-}
-
 class Planner {
  public:
   explicit Planner(int verbose = 0)
@@ -136,6 +99,8 @@ class Planner {
                     const std::vector<Eigen::Vector2d> &vertices);
   
   bool SimpleRayCast(Eigen::Vector2d &goal, const Eigen::Vector2d &pos);
+  cv::Point MapCoord2ImgIdx(const Eigen::Vector2d &pt, bool vis = false) const;
+  Eigen::Vector2d ImgIdx2MapCoord(const cv::Point &idx, bool vis = false) const;
   Eigen::Vector2d PidCalc(const JointState &state);
   static void PybindInputDataChange(const robot_plann::MPCInputForPython& input,
                                     robot_plann::JointState &ob_state);
@@ -154,6 +119,8 @@ class Planner {
   std::vector<Point> astar_path_{};
 
   cv::Mat map_, cost_map_, visual_map_;
+  double window_center_x_ = 0.0;
+  double window_center_y_ = 0.0;
   bool has_map_;
   bool move_forward_;
   int verbose_;
