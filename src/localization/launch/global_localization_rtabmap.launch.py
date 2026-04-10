@@ -21,7 +21,7 @@ def generate_launch_description():
     map_yaml = LaunchConfiguration("map_yaml")
     use_map_server = LaunchConfiguration("use_map_server")
 
-    ekf_config = os.path.join(localization_dir, "config", "ekf.yaml")
+    ekf_config = os.path.join(localization_dir, "config", "ekf_zed2.yaml")
     map_yaml_path = PathJoinSubstitution(
         [get_package_share_directory("mapping"), "maps", map_name, map_yaml]
     )
