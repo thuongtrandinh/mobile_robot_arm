@@ -4,7 +4,9 @@ Panels:
     Name: Displays
     Property Tree Widget:
       Expanded:
+        - /Global Options1
         - /ParticleCloud1/Topic1
+        - /MarkerArray3
       Splitter Ratio: 0.5
     Tree Height: 356
   - Class: rviz_common/Selection
@@ -51,10 +53,6 @@ Visualization Manager:
       Frame Timeout: 15
       Frames:
         All Enabled: true
-        above_base_caster:
-          Value: true
-        back_base_caster:
-          Value: true
         base_footprint:
           Value: true
         base_link:
@@ -63,13 +61,11 @@ Visualization Manager:
           Value: true
         chassis:
           Value: true
-        face_link:
-          Value: true
-        imu_link:
-          Value: true
         laser:
           Value: true
-        left_base_caster:
+        layer_middle:
+          Value: true
+        layer_top:
           Value: true
         left_wheel:
           Value: true
@@ -77,7 +73,13 @@ Visualization Manager:
           Value: true
         odom:
           Value: true
-        right_base_caster:
+        post_bl:
+          Value: true
+        post_br:
+          Value: true
+        post_fl:
+          Value: true
+        post_fr:
           Value: true
         right_wheel:
           Value: true
@@ -87,6 +89,8 @@ Visualization Manager:
           Value: true
         zed2_right_camera_frame:
           Value: true
+        zed_camera_link:
+          Value: true
       Marker Scale: 1
       Name: TF
       Show Arrows: true
@@ -94,36 +98,38 @@ Visualization Manager:
       Show Names: false
       Tree:
         map:
-          {}
-        odom:
-          base_footprint:
-            base_link:
-              above_base_caster:
-                {}
-              back_base_caster:
-                {}
-              caster_wheel:
-                {}
-              chassis:
-                face_link:
+          odom:
+            base_footprint:
+              base_link:
+                caster_wheel:
                   {}
-              laser:
-                {}
-              left_base_caster:
-                {}
-              left_wheel:
-                {}
-              right_base_caster:
-                {}
-              right_wheel:
-                {}
-              zed2_link:
-                imu_link:
+                chassis:
                   {}
-                zed2_left_camera_frame:
+                laser:
                   {}
-                zed2_right_camera_frame:
+                layer_middle:
                   {}
+                layer_top:
+                  {}
+                left_wheel:
+                  {}
+                post_bl:
+                  {}
+                post_br:
+                  {}
+                post_fl:
+                  {}
+                post_fr:
+                  {}
+                right_wheel:
+                  {}
+                zed_camera_link:
+                  zed2_left_camera_frame:
+                    {}
+                  zed2_link:
+                    {}
+                  zed2_right_camera_frame:
+                    {}
       Update Interval: 0
       Value: true
     - Alpha: 1
@@ -144,16 +150,6 @@ Visualization Manager:
         Expand Link Details: false
         Expand Tree: false
         Link Tree Style: Links in Alphabetic Order
-        above_base_caster:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        back_base_caster:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
         base_footprint:
           Alpha: 1
           Show Axes: false
@@ -172,21 +168,17 @@ Visualization Manager:
           Show Axes: false
           Show Trail: false
           Value: true
-        face_link:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        imu_link:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
         laser:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        left_base_caster:
+        layer_middle:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        layer_top:
           Alpha: 1
           Show Axes: false
           Show Trail: false
@@ -196,7 +188,22 @@ Visualization Manager:
           Show Axes: false
           Show Trail: false
           Value: true
-        right_base_caster:
+        post_bl:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        post_br:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        post_fl:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        post_fr:
           Alpha: 1
           Show Axes: false
           Show Trail: false
@@ -214,11 +221,15 @@ Visualization Manager:
           Alpha: 1
           Show Axes: false
           Show Trail: false
-          Value: true
         zed2_right_camera_frame:
           Alpha: 1
           Show Axes: false
           Show Trail: false
+        zed_camera_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
       Mass Properties:
         Inertia: false
         Mass: false
@@ -257,7 +268,6 @@ Visualization Manager:
         Filter size: 10
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: /scan_fixed
         Value: /scan
       Use Fixed Frame: true
       Use rainbow: true
@@ -274,10 +284,10 @@ Visualization Manager:
         Durability Policy: Volatile
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: /zed2/left/image_raw
+        Value: /zed/zed_node/rgb/color/rect/image
       Value: true
     - Class: rviz_default_plugins/MarkerArray
-      Enabled: true
+      Enabled: false
       Name: MarkerArray
       Namespaces:
         {}
@@ -287,12 +297,12 @@ Visualization Manager:
         History Policy: Keep Last
         Reliability Policy: Reliable
         Value: /aruco/markers
-      Value: true
+      Value: false
     - Alpha: 0.699999988079071
       Class: rviz_default_plugins/Map
       Color Scheme: map
       Draw Behind: false
-      Enabled: true
+      Enabled: false
       Name: Map
       Topic:
         Depth: 5
@@ -308,7 +318,7 @@ Visualization Manager:
         Reliability Policy: Reliable
         Value: /map_updates
       Use Timestamp: false
-      Value: true
+      Value: false
     - Alpha: 1
       Class: nav2_rviz_plugins/ParticleCloud
       Color: 255; 25; 0
@@ -325,10 +335,83 @@ Visualization Manager:
         Reliability Policy: Best Effort
         Value: /particle_cloud
       Value: true
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: MarkerArray
+      Namespaces:
+        {}
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /policy/action_markers
+      Value: true
+    - Alpha: 0.699999988079071
+      Class: rviz_default_plugins/Map
+      Color Scheme: map
+      Draw Behind: false
+      Enabled: true
+      Name: Map
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /rtabmap/map
+      Update Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /rtabmap/map_updates
+      Use Timestamp: false
+      Value: true
+    - Alpha: 1
+      Buffer Length: 1
+      Class: rviz_default_plugins/Path
+      Color: 25; 255; 0
+      Enabled: true
+      Head Diameter: 0.30000001192092896
+      Head Length: 0.20000000298023224
+      Length: 0.30000001192092896
+      Line Style: Lines
+      Line Width: 0.029999999329447746
+      Name: Path
+      Offset:
+        X: 0
+        Y: 0
+        Z: 0
+      Pose Color: 255; 85; 255
+      Pose Style: None
+      Radius: 0.029999999329447746
+      Shaft Diameter: 0.10000000149011612
+      Shaft Length: 0.10000000149011612
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /a_star_path
+      Value: true
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: MarkerArray
+      Namespaces:
+        {}
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /planner/debug_markers
+      Value: true
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48
-    Fixed Frame: base_footprint
+    Fixed Frame: map
     Frame Rate: 30
   Name: root
   Tools:
@@ -371,7 +454,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz_default_plugins/Orbit
-      Distance: 18.047386169433594
+      Distance: 27.188703536987305
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -386,10 +469,10 @@ Visualization Manager:
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 1.3097965717315674
+      Pitch: 1.5697963237762451
       Target Frame: <Fixed Frame>
       Value: Orbit (rviz)
-      Yaw: 2.1753695011138916
+      Yaw: 3.205378293991089
     Saved: ~
 Window Geometry:
   Displays:
@@ -409,5 +492,5 @@ Window Geometry:
   Views:
     collapsed: false
   Width: 1200
-  X: 70
-  Y: 60
+  X: 720
+  Y: 113

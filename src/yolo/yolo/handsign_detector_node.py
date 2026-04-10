@@ -17,7 +17,7 @@ import tf2_ros
 import tf2_geometry_msgs
 
 # Sử dụng package interface của bạn
-from interfaces.msg import HumanState, Obstacles, CircleObstacle
+from interfaces.msg import HumanState
 from zed_msgs.msg import ObjectsStamped
 
 class HandsignDetectorNode(Node):
@@ -59,7 +59,6 @@ class HandsignDetectorNode(Node):
         qos_img = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT, history=HistoryPolicy.KEEP_LAST, depth=1)
         self._pub_viz = self.create_publisher(CompressedImage, '/tracking/annotated_image/compressed', qos_img)
         self._pub_main = self.create_publisher(HumanState, '/tracking/main_person', 10)
-        self._pub_obs = self.create_publisher(Obstacles, '/tracking/obstacles', 10)
 
         # 5. SUBSCRIBERS (Khớp chính xác với Topic của ZED)
         self.image_sub = message_filters.Subscriber(self, Image, '/zed/zed_node/rgb/color/rect/image', qos_profile=qos_img)
@@ -139,9 +138,6 @@ class HandsignDetectorNode(Node):
         self._visualize(frame, tracked_objects, img_msg.header.stamp)
 
     def _publish_to_controller(self, objects, ts):
-        obs_msg = Obstacles()
-        obs_msg.header.stamp, obs_msg.header.frame_id = ts, self._global_frame
-        
         for o in objects:
             if o['is_target']:
                 msg = HumanState()
@@ -151,16 +147,6 @@ class HandsignDetectorNode(Node):
                 msg.vx = float(o['vx'])
                 msg.vy = float(o['vy'])
                 self._pub_main.publish(msg)
-            else:
-                c = CircleObstacle()
-                c.center.x = float(o['px'])
-                c.center.y = float(o['py'])
-                c.velocity.x = float(o['vx'])
-                c.velocity.y = float(o['vy'])
-                c.radius = self.person_radius 
-                obs_msg.circles.append(c)
-        
-        self._pub_obs.publish(obs_msg)
 
     def _handle_gestures(self, frame, objects, dt_now):
         # Yolo vẫn xử lý tay để vẽ khung hình ngay cả khi SDK chưa bắt được người

@@ -303,7 +303,7 @@ int Mpc::SolveMpc(const Eigen::MatrixXd &A, const Eigen::MatrixXd &b,
     // right walls left_down to right_up
     if (!walls.empty()) {
       if (walls.size() != 2) {
-        std::cerr << "wall is not set true!" << std::endl;
+        return 1;
       }
       for (int l = 0; l < 2; ++l) {
         const Wall &wall = walls.at(l);
@@ -431,8 +431,7 @@ int Mpc::SolveMpc(const Eigen::MatrixXd &A, const Eigen::MatrixXd &b,
       return 0;
     } 
     return 1;
-  } catch (const casadi::CasadiException &e) {
-    std::cerr << "CasADi exception: " << e.what() << std::endl;
+  } catch (const casadi::CasadiException &) {
     return -1;
   }
 }

@@ -19,7 +19,7 @@ import tf2_ros
 from geometry_msgs.msg import PointStamped, PoseStamped, Quaternion, Point, Vector3
 from std_msgs.msg import Header
 from sensor_msgs.msg import Image, CameraInfo, PointCloud2
-from interfaces.msg import HumanState, Obstacles, CircleObstacle
+from interfaces.msg import HumanState
 import math
 
 from .botsort_handler import BoTSortTracker
@@ -186,8 +186,6 @@ class HandSignDetectorSimNode(Node):
         # Publishers
         self._pub_main_person = self.create_publisher(
             HumanState, '/tracking/main_person', qos_reliable)
-        self._pub_obstacles = self.create_publisher(
-            Obstacles, '/tracking/obstacles', qos_reliable)
         self._pub_lost_goal = self.create_publisher(
             PoseStamped, '/navigation/goal', qos_reliable)
 
@@ -549,34 +547,6 @@ class HandSignDetectorSimNode(Node):
         human_msg.vy = float(main_person.velocity_global[1])
         human_msg.radius = self._estimate_person_radius(main_person)
         self._pub_main_person.publish(human_msg)
-
-        # Publish obstacles
-        obstacles_msg = Obstacles()
-        obstacles_msg.header.stamp = timestamp
-        obstacles_msg.header.frame_id = self._global_frame
-
-        for obj in tracked_objects:
-            if obj.track_id == main_person.track_id:
-                continue
-
-            circle = CircleObstacle()
-            circle.uid = int(obj.track_id)
-            circle.center = Point(
-                x=float(obj.center_3d_global[0]),
-                y=float(obj.center_3d_global[1]),
-                z=0.0
-            )
-            circle.velocity = Vector3(
-                x=float(obj.velocity_global[0]),
-                y=float(obj.velocity_global[1]),
-                z=0.0
-            )
-            circle.radius = self._estimate_person_radius(obj)
-            circle.true_radius = circle.radius
-            circle.confidence = obj.confidence
-            obstacles_msg.circles.append(circle)
-
-        self._pub_obstacles.publish(obstacles_msg)
 
     def _publish_lost_goal(self, position_global, timestamp):
         """Publish navigation goal when person is lost"""

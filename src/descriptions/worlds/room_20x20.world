@@ -198,6 +198,91 @@
       </link>
     </model>
 
+    <!-- Test obstacles for AMPCC: 6 boxes distributed across map -->
+    <model name="test_box_center_square">
+      <static>true</static>
+      <pose>0.0 6.5 0.4 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>1.2 1.2 0.8</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>1.2 1.2 0.8</size></box></geometry>
+          <material><ambient>0.9 0.2 0.2 1</ambient><diffuse>0.9 0.2 0.2 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="test_box_nw_rect">
+      <static>true</static>
+      <pose>-6.5 6.5 0.4 0 0 0.35</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>1.8 0.9 0.8</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>1.8 0.9 0.8</size></box></geometry>
+          <material><ambient>0.2 0.7 0.9 1</ambient><diffuse>0.2 0.7 0.9 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="test_box_ne_square">
+      <static>true</static>
+      <pose>6.5 6.5 0.45 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>0.9 0.9 0.9</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.9 0.9 0.9</size></box></geometry>
+          <material><ambient>0.2 0.9 0.4 1</ambient><diffuse>0.2 0.9 0.4 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="test_box_sw_rect">
+      <static>true</static>
+      <pose>-6.5 -6.5 0.4 0 0 -0.5</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>1.6 0.8 0.8</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>1.6 0.8 0.8</size></box></geometry>
+          <material><ambient>0.9 0.8 0.2 1</ambient><diffuse>0.9 0.8 0.2 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="test_box_se_square">
+      <static>true</static>
+      <pose>6.5 -6.5 0.5 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>1.0 1.0 1.0</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>1.0 1.0 1.0</size></box></geometry>
+          <material><ambient>0.7 0.3 0.9 1</ambient><diffuse>0.7 0.3 0.9 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="test_box_mid_north_rect">
+      <static>true</static>
+      <pose>0.0 5.0 0.4 0 0 1.0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>2.0 0.7 0.8</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>2.0 0.7 0.8</size></box></geometry>
+          <material><ambient>0.3 0.5 0.9 1</ambient><diffuse>0.3 0.5 0.9 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
     <!-- Sun / lighting - inline definition -->
     <light type="directional" name="sun">
       <cast_shadows>true</cast_shadows>

@@ -22,9 +22,6 @@ set(msg_files
   "msg/PolyState.msg"
   "msg/RobotState.msg"
   "msg/WallState.msg"
-  "msg/CircleObstacle.msg"
-  "msg/SegmentObstacle.msg"
-  "msg/Obstacles.msg"
 )
 
 set(srv_files

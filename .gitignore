@@ -7,3 +7,6 @@ __pycache__/
 .vscode/
 .DS_Store
 *.pdf
+HALO_1/log/
+HALO_1/install/
+.venv/

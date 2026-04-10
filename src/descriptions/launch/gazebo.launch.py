@@ -24,7 +24,6 @@ def launch_setup(context, *args, **kwargs):
     launch_rviz = launch_rviz_str.lower() == 'true'
     headless = context.launch_configurations.get('headless', 'false').lower() == 'true'
     spawn_controllers = context.launch_configurations.get('spawn_controllers', 'true').lower() == 'true'
-    enable_obstacle_extractor = context.launch_configurations.get('enable_obstacle_extractor', 'true').lower() == 'true'
 
     pkg_path = get_package_share_directory(package_name)
     xacro_file = os.path.join(pkg_path, 'model', 'wheeled', 'urdf', 'mobile_robot.urdf.xacro')
@@ -42,8 +41,9 @@ def launch_setup(context, *args, **kwargs):
     print(f"✅ Xacro file: {xacro_file} (exists: {os.path.exists(xacro_file)})")
     print(f"✅ World file: {world_file} (exists: {os.path.exists(world_file)})")
 
-    # Process xacro to URDF
-    robot_description = xacro.process_file(xacro_file, mappings={'sim_mode': 'true'}).toxml()
+    # Process xacro to URDF.
+    # The root xacro expects argument name `is_sim`, not `sim_mode`.
+    robot_description = xacro.process_file(xacro_file, mappings={'is_sim': 'true'}).toxml()
     print(f"✅ URDF rendered: {len(robot_description)} characters")
 
     # RViz config
@@ -97,87 +97,28 @@ def launch_setup(context, *args, **kwargs):
         parameters=[{'use_sim_time': use_sim_time}],
     )
 
-    # Single bridge node for all topics
-    # Tên topic Depth trong Gazebo của bạn có thể khác một chút (tùy vào URDF).
-    # Thường nó sẽ là '/zed2/depth_image' hoặc '/zed2/depth/image_raw'.
-    # Giả sử ở đây Gazebo phát ra là '/zed2/depth_image'
-    
-   # Single bridge node for all topics
+    # Single bridge node for all topics.
+    # GZ camera topics are published by rgbd sensor under /zed/zed_node/left/image_rect_color/*
+    # and remapped here to RTAB-Map expected rgb/depth names.
     bridge = Node(
         package='ros_gz_bridge',
         executable='parameter_bridge',
         arguments=[
             '/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock',
             '/scan@sensor_msgs/msg/LaserScan[gz.msgs.LaserScan',
-            '/imu@sensor_msgs/msg/Imu[gz.msgs.IMU',
-            
-            # 1. Bắt đúng tên topic RGB từ Gazebo
-            '/zed2/left/image@sensor_msgs/msg/Image[gz.msgs.Image',
-            
-            # 2. Bắt đúng tên topic Camera Info từ Gazebo
-            '/zed2/left/camera_info@sensor_msgs/msg/CameraInfo[gz.msgs.CameraInfo',
-            
-            # 3. Bắt đúng tên topic Depth từ Gazebo
-            '/zed2/left/depth_image@sensor_msgs/msg/Image[gz.msgs.Image',
+            '/zed/zed_node/imu/data@sensor_msgs/msg/Imu[gz.msgs.IMU',
+            '/zed/zed_node/left/image_rect_color/image@sensor_msgs/msg/Image[gz.msgs.Image',
+            '/zed/zed_node/left/image_rect_color/camera_info@sensor_msgs/msg/CameraInfo[gz.msgs.CameraInfo',
+            '/zed/zed_node/left/image_rect_color/depth_image@sensor_msgs/msg/Image[gz.msgs.Image',
         ],
         remappings=[
-            # Đổi nhãn (Remap) sang đúng tên mà RTAB-Map đang há miệng chờ
-            ('/zed2/left/image', '/zed2/zed_node/rgb/color/rect/image'),
-            ('/zed2/left/camera_info', '/zed2/zed_node/rgb/color/rect/camera_info'),
-            ('/zed2/left/depth_image', '/zed2/zed_node/depth/depth_registered'),
+            ('/zed/zed_node/imu/data', '/imu'),
+            ('/zed/zed_node/left/image_rect_color/image', '/zed/zed_node/rgb/color/rect/image'),
+            ('/zed/zed_node/left/image_rect_color/camera_info', '/zed/zed_node/rgb/color/rect/camera_info'),
+            ('/zed/zed_node/left/image_rect_color/depth_image', '/zed/zed_node/depth/depth_registered'),
         ],
         parameters=[{'use_sim_time': use_sim_time}],
         output='screen'
-    )
-
-    obstacle_extractor_node = Node(
-        package='obstacle_detector',
-        executable='obstacle_extractor_node',
-        name='obstacle_extractor',
-        output='screen',
-        parameters=[{
-            'use_sim_time': use_sim_time,
-            'active': True,
-            'use_scan': True,
-            'use_pcl': False,
-            'use_pcl2': False,
-            'transform_coordinates': False,
-            'frame_id': 'laser',
-        }]
-    )
-
-    obstacle_tracker_node = Node(
-        package='obstacle_detector',
-        executable='obstacle_tracker_node',
-        name='obstacle_tracker',
-        output='screen',
-        remappings=[
-            ('raw_obstacles', '/raw_obstacles'),
-            ('tracked_obstacles', '/obstacles'),
-            ('tracked_obstacles_visualization', '/obstacles_visualization'),
-        ],
-        parameters=[{
-            'use_sim_time': use_sim_time,
-            'active': True,
-            'frame_id': 'laser',
-            'loop_rate': 100.0,
-            'tracking_duration': 2.0,
-        }]
-    )
-
-    obstacle_publisher_node = Node(
-        package='obstacle_detector',
-        executable='obstacle_publisher_node',
-        name='obstacle_publisher',
-        output='screen',
-        remappings=[
-            ('obstacles', '/virtual_obstacles'),
-        ],
-        parameters=[{
-            'use_sim_time': use_sim_time,
-            'active': True,
-            'frame_id': 'laser',
-        }]
     )
 
     # Gazebo launch
@@ -203,11 +144,6 @@ def launch_setup(context, *args, **kwargs):
         robot_state_publisher,
         spawn_entity,
     ]
-
-    if enable_obstacle_extractor:
-        nodes_to_launch.append(obstacle_extractor_node)
-        nodes_to_launch.append(obstacle_tracker_node)
-        nodes_to_launch.append(obstacle_publisher_node)
 
     if spawn_controllers:
         nodes_to_launch.append(
@@ -243,7 +179,6 @@ def generate_launch_description():
         DeclareLaunchArgument('launch_rviz', default_value='true', description='Launch RViz2'),
         DeclareLaunchArgument('headless', default_value='false', description='Run Gazebo in server-only mode'),
         DeclareLaunchArgument('spawn_controllers', default_value='true', description='Spawn ros2_control controllers'),
-        DeclareLaunchArgument('enable_obstacle_extractor', default_value='true', description='Enable obstacle extractor node'),
         DeclareLaunchArgument('world', default_value='room_20x20.world',
                               description='World file to load',
                               choices=['amr_simulation.world', 'empty.world', 'room_20x20.world', 'small_house.world', 'small_warehouse.world']),

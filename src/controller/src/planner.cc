@@ -14,6 +14,58 @@
 
 namespace robot_plann {
 
+cv::Point Planner::MapCoord2ImgIdx(const Eigen::Vector2d &pt, bool vis) const {
+  if (cost_map_.empty()) {
+    throw std::string("Cost map is empty");
+  }
+
+  const int width = cost_map_.cols;
+  const int height = cost_map_.rows;
+  cv::Point idx;
+  idx.x = static_cast<int>(std::round((pt(0) - window_center_x_) / kMapResol)) + width / 2;
+  idx.y = static_cast<int>(std::round((window_center_y_ - pt(1)) / kMapResol)) + height / 2;
+
+  if (idx.x < 0 || idx.x >= width || idx.y < 0 || idx.y >= height) {
+    std::stringstream err;
+    err << "Point out of sliding window: " << pt(0) << ", " << pt(1)
+        << " -> (" << idx.x << ", " << idx.y << ") in [0," << width
+        << ")x[0," << height << ")";
+    throw err.str();
+  }
+
+  if (vis) {
+    idx.x = static_cast<int>(std::round(idx.x * kVisualScale));
+    idx.y = static_cast<int>(std::round(idx.y * kVisualScale));
+  }
+  return idx;
+}
+
+Eigen::Vector2d Planner::ImgIdx2MapCoord(const cv::Point &idx, bool vis) const {
+  if (cost_map_.empty()) {
+    throw std::string("Cost map is empty");
+  }
+
+  cv::Point raw = idx;
+  if (vis) {
+    raw.x = static_cast<int>(std::round(raw.x / kVisualScale));
+    raw.y = static_cast<int>(std::round(raw.y / kVisualScale));
+  }
+
+  const int width = cost_map_.cols;
+  const int height = cost_map_.rows;
+  if (raw.x < 0 || raw.x >= width || raw.y < 0 || raw.y >= height) {
+    std::stringstream err;
+    err << "Image index out of sliding window: (" << raw.x << ", " << raw.y
+        << ") in [0," << width << ")x[0," << height << ")";
+    throw err.str();
+  }
+
+  Eigen::Vector2d pt;
+  pt(0) = (raw.x - width / 2) * kMapResol + window_center_x_;
+  pt(1) = window_center_y_ - (raw.y - height / 2) * kMapResol;
+  return pt;
+}
+
 MpcReturn Planner::PlannExec(const JointState &state,
                              Eigen::Vector2d &sub_goal) {
   if (!has_map_) return {MpcStages(), false};
@@ -46,7 +98,8 @@ MpcReturn Planner::PlannExec(const JointState &state,
   
   if (verbose_ > 1) std::cout << "DEBUG: check done!" << std::endl;
 
-  auto astar_path = astar_planner_->SearchPath(cost_map_, start_pt, sub_goal);
+  auto astar_path = astar_planner_->SearchPath(
+      cost_map_, start_pt, sub_goal, window_center_x_, window_center_y_);
   if (astar_path.size() < 2) {
     if (verbose_ >= 1) { 
       std::cout << "Invalid A* path with len = " << astar_path.size() << 
@@ -206,10 +259,12 @@ bool Planner::CheckNavGoal(Eigen::Vector2d &sub_goal,
                            const Eigen::Vector2d &nav_goal,
                            const Eigen::Vector2d &pos,
                            const std::vector<Eigen::Vector2d> &vertices) {
-  // boundray fix
   float distance = (sub_goal - pos).norm();
   if (distance < 0.1) return false;
-  if (abs(sub_goal(0)) > 4.7 || abs(sub_goal(1)) > kHalfMapHeight) {
+
+  try {
+    (void)MapCoord2ImgIdx(sub_goal);
+  } catch (const std::string &) {
     if (!this->SimpleRayCast(sub_goal, pos)) return false;
     if (verbose_ >= 1) {
       std::cout << "Wall, sub goal changed to " << sub_goal.transpose() << 
@@ -225,8 +280,10 @@ bool Planner::CheckNavGoal(Eigen::Vector2d &sub_goal,
     const double step = 0.1;
     while (true) {
       left_candidate += step * grad;
-      if (abs(left_candidate(0)) >= 4.7 || 
-          abs(left_candidate(1)) >= kHalfMapHeight) {
+      cv::Point pixel;
+      try {
+        pixel = MapCoord2ImgIdx(left_candidate);
+      } catch (const std::string &) {
         left_candidate = {99.9, 99.9};  // as a large num
         break;
       }
@@ -234,14 +291,15 @@ bool Planner::CheckNavGoal(Eigen::Vector2d &sub_goal,
         continue;
       }
       // a collision-free pt outside poly is found
-      cv::Point pixel = MapCoord2ImgIdx(left_candidate);
       if (cost_map_.at<u_char>(pixel.y, pixel.x) >= 100) break;
     }
     std::cout << "2" << std::endl;
     while (true) {
       right_candidate -= step * grad;
-      if (abs(right_candidate(0)) >= 4.7 || 
-          abs(right_candidate(1)) >= kHalfMapHeight) {
+      cv::Point pixel;
+      try {
+        pixel = MapCoord2ImgIdx(right_candidate);
+      } catch (const std::string &) {
         right_candidate = {99.9, 99.9};
         break;
       }
@@ -249,7 +307,6 @@ bool Planner::CheckNavGoal(Eigen::Vector2d &sub_goal,
         continue;
       }
       // a collision-free pt outside poly is found
-      cv::Point pixel = MapCoord2ImgIdx(right_candidate);
       if (cost_map_.at<u_char>(pixel.y, pixel.x) >= 100) break;
     }
 
@@ -281,13 +338,11 @@ bool Planner::CheckNavGoal(Eigen::Vector2d &sub_goal,
     candidate_goal = sub_goal + kRadius * Eigen::Vector2d(
         std::sin(M_PI * 2 * i / kPointNum),
         std::cos(M_PI * 2 * i / kPointNum));
-    /* skip invalid candidate goal */
-    if (abs(candidate_goal(0)) >= 4.7 || 
-        abs(candidate_goal(1)) >= kHalfMapHeight) {
+    try {
+      pixel = MapCoord2ImgIdx(candidate_goal);
+    } catch (const std::string &) {
       continue;
     }
-
-    pixel = MapCoord2ImgIdx(candidate_goal);
     if (cost_map_.at<u_char>(pixel.y, pixel.x) < 100) continue;
     if ((candidate_goal - pos).norm() <= 0.2f) continue;
     if (PointInPloy(candidate_goal(0), candidate_goal(1), vertices)) continue;
@@ -311,30 +366,47 @@ bool Planner::CheckNavGoal(Eigen::Vector2d &sub_goal,
 
 void Planner::UpdateCostMap(const JointState &state) {
   // TODO:
+  window_center_x_ = state.robot.px;
+  window_center_y_ = state.robot.py;
   cost_map_ = map_.clone();
+  std::size_t skipped_invalid_points = 0;
 
-  std::vector<std::vector<cv::Point>> wall_contours;
-  // draw walls
   for (const auto &wall : state.walls) {
-    std::vector<Eigen::Vector2d> cur_wall;
-    cur_wall.push_back({wall.first.x, wall.first.y});
-    cur_wall.push_back({wall.second.x, wall.second.y});
-    std::vector<cv::Point> cur_contour;
-    robot_plann::Vertices2Contour(cur_wall, cur_contour);
-    wall_contours.push_back(cur_contour);
+    try {
+      cv::Point p1 = MapCoord2ImgIdx({wall.first.x, wall.first.y});
+      cv::Point p2 = MapCoord2ImgIdx({wall.second.x, wall.second.y});
+      cv::line(cost_map_, p1, p2, cv::Scalar(0), 1);
+    } catch (const std::string &) {
+      skipped_invalid_points++;
+    }
   }
-  cv::drawContours(cost_map_, wall_contours, -1, cv::Scalar(0), 1);
 
   std::vector<cv::Point> contour;
-  Vertices2Contour(state.rect.vertices, contour);
+  contour.reserve(state.rect.vertices.size());
+  for (const auto &vertex : state.rect.vertices) {
+    try {
+      contour.push_back(MapCoord2ImgIdx(vertex));
+    } catch (const std::string &) {
+      skipped_invalid_points++;
+    }
+  }
   std::vector<std::vector<cv::Point>> contours = {contour};
   if (!contour.empty()) {
     cv::drawContours(cost_map_, contours, -1, cv::Scalar(0), 1);
   }
 
   for (auto &iter: state.obst) {
-    cv::circle(cost_map_, MapCoord2ImgIdx({iter.px, iter.py}), 
-               (int)round(iter.radius / kMapResol), cv::Scalar(0), 1);
+    try {
+      cv::circle(cost_map_, MapCoord2ImgIdx({iter.px, iter.py}), 
+                 (int)round(iter.radius / kMapResol), cv::Scalar(0), 1);
+    } catch (const std::string &) {
+      skipped_invalid_points++;
+    }
+  }
+
+  if (verbose_ >= 1 && skipped_invalid_points > 0) {
+    std::cout << "Skip " << skipped_invalid_points
+              << " invalid map points in UpdateCostMap" << std::endl;
   }
 
   visual_map_ = cost_map_.clone();
@@ -360,11 +432,19 @@ bool Planner::SimpleRayCast(Eigen::Vector2d &goal,
   double distance = ray.norm();
   goal = pos;
 
+  if (distance < 1e-6) {
+    return false;
+  }
+
   for (double step = 0.0; step < distance; step += 0.1) {
     double t = step / distance;
     Eigen::Vector2d candidate = pos + t * ray;
-    // check if the candidate pt is out of bounds
-    if (abs(candidate(0)) > 4.5 || abs(candidate(1)) >= kHalfMapHeight) break;
+
+    try {
+      (void)MapCoord2ImgIdx(candidate);
+    } catch (const std::string &) {
+      break;
+    }
     goal = candidate;
   }
 

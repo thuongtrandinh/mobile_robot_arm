@@ -18,6 +18,8 @@ find_package(tf2 REQUIRED)
 find_package(interfaces REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(OpenCV REQUIRED)
+find_package(TIFF REQUIRED)
+find_package(GDAL REQUIRED)
 
 # ---------- Library: controller_core ----------
 add_library(controller_core SHARED
@@ -45,6 +47,8 @@ ament_target_dependencies(controller_core
 
 target_link_libraries(controller_core
   ${OpenCV_LIBS}
+  TIFF::TIFF
+  GDAL::GDAL
   casadi
 )
 
