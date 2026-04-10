@@ -51,11 +51,12 @@ def generate_launch_description():
     diff_drive_spawner = Node(
         package="controller_manager",
         executable="spawner",
-        arguments=["diff_cont"],
-        remappings=[
-            ('/diff_cont/odom', '/odom'),
-            ('/diff_cont/cmd_vel_unstamped', '/cmd_vel')
-        ]
+        arguments=[
+            "diff_cont",
+            "--controller-ros-args",
+            "--remap", "~/odom:=/odom",
+            "--remap", "~/cmd_vel:=/cmd_vel",
+        ],
     )
 
     # 4. MICRO-ROS AGENT

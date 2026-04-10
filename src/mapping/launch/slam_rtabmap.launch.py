@@ -28,7 +28,7 @@ def generate_launch_description():
 
     use_sim_time_arg = DeclareLaunchArgument(
         "use_sim_time",
-        default_value="true",
+        default_value="false",
         description="Use simulation clock",
     )
     cfg_arg = DeclareLaunchArgument(
@@ -93,7 +93,7 @@ def generate_launch_description():
         name="ekf_filter_node",
         output="screen",
         parameters=[
-            os.path.join(localization_dir, "config", "ekf.yaml"),
+            os.path.join(localization_dir, "config", "ekf_zed2.yaml"),
             {"use_sim_time": use_sim_time},
         ],
     )
@@ -135,7 +135,7 @@ def generate_launch_description():
             "qos_imu": "2",
             "qos_scan": "2",
             "qos_odom": "2",
-            "wait_for_transform": "0.2",
+            "wait_for_transform": "0.5",
             "qos_image": "2",
             "qos_camera_info": "2",
         }.items(),

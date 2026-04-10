@@ -28,6 +28,7 @@ diff_cont:
     cmd_vel_timeout: 0.5
     publish_rate: 50.0
     use_stamped_vel: true  # IMPORTANT: Accept stamped Twist messages
+    open_loop: true  # Derive odometry from commanded twist when wheel state feedback is unavailable
     
     # Input/Output remapping
     cmd_vel: cmd_vel  # Subscribe to standard /cmd_vel topic
