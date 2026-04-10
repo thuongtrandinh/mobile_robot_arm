@@ -20,6 +20,7 @@ import cv2
 import numpy as np
 import time
 import yaml
+import math
 from collections import deque
 from typing import Dict, List, Tuple, Optional
 from rclpy.node import Node
@@ -29,8 +30,10 @@ from cv_bridge import CvBridge, CvBridgeError
 import message_filters  # RGB-Depth synchronization for 3D accuracy
 
 from sensor_msgs.msg import Image, CameraInfo
-from std_msgs.msg import String
-from interfaces.msg import HumanState
+from std_msgs.msg import String, Header
+from nav_msgs.msg import Path
+from geometry_msgs.msg import PoseStamped
+from interfaces.msg import HumanState, ObstacleArray, DynaObstacle, SystemState
 from ament_index_python.packages import get_package_share_directory
 
 # BoT-SORT tracking with appearance features
@@ -312,14 +315,15 @@ class TrackingNode(Node):
         # ===== 9b. HUMAN STATE PUBLISHER (for state machine integration) =====
         self._pub_human_state = self.create_publisher(HumanState, '/tracking/main_person', 10)
         # ===== 9c. OBSTACLES PUBLISHER (for perception layer) =====
-        self._pub_obstacles = self.create_publisher(HumanState, '/tracking/obstacles', 10)
+        # Updated: Use ObstacleArray for multiple dynamic obstacles
+        self._pub_obstacles = self.create_publisher(ObstacleArray, '/tracking/obstacles', 10)
         # ===== 9d. ANNOTATED IMAGE PUBLISHER (for debugging/visualization) =====
         self._pub_annotated_image = self.create_publisher(Image, '/tracking/annotated_image', 10)
 
         # ===== 10. SUBSCRIBERS (RGB-DEPTH SYNCHRONIZED & SYSTEM STATE) =====
-        # Subscribe to system state (IDLE | TRACKING | RE_TRACKING)
+        # Subscribe to system state (IDLE | TRACKING | RE_TRACKING) using SystemState interface
         self.create_subscription(
-            String,
+            SystemState,
             '/system_state',
             self._system_state_callback,
             10
@@ -389,9 +393,9 @@ class TrackingNode(Node):
             f'   Performance Metrics: {"ENABLED" if self.enable_perf_metrics else "DISABLED"}'
         )
 
-    def _system_state_callback(self, msg: String):
-        """Update robot state from state_machine_node"""
-        self.current_robot_state = msg.data
+    def _system_state_callback(self, msg: SystemState):
+        """Update robot state from state_machine_node using SystemState interface"""
+        self.current_robot_state = msg.state
         self.get_logger().debug(f'📡 System state updated: {self.current_robot_state}')
 
     def _get_real_dt(self, track_id: int, current_timestamp: float) -> float:
@@ -1056,28 +1060,29 @@ class TrackingNode(Node):
 
     def _publish_human_state(self, person_tracks: List[Dict],
                              h_img: int, w_img: int, ts_now: float):
-        """Extract 3D coordinates, run EKF filtering, and publish HumanState for state machine
-
-        Optimizations (from Gemini feedback):
-        1. Use weighted depth across entire bbox instead of single point
-        2. Calculate real dt from frame timestamps instead of assuming 1/30.0
-        3. Pass real dt to EKF for accurate prediction
-
+        """Extract 3D coordinates, run EKF filtering, and publish to specific topics
+        using custom interfaces (HumanState & ObstacleArray).
+        
         Logic:
-        - IDLE state: Publish all people as obstacles to /tracking/obstacles
+        - IDLE state: Publish all people as obstacles (ObstacleArray)
         - TRACKING state:
-          * Publish main_person to /tracking/main_person with radius=1.5m
-          * Publish other people to /tracking/obstacles
+          * Publish main_person to /tracking/main_person (HumanState) with radius=1.5m
+          * Publish other people to /tracking/obstacles (ObstacleArray with DynaObstacle items)
         """
         try:
             fx = self.fx
             cx_cam = self.cx_cam
             cy_cam = self.cy_cam
 
-            # ===== HELPER LAMBDA FOR COMMON PROCESSING =====
-            def process_person_track(tid: int, bbox: Tuple, is_main_target: bool = False):
-                """Process a single person track and return HumanState message"""
+            # Initialize ObstacleArray message for all non-main-target people
+            obstacle_array_msg = ObstacleArray()
+            obstacle_array_msg.header = Header()
+            obstacle_array_msg.header.stamp = self.get_clock().now().to_msg()
+            obstacle_array_msg.header.frame_id = "camera_link"
 
+            # ===== HELPER FUNCTION FOR COMMON PROCESSING =====
+            def process_person_track(tid: int, bbox: Tuple, is_main_target: bool = False):
+                """Process a single person track and return (position, velocity, radius, depth_val)"""
                 x1, y1, x2, y2 = bbox
 
                 # Initialize EKF if needed
@@ -1088,13 +1093,11 @@ class TrackingNode(Node):
 
                 ekf = self.ekfs[tid]
 
-                # === OPTIMIZATION 1: Calculate real dt from timestamps ===
+                # Calculate real dt from timestamps
                 real_dt = self._get_real_dt(tid, ts_now)
-
-                # Update EKF dt to real value instead of assuming 1/30.0
                 ekf.dt = real_dt
 
-                # === OPTIMIZATION 2: Use weighted depth across entire bbox ===
+                # Use weighted depth across entire bbox
                 depth_val = self._get_weighted_depth_in_bbox(bbox, self._current_depth_map, h_img, w_img)
 
                 if depth_val is None:
@@ -1115,7 +1118,7 @@ class TrackingNode(Node):
                     # Calculate velocity from position history using real dt
                     if len(self.position_history[tid]) >= 2:
                         prev_pos = self.position_history[tid][-2]
-                        meas_vel = (pos_3d - prev_pos) / real_dt  # Use real dt
+                        meas_vel = (pos_3d - prev_pos) / real_dt
 
                         if np.linalg.norm(meas_vel) > 10.0:  # Sanity check (10 m/s max)
                             meas_vel = np.array([0.0, 0.0])
@@ -1127,62 +1130,122 @@ class TrackingNode(Node):
                     ekf.update(pos_3d, meas_vel)
 
                 # Extract filtered state
-                ekf_x = ekf.state.x
-                ekf_y = ekf.state.y
-                ekf_vx = ekf.state.v * np.cos(ekf.state.psi)
-                ekf_vy = ekf.state.v * np.sin(ekf.state.psi)
+                ekf_x = float(ekf.state.x)
+                ekf_y = float(ekf.state.y)
+                ekf_vx = float(ekf.state.v * np.cos(ekf.state.psi))
+                ekf_vy = float(ekf.state.v * np.sin(ekf.state.psi))
 
                 # Apply velocity filter
                 vel_filter = self.velocity_filters[tid]
                 filtered_vel = vel_filter.update(np.array([ekf_vx, ekf_vy, 0.0]))
-                final_vx, final_vy = filtered_vel[0], filtered_vel[1]
+                final_vx, final_vy = float(filtered_vel[0]), float(filtered_vel[1])
 
-                # Create HumanState message
-                msg = HumanState()
-                msg.px = float(ekf_x)
-                msg.py = float(ekf_y)
-                msg.vx = float(final_vx)
-                msg.vy = float(final_vy)
-                msg.trajectory = []
-
-                # Set radius based on target type
-                if is_main_target:
-                    msg.radius = 1.5  # Safety distance for main person
+                # Calculate obstacle radius from bbox width
+                if depth_val:
+                    radius = float(abs(x2 - x1) * depth_val / fx / 2.0 * 0.85)
                 else:
-                    # Calculate obstacle radius from bbox width
-                    msg.radius = float(abs(x2 - x1) * depth_val / fx / 2.0 * 0.85) if depth_val else 0.5
+                    radius = 0.5
 
-                return msg
+                return ekf_x, ekf_y, final_vx, final_vy, radius, depth_val
+
+            def create_predicted_trajectory(ekf_x: float, ekf_y: float, 
+                                          final_vx: float, final_vy: float) -> Path:
+                """Create predicted trajectory for next 3 seconds (6 steps of 0.5s each)"""
+                predicted_path = Path()
+                predicted_path.header = obstacle_array_msg.header
+                
+                for i in range(6):
+                    dt_pred = i * 0.5
+                    pose = PoseStamped()
+                    pose.header = obstacle_array_msg.header
+                    pose.pose.position.x = ekf_x + final_vx * dt_pred
+                    pose.pose.position.y = ekf_y + final_vy * dt_pred
+                    pose.pose.position.z = 0.0
+                    predicted_path.poses.append(pose)
+                
+                return predicted_path
 
             # ===== CASE 1: IDLE STATE - Publish all people as obstacles =====
             if self.current_robot_state == 'IDLE':
                 for person_track in person_tracks:
                     tid = person_track['track_id']
-                    msg = process_person_track(tid, person_track['bbox'], is_main_target=False)
-                    self._pub_obstacles.publish(msg)
-                    self.get_logger().debug(f'📌 IDLE obstacle (ID={tid}): px={msg.px:.2f}, py={msg.py:.2f}, r={msg.radius:.2f}m')
+                    ekf_x, ekf_y, final_vx, final_vy, radius, depth_val = \
+                        process_person_track(tid, person_track['bbox'], is_main_target=False)
+                    
+                    # Create trajectory prediction
+                    predicted_path = create_predicted_trajectory(ekf_x, ekf_y, final_vx, final_vy)
+                    
+                    # Add to ObstacleArray
+                    obs = DynaObstacle()
+                    obs.id = float(tid)
+                    obs.distance = float(math.sqrt(ekf_x**2 + ekf_y**2))
+                    obs.radius = float(radius)
+                    obs.trajectory = predicted_path
+                    obstacle_array_msg.dyna_obstacles.append(obs)
+                    
+                    self.get_logger().debug(f'📌 IDLE obstacle (ID={tid}): px={ekf_x:.2f}, py={ekf_y:.2f}, r={radius:.2f}m')
 
+                # Publish obstacle array (even if empty)
+                self._pub_obstacles.publish(obstacle_array_msg)
                 return
 
             # ===== CASE 2: TRACKING STATE - Publish main_person + other obstacles =====
             elif self.current_robot_state in ['TRACKING', 'RE_TRACKING']:
                 if self.main_target_id is None:
+                    # No main target yet, publish all as obstacles
+                    for person_track in person_tracks:
+                        tid = person_track['track_id']
+                        ekf_x, ekf_y, final_vx, final_vy, radius, depth_val = \
+                            process_person_track(tid, person_track['bbox'], is_main_target=False)
+                        
+                        # Create trajectory prediction
+                        predicted_path = create_predicted_trajectory(ekf_x, ekf_y, final_vx, final_vy)
+                        
+                        # Add to ObstacleArray
+                        obs = DynaObstacle()
+                        obs.id = float(tid)
+                        obs.distance = float(math.sqrt(ekf_x**2 + ekf_y**2))
+                        obs.radius = float(radius)
+                        obs.trajectory = predicted_path
+                        obstacle_array_msg.dyna_obstacles.append(obs)
+                    
+                    self._pub_obstacles.publish(obstacle_array_msg)
                     return
 
                 # Process ALL people in frame
                 for person_track in person_tracks:
                     tid = person_track['track_id']
-                    msg = process_person_track(tid, person_track['bbox'], is_main_target=(tid == self.main_target_id))
+                    ekf_x, ekf_y, final_vx, final_vy, radius, depth_val = \
+                        process_person_track(tid, person_track['bbox'], is_main_target=(tid == self.main_target_id))
+
+                    # Create trajectory prediction
+                    predicted_path = create_predicted_trajectory(ekf_x, ekf_y, final_vx, final_vy)
 
                     if tid == self.main_target_id:
-                        # Publish main target
+                        # Publish main target as HumanState
+                        msg = HumanState()
+                        msg.px = ekf_x
+                        msg.py = ekf_y
+                        msg.vx = final_vx
+                        msg.vy = final_vy
+                        msg.radius = 1.5  # Safety distance for main person
+                        msg.trajectory = [predicted_path]
+                        
                         self._pub_human_state.publish(msg)
-                        self.get_logger().debug(f'🎯 Main target (ID={tid}): px={msg.px:.2f}, py={msg.py:.2f}, vx={msg.vx:.2f}, vy={msg.vy:.2f}, r=1.5m')
+                        self.get_logger().debug(f'🎯 Main target (ID={tid}): px={msg.px:.2f}, py={msg.py:.2f}, vx={msg.vx:.2f}, vy={msg.vy:.2f}')
                     else:
                         # Publish other people as obstacles
-                        self._pub_obstacles.publish(msg)
-                        self.get_logger().debug(f'⚠️  Obstacle (ID={tid}): px={msg.px:.2f}, py={msg.py:.2f}, r={msg.radius:.2f}m')
+                        obs = DynaObstacle()
+                        obs.id = float(tid)
+                        obs.distance = float(math.sqrt(ekf_x**2 + ekf_y**2))
+                        obs.radius = float(radius)
+                        obs.trajectory = predicted_path
+                        obstacle_array_msg.dyna_obstacles.append(obs)
+                        
+                        self.get_logger().debug(f'⚠️  Obstacle (ID={tid}): px={ekf_x:.2f}, py={ekf_y:.2f}, r={radius:.2f}m')
 
+                # Publish all obstacles at once (ObstacleArray)
+                self._pub_obstacles.publish(obstacle_array_msg)
                 return
 
             # No-op for other states

@@ -21,6 +21,7 @@ set(msg_files
   "msg/Point.msg"
   "msg/PolyState.msg"
   "msg/RobotState.msg"
+  "msg/SystemState.msg"
   "msg/WallState.msg"
 )
 
