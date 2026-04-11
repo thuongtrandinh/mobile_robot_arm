@@ -2,6 +2,7 @@ import os
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
@@ -18,6 +19,8 @@ def generate_launch_description():
     database_path = LaunchConfiguration("database_path")
     namespace = LaunchConfiguration("namespace")
     rtabmap_args = LaunchConfiguration("rtabmap_args")
+    use_rviz = LaunchConfiguration("use_rviz")
+    rviz_config = LaunchConfiguration("rviz_config")
     use_zed = LaunchConfiguration("use_zed")
     rgb_topic = LaunchConfiguration("rgb_topic")
     depth_topic = LaunchConfiguration("depth_topic")
@@ -50,6 +53,16 @@ def generate_launch_description():
         "rtabmap_args",
         default_value="",
         description="Extra RTAB-Map args, e.g. '-d' to reset database on start",
+    )
+    use_rviz_arg = DeclareLaunchArgument(
+        "use_rviz",
+        default_value="true",
+        description="Launch RViz2",
+    )
+    rviz_config_arg = DeclareLaunchArgument(
+        "rviz_config",
+        default_value="/home/thuong/LVTN/amr_ws/src/descriptions/config/rviz2.rviz",
+        description="RViz2 config file path",
     )
     use_zed_arg = DeclareLaunchArgument(
         "use_zed",
@@ -141,6 +154,16 @@ def generate_launch_description():
         }.items(),
     )
 
+    rviz_node = Node(
+        package="rviz2",
+        executable="rviz2",
+        name="rviz2",
+        output="screen",
+        arguments=["-d", rviz_config],
+        parameters=[{"use_sim_time": use_sim_time}],
+        condition=IfCondition(use_rviz),
+    )
+
     return LaunchDescription(
         [
             use_sim_time_arg,
@@ -148,6 +171,8 @@ def generate_launch_description():
             database_path_arg,
             namespace_arg,
             rtabmap_args_arg,
+            use_rviz_arg,
+            rviz_config_arg,
             use_zed_arg,
             rgb_topic_arg,
             depth_topic_arg,
@@ -157,5 +182,6 @@ def generate_launch_description():
             # approx_sync_max_interval_arg,
             ekf_filter_node,
             rtabmap_slam,
+            rviz_node,
         ]
     )
