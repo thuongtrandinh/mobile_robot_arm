@@ -15,7 +15,7 @@ diff_cont:
     right_wheel_names: ["right_wheel_joint"]
 
     # Physical Parameters - CRITICAL: Đúng kích thước từ URDF
-    wheel_separation: 0.46  # m - distance between wheels
+    wheel_separation: 0.5  # m - distance between wheels
     wheel_radius: 0.05       # m - wheel radius
 
     # TF and Odometry Settings
