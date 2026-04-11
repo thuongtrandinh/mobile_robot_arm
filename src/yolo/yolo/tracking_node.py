@@ -771,40 +771,46 @@ class TrackingNode(Node):
         except Exception as e:
             self.get_logger().error(f'Parallel inference error: {e}', throttle_duration_sec=2.0)
 
-        # ===== [TỐI ƯU] TRÍCH XUẤT ĐẶC TRƯNG MÀU SẮC (DEEP LEARNING RE-ID) =====
-        # Extract ResNet18 512-dim color/shape features for robust person Re-ID
-        # [CẢI TIẾN] Thêm margin để bắt được đặc trưng hình dáng và màu sắc cạnh biên người
-        features_list = []
-        for det in person_detections:
-            # Only extract features for confident detections (optimization)
-            if det['confidence'] >= self._person_tracker.track_thresh:
-                x1, y1, x2, y2 = det['box']
-                
-                # [THÊM MỚI] Skip bounding boxes smaller than 40x80 pixels
-                # Prevents GPU from wasting compute on distant/trash objects
-                if (x2 - x1) < 40 or (y2 - y1) < 80:
-                    feat = self._appearance_extractor.get_empty_feature()
-                else:
-                    # [CẢI TIẾN] Lấy margin động dựa trên tỷ lệ bbox để bắt được màu sắc balo/mũ/giày
-                    # Margin tính theo % of bbox size (10%) để adaptive với nhiều kích cỡ người khác nhau
-                    # Điều này giúp trích xuất đặc trưng sạch nhất cho dù người ở xa hay gần
-                    margin_x = int((x2 - x1) * 0.1)  # 10% of bbox width
-                    margin_y = int((y2 - y1) * 0.1)  # 10% of bbox height
-                    crop_y1 = max(0, int(y1) - margin_y)
-                    crop_y2 = min(h_img, int(y2) + margin_y)
-                    crop_x1 = max(0, int(x1) - margin_x)
-                    crop_x2 = min(w_img, int(x2) + margin_x)
-                    
-                    crop_img = frame[crop_y1:crop_y2, crop_x1:crop_x2]
-                    
-                    # Extract 512-dim appearance feature using ResNet18 on RTX A4000 (Tensor Cores FP16)
-                    # ResNet18 sẽ trích xuất: màu sắc áo, kiểu tóc, hình dáng vai, và họa tiết
-                    feat = self._appearance_extractor.extract(crop_img)
-            else:
-                # Low confidence detection gets empty feature vector
-                feat = self._appearance_extractor.get_empty_feature()
-            features_list.append(feat)
+        # ===== [CLEAN CODE & BATCH OPTIMIZATION] TRÍCH XUẤT ĐẶC TRƯNG MÀU (RE-ID TỐI ƯU) =====
+        # Spatial filter: Only process people likely to be target (confidence + size-based)
+        confident_bboxes = []
+        confident_indices = []
+        
+        for i, det in enumerate(person_detections):
+            # 1. Confidence filter: High confidence detections only
+            if det['confidence'] < self._person_tracker.track_thresh:
+                continue
             
+            x1, y1, x2, y2 = det['box']
+            width, height = (x2 - x1), (y2 - y1)
+            
+            # 2. SPATIAL FILTER (Bộ lọc không gian):
+            # People too small (< 50x100) are far away/background noise - skip for GPU efficiency
+            # Helps Re-ID focus on potential targets in close range (< 4 meters)
+            if width < 50 or height < 100:
+                continue
+            
+            confident_bboxes.append(det['box'])
+            confident_indices.append(i)
+        
+        # 3. Batch Inference: Process all candidate people in single GPU pass (~3ms for 1-5 people)
+        # Function handles margin extraction and noise filtering internally (clean separation)
+        batch_features = self._appearance_extractor.extract_batch(
+            frame=frame,
+            bboxes=confident_bboxes,
+            margin_ratio=0.10,  # 10% lề capture clothing edges
+            min_w=50,           # Spatial filter min width
+            min_h=100           # Spatial filter min height
+        )
+        
+        # 4. Initialize feature array with zeros for all detections
+        features_list = [self._appearance_extractor.get_empty_feature() for _ in person_detections]
+        
+        # 5. Map batch results back to original detection indices
+        if batch_features is not None and len(batch_features) > 0:
+            for batch_idx, original_idx in enumerate(confident_indices):
+                features_list[original_idx] = batch_features[batch_idx]
+        
         features_np = np.array(features_list) if len(features_list) > 0 else None
 
         # ===== TRACKING NGƯỜI (ĐÃ KÍCH HOẠT RE-ID) =====

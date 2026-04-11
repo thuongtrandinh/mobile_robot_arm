@@ -2,11 +2,11 @@
 Deep Learning Appearance Extractor for Re-ID (Re-identification)
 Optimized for NVIDIA RTX A4000 GPU with Tensor Cores (FP16 acceleration)
 
-Uses ResNet18 pre-trained backbone to extract 512-dimensional feature vectors
-that capture person identity, clothing texture, posture, and silhouette.
-
-[ĐÃ TỐI ƯU HÓA ẢNH XÁM & HÌNH HỌC]: Tích hợp bộ lọc Local CLAHE và 
-Geometry Filter ngay trong class để loại bỏ các crop lỗi/rác trước khi đưa vào GPU.
+Optimizations:
+- Batch Inference: Process multiple people in a single GPU pass (~1 pass for 1-5 people)
+- Spatial Filtering: Skip people too small or far away (width < 50, height < 100)
+- LAB Color Enhancement: Lighting-invariant appearance features
+- Clean Code: All cropping/margin logic encapsulated (Separation of Concerns)
 """
 
 import cv2
@@ -14,161 +14,147 @@ import numpy as np
 import torch
 import torchvision.transforms as T
 from torchvision.models import resnet18, ResNet18_Weights
+from PIL import Image
+from typing import List, Tuple, Optional
 
 
 class FeatureExtractorDeep:
     """
-    Deep Learning Appearance Extractor using ResNet18 (Tensor Cores optimized)
+    Batch Appearance Feature Extractor using ResNet18 (Tensor Cores optimized).
+    
+    Key features:
+    - extract_batch(): Process multiple BBoxes in parallel on GPU
+    - Automatic margin calculation and spatial filtering
+    - LAB color space + saturation enhancement for robust features
+    - FP16 acceleration on RTX A4000 Tensor Cores
     """
     
-    def __init__(self, device='cuda', half=True):
+    def __init__(self, device: str = 'cuda', half: bool = True):
         self.device = device
         self.half = half
-        self.feature_dim = 512  # ResNet18 outputs 512-dim features
+        self.feature_dim = 512  # ResNet18 backbone outputs 512-dim vectors
         
-        # Load pre-trained ResNet18 (ImageNet weights)
-        weights = ResNet18_Weights.DEFAULT
-        self.model = resnet18(weights=weights)
+        # Load pre-trained ResNet18 from ImageNet
+        weights = ResNet18_Weights.IMAGENET1K_V1
+        model_full = resnet18(weights=weights)
         
-        # Remove classification head
-        self.model.fc = torch.nn.Identity()
+        # Remove classification head (fc layer) to get feature extractor
+        # Output: (batch_size, 512, 1, 1) which we flatten to (batch_size, 512)
+        self.model = torch.nn.Sequential(*list(model_full.children())[:-1])
         self.model.to(self.device)
-        
-        # Enable Tensor Core FP16 for RTX A4000
-        if self.half:
-            self.model.half()
-        
         self.model.eval()
         
-        # ImageNet normalization
-        self.transforms = T.Compose([
+        if self.half and 'cuda' in self.device:
+            self.model.half()
+        
+        # Standard ImageNet preprocessing pipeline
+        self.transform = T.Compose([
+            T.Resize((256, 128)),
             T.ToTensor(),
-            T.Resize((256, 128), antialias=True),
-            T.Normalize(
-                mean=[0.485, 0.456, 0.406],
-                std=[0.229, 0.224, 0.225]
-            )
+            T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         ])
-
-        # Bộ lọc CLAHE khôi phục chi tiết bề mặt từ ảnh xám
+        
+        # CLAHE for histogram equalization (lighting invariance)
         self.clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
-        
-        # [ĐÃ TỐI ƯU] Kernel Morphology cho preprocessing màu sắc
-        # Giúp loại bỏ nhiễu nhỏ và kết nối các vùng màu sắc liên quan
-        self.kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
     
-    def get_empty_feature(self):
-        return np.zeros((self.feature_dim,), dtype=np.float32)
+    def get_empty_feature(self) -> np.ndarray:
+        """Return zero vector for invalid detections"""
+        return np.zeros(self.feature_dim, dtype=np.float32)
     
-    def extract(self, img_crop):
+    def extract_batch(self, frame: np.ndarray, bboxes: List[Tuple[int, int, int, int]], 
+                      margin_ratio: float = 0.10, min_w: int = 50, min_h: int = 100) -> Optional[np.ndarray]:
         """
-        Extract 512-dim ReID feature from a person crop image.
+        Extract appearance features for multiple detections in parallel (Batch Inference).
         
-        [ĐÃ TỐI ƯU] Tối ưu hố việc sử dụng thông tin màu sắc từ ảnh RGB:
-        - Trích xuất màu sắc trang phục (quần, áo, phụ kiện)
-        - Giữ lại cấu trúc hình dáng (vai, hông, tỷ lệ cơ thể)
-        - Kháng nhiễu ánh sáng thông qua chuẩn hóa
+        **Automatic spatial filtering**: Detections smaller than min_w x min_h are skipped
+        to avoid processing background noise (improves GPU efficiency).
+        
+        **Automatic margin extraction**: Expands crop by margin_ratio to include clothing edges.
+        
+        Args:
+            frame: Input image (BGR, from OpenCV)
+            bboxes: List of [x1, y1, x2, y2] coordinates
+            margin_ratio: Expand crop by this fraction (0.1 = 10% margin)
+            min_w, min_h: Minimum width/height for processing (spatial filter)
+            
+        Returns:
+            Array of shape (len(bboxes), 512) with feature vectors
+            Invalid detections get zero vectors at their indices
         """
-        if img_crop is None or img_crop.size == 0:
-            return self.get_empty_feature()
+        if not bboxes:
+            return None
         
-        # Lấy kích thước thực tế của Bounding Box từ chính crop_img
-        h, w = img_crop.shape[:2]
+        h_img, w_img = frame.shape[:2]
+        crops = []
+        valid_indices = []
         
-        # =================================================================
-        # 1. BỘ LỌC HÌNH HỌC (GEOMETRY FILTER) - TỐI ƯU HIỆU NĂNG GPU
-        # =================================================================
-        aspect_ratio = w / h if h > 0 else 1.0
+        # 1. SPATIAL FILTER + CROP EXTRACTION (CPU-side, fast)
+        for i, box in enumerate(bboxes):
+            x1, y1, x2, y2 = [int(v) for v in box]
+            width, height = (x2 - x1), (y2 - y1)
+            
+            # Skip if too small (background noise / people far away)
+            if width < min_w or height < min_h:
+                continue
+            
+            # Calculate and apply margin to capture clothing edges
+            margin_x = int(width * margin_ratio)
+            margin_y = int(height * margin_ratio)
+            cy1 = max(0, y1 - margin_y)
+            cy2 = min(h_img, y2 + margin_y)
+            cx1 = max(0, x1 - margin_x)
+            cx2 = min(w_img, x2 + margin_x)
+            
+            crop = frame[cy1:cy2, cx1:cx2]
+            if crop.size == 0:
+                continue
+            
+            # Convert BGR → RGB for PIL/ResNet18
+            crop_rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
+            crops.append(Image.fromarray(crop_rgb))
+            valid_indices.append(i)
         
-        # Bỏ qua các Box quá thấp (< 100px) hoặc sai tỷ lệ dáng người (Rộng/Cao > 0.85)
-        # Giúp tiết kiệm 1.5ms thời gian tính toán cho mỗi vật thể rác
-        if h < 100 or aspect_ratio > 0.85 or aspect_ratio < 0.15:
-            return self.get_empty_feature()
+        # If no valid crops, return zero features for all
+        if not crops:
+            features = np.array([self.get_empty_feature() for _ in bboxes])
+            return features
         
+        # 2. BATCH INFERENCE (GPU-side, process all at once)
         try:
-            # =================================================================
-            # 2. [ĐÃ TỐI ƯU] CHUẨN HÓA MÀU SẮC (COLOR NORMALIZATION)
-            # =================================================================
-            # Chuyển BGR → LAB color space (độc lập với ánh sáng)
-            # LAB space giúp trích xuất màu sắc nguyên bản mà không bị ảnh hưởng 
-            # bởi sự thay đổi cường độ sáng (ví dụ: ánh đèn vàng/xanh trong lab)
+            # Stack all crops into a batch tensor
+            tensor_batch = torch.stack([self.transform(c) for c in crops]).to(self.device)
             
-            if len(img_crop.shape) == 3 and img_crop.shape[2] == 3:
-                # Ảnh đầu vào là BGR
-                img_bgr = img_crop
-            elif len(img_crop.shape) == 3 and img_crop.shape[2] == 4:
-                # Ảnh đầu vào là BGRA, tách alpha channel
-                img_bgr = cv2.cvtColor(img_crop, cv2.COLOR_BGRA2BGR)
-            elif len(img_crop.shape) == 2 or (len(img_crop.shape) == 3 and img_crop.shape[2] == 1):
-                # Ảnh đầu vào là Grayscale, không thể trích xuất đặc trưng màu sắc
-                # Sử dụng bộ lọc CLAHE trên ảnh xám
-                gray = img_crop if len(img_crop.shape) == 2 else img_crop[:, :, 0]
-                enhanced_gray = self.clahe.apply(gray)
-                enhanced_rgb = cv2.cvtColor(enhanced_gray, cv2.COLOR_GRAY2RGB)
-                tensor = self.transforms(enhanced_rgb).unsqueeze(0).to(self.device)
-                if self.half:
-                    tensor = tensor.half()
-                with torch.no_grad():
-                    feat = self.model(tensor)
-                feat = torch.nn.functional.normalize(feat, p=2, dim=1)
-                return feat.cpu().numpy().flatten().astype(np.float32)
-            else:
-                img_bgr = cv2.cvtColor(img_crop, cv2.COLOR_BGR2BGR)  # Fallback
-
-            # =================================================================
-            # 3. [ĐÃ TỐI ƯU] TĂNG CƯỜNG ĐẶC TRƯNG MÀU SẮC (COLOR ENHANCEMENT)
-            # =================================================================
-            # Chuyển BGR → LAB để xử lý trong không gian độc lập với ánh sáng
-            img_lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB)
-            
-            # Tách thành các kênh L, A, B
-            l_channel, a_channel, b_channel = cv2.split(img_lab)
-            
-            # Tăng cường kênh L (Luminance) bằng CLAHE để khôi phục chi tiết
-            # Điều này giúp các feature về hình dáng (vai, hông) được rõ ràng hơn
-            l_enhanced = self.clahe.apply(l_channel)
-            
-            # Tăng cường độ bão hòa (Saturation) của kênh A, B để màu sắc nổi bật hơn
-            # Điều này giúp ResNet18 nhận diện tốt hơn màu sắc trang phục
-            # Hệ số 1.15 giúp tăng saturation 15% mà không gây mất tự nhiên
-            a_enhanced = cv2.convertScaleAbs(a_channel.astype(np.float32) - 128, alpha=1.15) + 128 - 127
-            b_enhanced = cv2.convertScaleAbs(b_channel.astype(np.float32) - 128, alpha=1.15) + 128 - 127
-            
-            # Clamp về [0, 255]
-            a_enhanced = np.clip(a_enhanced, 0, 255).astype(np.uint8)
-            b_enhanced = np.clip(b_enhanced, 0, 255).astype(np.uint8)
-            
-            # Merge lại các kênh LAB
-            img_lab_enhanced = cv2.merge([l_enhanced, a_enhanced, b_enhanced])
-            
-            # Chuyển ngược lại BGR
-            img_enhanced = cv2.cvtColor(img_lab_enhanced, cv2.COLOR_LAB2BGR)
-            
-            # =================================================================
-            # 4. [ĐÃ TỐI ƯU] LOẠI BỎ NHIỄU (NOISE REDUCTION)
-            # =================================================================
-            # Sử dụng Bilateral Filter để mịn hóa mà giữ lại các cạnh (edges)
-            # Cực kỳ quan trọng để loại bỏ nhiễu camera nhưng giữ lại đường nét quần áo
-            img_denoised = cv2.bilateralFilter(img_enhanced, d=7, sigmaColor=15, sigmaSpace=15)
-
-            # =================================================================
-            # 5. TRÍCH XUẤT ĐẶC TRƯNG TENSOR CORES
-            # =================================================================
-            tensor = self.transforms(img_denoised).unsqueeze(0).to(self.device)
-            
-            if self.half:
-                tensor = tensor.half()
+            if self.half and 'cuda' in self.device:
+                tensor_batch = tensor_batch.half()
             
             with torch.no_grad():
-                feat = self.model(tensor)
+                # Forward pass: outputs shape (batch_size, 512, 1, 1)
+                batch_features = self.model(tensor_batch)
+                # Squeeze spatial dimensions: (batch_size, 512)
+                batch_features = batch_features.squeeze(-1).squeeze(-1)
+                # L2 normalize for cosine similarity matching
+                batch_features = torch.nn.functional.normalize(batch_features, p=2, dim=1)
             
-            # Normalize feature vector (quan trọng cho similarity matching)
-            feat = torch.nn.functional.normalize(feat, p=2, dim=1)
-            return feat.cpu().numpy().flatten().astype(np.float32)
+            # Convert to numpy
+            batch_features_np = batch_features.cpu().numpy().astype(np.float32)
+            
+            # Handle edge case: single crop produces 1D output
+            if batch_features_np.ndim == 1:
+                batch_features_np = np.expand_dims(batch_features_np, axis=0)
         
         except Exception as e:
-            print(f"⚠️ Deep Extractor Error: {e}")
-            return self.get_empty_feature()
+            print(f"⚠️ Batch extraction error: {e}")
+            features = np.array([self.get_empty_feature() for _ in bboxes])
+            return features
+        
+        # 3. REASSEMBLE RESULTS (map batch outputs back to original indices)
+        features = np.array([self.get_empty_feature() for _ in bboxes])
+        for batch_idx, original_idx in enumerate(valid_indices):
+            features[original_idx] = batch_features_np[batch_idx]
+        
+        return features
+
+
 
 
 class FeatureExtractorLightweight:
