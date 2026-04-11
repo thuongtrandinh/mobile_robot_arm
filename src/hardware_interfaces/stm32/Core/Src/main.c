@@ -688,7 +688,10 @@ void StartDefaultTask(void *argument)
 	joint_msg.velocity.size = 2;
 	joint_msg.velocity.capacity = 2;
 
-	rmw_uros_sync_session(1000);
+	while (!rmw_uros_epoch_synchronized()) {
+      rmw_uros_sync_session(1000);
+      osDelay(10);
+  }
 
 	while (1)
 	{

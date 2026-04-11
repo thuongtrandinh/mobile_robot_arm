@@ -64,6 +64,7 @@ void KeyboardInput::keyboardLoop()
         {
         case 'w':
         case 'W':
+<<<<<<< HEAD
             current_linear = 0.2; // Tiến, giữ nguyên góc quay hiện tại
             publishCmd(current_linear, current_angular);
             break;
@@ -81,6 +82,21 @@ void KeyboardInput::keyboardLoop()
         case 'D':
             current_angular = -0.2; // Quay phải, giữ nguyên tốc độ tiến/lùi
             publishCmd(current_linear, current_angular);
+=======
+            publishCmd(0.2, 0.0); // Tiến
+            break;
+        case 's':
+        case 'S':
+            publishCmd(-0.2, 0.0); // Lùi
+            break;
+        case 'a':
+        case 'A':
+            publishCmd(0.0, 0.2); // Quay trái
+            break;
+        case 'd':
+        case 'D':
+            publishCmd(0.0, -0.2); // Quay phải
+>>>>>>> 964fa09 (feat: add for select path for slam)
             break;
         case ' ':
             current_linear = 0.0;

@@ -1,18 +1,37 @@
 import os
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
-from ament_index_python.packages import get_package_share_directory
+from ament_index_python.packages import get_package_prefix, get_package_share_directory
+
+
+def _prepare_rtabmap_database(context):
+    db_path = os.path.expanduser(LaunchConfiguration("database_path").perform(context))
+    db_dir = os.path.dirname(db_path)
+
+    os.makedirs(db_dir, exist_ok=True)
+    if os.path.exists(db_path):
+        os.remove(db_path)
+
+    return []
 
 
 def generate_launch_description():
     localization_dir = get_package_share_directory("localization")
+    descriptions_dir = get_package_share_directory("descriptions")
     mapping_dir = get_package_share_directory("mapping")
+    mapping_prefix = get_package_prefix("mapping")
+    workspace_dir = os.path.dirname(os.path.dirname(mapping_prefix))
     rtabmap_launch_dir = get_package_share_directory("rtabmap_launch")
+
+    default_db_path = os.path.join(
+        workspace_dir, "src", "mapping", "maps", "B3", "rtabmap_map.db"
+    )
+    default_rviz_config = os.path.join(descriptions_dir, "config", "rviz2.rviz")
 
     use_sim_time = LaunchConfiguration("use_sim_time")
     cfg = LaunchConfiguration("cfg")
@@ -41,7 +60,7 @@ def generate_launch_description():
     )
     database_path_arg = DeclareLaunchArgument(
         "database_path",
-        default_value="~/.ros/rtabmap_map.db",
+        default_value=default_db_path,
         description="RTAB-Map database output in mapping phase",
     )
     namespace_arg = DeclareLaunchArgument(
@@ -61,7 +80,7 @@ def generate_launch_description():
     )
     rviz_config_arg = DeclareLaunchArgument(
         "rviz_config",
-        default_value="/home/thuong/LVTN/amr_ws/src/descriptions/config/rviz2.rviz",
+        default_value=default_rviz_config,
         description="RViz2 config file path",
     )
     use_zed_arg = DeclareLaunchArgument(
@@ -180,6 +199,7 @@ def generate_launch_description():
             # topic_queue_size_arg,
             # sync_queue_size_arg,
             # approx_sync_max_interval_arg,
+            OpaqueFunction(function=_prepare_rtabmap_database),
             ekf_filter_node,
             rtabmap_slam,
             rviz_node,
