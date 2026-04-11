@@ -41,7 +41,7 @@
             brightness: 4               # [DYNAMIC] Mặc định
             contrast: 8                 # [DYNAMIC] Tăng từ 4 → 6 để làm rõ nếp gấp ngón tay
             hue: 0                      # [DYNAMIC] Mặc định
-            saturation: 0               # [DYNAMIC] Tăng từ 4 → 5 để phân biệt màu da rõ hơn
+            saturation: 4               # [DYNAMIC] Tăng từ 4 → 5 để phân biệt màu da rõ hơn
             sharpness: 6                # [DYNAMIC] Tăng từ 4 → 5 để làm sắc nét viền tay
             gamma: 4                    # [DYNAMIC] Mặc định
             auto_exposure_gain: true   # [DYNAMIC] TẮT tự động bù sáng (fix washed-out)

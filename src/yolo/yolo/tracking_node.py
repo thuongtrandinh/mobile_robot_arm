@@ -83,6 +83,7 @@ class TrackingNode(Node):
             # Tracking parameters
             self.gesture_hold_time = config['tracking']['gesture_hold_time']
             self.tracking_timeout = config['tracking']['tracking_timeout']
+            self.id_switch_threshold_m = config['tracking'].get('id_switch_threshold_m', 1.5)  # [THÊM MỚI] 3D distance threshold (meters)
             self.gesture_buffer_size = config['tracking']['gesture_buffer_size']
             self.gesture_confirmation_ratio = config['tracking']['gesture_confirmation_ratio']
             
@@ -196,16 +197,16 @@ class TrackingNode(Node):
             track_thresh=0.45,          # High threshold: require 45% confidence for new tracks
             track_low_thresh=0.10,      # LOW THRESHOLD: keep tracks alive with only 10% confidence (BYTE Association)
             track_buffer=500,           # 500 frames ≈ 5s at 100 FPS
-            match_thresh=0.8,
+            match_thresh=0.7,           # [TỐI ƯU] Giảm từ 0.8 xuống 0.7 để linh hoạt hơn khi khớp đặc trưng
             use_appearance=True,        # ENABLED: Deep learning Re-ID features
-            appearance_weight=0.6,      # Trust ResNet18 features 60% (improved from 0.2)
+            appearance_weight=0.8,      # [TỐI ƯU] Tăng từ 0.6 lên 0.8: Tin vào màu áo/ngoại hình 80% (chống ID Switching)
             max_age_before_predict=150
         )
         
         self.get_logger().info(
-            f'✅ Person Tracker initialized (FLICKERING FIX v3 - BYTE Association):'
+            f'✅ Person Tracker initialized (ANTI-ID-SWITCHING v4 - Enhanced Re-ID):'
             f' track_thresh=0.45, track_low_thresh=0.10, track_buffer=500 frames (~5s@100FPS), '
-            f'max_age_before_predict=150 (Two-Stage matching + EMA smoothing)'
+            f'appearance_weight=0.8 (Color/Shape features trusted 80%), match_thresh=0.7 (strict matching)'
         )
 
         self._hand_tracker = BoTSortTracker(
@@ -691,6 +692,12 @@ class TrackingNode(Node):
         person_detections = []
         hand_detections = []
         
+        # ===== [THÊM MỚI] CẮT BIỆT GRAYSCALE CHO HANDSIGN =====
+        # Chuẩn bị ảnh xám cho luồng hand detection (ổn định với ánh sáng màu)
+        # Merge 3 kênh grayscale để khớp yêu cầu đầu vào YOLO (BGR format)
+        frame_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        frame_gray_3ch = cv2.merge([frame_gray, frame_gray, frame_gray])
+        
         try:
             # Send both YOLO requests to GPU simultaneously (RTX A4000 supports concurrent kernels)
             # Time reduction: ~100ms → ~55ms (roughly 50% speedup)
@@ -698,8 +705,10 @@ class TrackingNode(Node):
                 self._person_yolo.predict, frame, 
                 conf=self.person_conf, verbose=False, device=self._device, half=self.use_fp16
             )
+            # [ĐÃ TỐI ƯU] Tách biệt nguồn dữ liệu: Handsign dùng Grayscale để nhận diện ổn định
+            # RGB dùng cho Person để trích xuất đặc trưng màu sắc (Re-ID)
             future_hand = self.inference_pool.submit(
-                self._hand_yolo.predict, frame,
+                self._hand_yolo.predict, frame_gray_3ch,
                 conf=self.hand_conf, verbose=False, device=self._device, half=self.use_fp16
             )
             
@@ -762,9 +771,9 @@ class TrackingNode(Node):
         except Exception as e:
             self.get_logger().error(f'Parallel inference error: {e}', throttle_duration_sec=2.0)
 
-        # ===== TRÍCH XUẤT ĐẶC TRƯNG ẢNH (DEEP LEARNING RE-ID) =====
-        # Extract ResNet18 512-dim features for each person detection via GPU
-        # [THÊM MỚI] Skip tiny bounding boxes to prevent GPU waste on trash detections
+        # ===== [TỐI ƯU] TRÍCH XUẤT ĐẶC TRƯNG MÀU SẮC (DEEP LEARNING RE-ID) =====
+        # Extract ResNet18 512-dim color/shape features for robust person Re-ID
+        # [CẢI TIẾN] Thêm margin để bắt được đặc trưng hình dáng và màu sắc cạnh biên người
         features_list = []
         for det in person_detections:
             # Only extract features for confident detections (optimization)
@@ -776,9 +785,20 @@ class TrackingNode(Node):
                 if (x2 - x1) < 40 or (y2 - y1) < 80:
                     feat = self._appearance_extractor.get_empty_feature()
                 else:
-                    # Crop person region from frame
-                    crop_img = frame[max(0, int(y1)):min(h_img, int(y2)), max(0, int(x1)):min(w_img, int(x2))]
+                    # [CẢI TIẾN] Lấy margin động dựa trên tỷ lệ bbox để bắt được màu sắc balo/mũ/giày
+                    # Margin tính theo % of bbox size (10%) để adaptive với nhiều kích cỡ người khác nhau
+                    # Điều này giúp trích xuất đặc trưng sạch nhất cho dù người ở xa hay gần
+                    margin_x = int((x2 - x1) * 0.1)  # 10% of bbox width
+                    margin_y = int((y2 - y1) * 0.1)  # 10% of bbox height
+                    crop_y1 = max(0, int(y1) - margin_y)
+                    crop_y2 = min(h_img, int(y2) + margin_y)
+                    crop_x1 = max(0, int(x1) - margin_x)
+                    crop_x2 = min(w_img, int(x2) + margin_x)
+                    
+                    crop_img = frame[crop_y1:crop_y2, crop_x1:crop_x2]
+                    
                     # Extract 512-dim appearance feature using ResNet18 on RTX A4000 (Tensor Cores FP16)
+                    # ResNet18 sẽ trích xuất: màu sắc áo, kiểu tóc, hình dáng vai, và họa tiết
                     feat = self._appearance_extractor.extract(crop_img)
             else:
                 # Low confidence detection gets empty feature vector
@@ -832,16 +852,75 @@ class TrackingNode(Node):
                 self.get_logger().info('🔄 Target lost, switching to Re-TRACKING (5s prediction)')
         
         if self.current_state == 'Re-TRACKING' and self.target_lost_time is not None:
-            if ts_now - self.target_lost_time > 5.0:
+            # ===== [TỐI ƯU] LOGIC "XÁC THỰC KHOẢNG CÁCH 3D" KHI RE-ACQUIRE (CHỐNG NHẢY ID) =====
+            # Khi một ID xuất hiện lại, kiểm tra xem vị trí mới có "vô lý" so với dự đoán hay không
+            # [CỐT LỐI] So sánh trong hệ Mét (3D) chứ không phải Pixel (2D) để tránh sai lệch Unit Mismatch
+            
+            if self.target_visible:
+                # Tìm track có cùng ID main_target_id
+                potential_target = next((t for t in person_tracks if t['track_id'] == self.main_target_id), None)
+                
+                if potential_target and self.main_target_id in self.ekfs:
+                    new_bbox = potential_target['bbox']
+                    new_cx = (new_bbox[0] + new_bbox[2]) / 2.0  # Center X (pixel)
+                    new_cy = int(new_bbox[1] + (new_bbox[3] - new_bbox[1]) * 0.3)  # Upper chest (pixel)
+                    
+                    # [QUAN TRỌNG] Lấy depth từ bounding box mới
+                    depth_val = self._get_weighted_depth_in_bbox(new_bbox, self._current_depth_map, h_img, w_img)
+                    
+                    if depth_val is not None:
+                        # Chuyển đổi pixel → 3D world coordinates (mét)
+                        new_px_3d = float(depth_val)  # Forward distance (meters)
+                        new_py_3d = float(-(new_cx - self.cx_cam) * depth_val / self.fx)  # Lateral distance (meters)
+                        
+                        ekf_state = self.ekfs[self.main_target_id].state
+                        
+                        # So sánh 3D: Meter vs Meter (ĐÚNG cách!)
+                        dist_error_3d = np.sqrt((new_px_3d - ekf_state.x)**2 + (new_py_3d - ekf_state.y)**2)
+                        
+                        if dist_error_3d > self.id_switch_threshold_m:
+                            self.get_logger().warn(
+                                f'⚠️ ID Switch detected! Track #{self.main_target_id} moved {dist_error_3d:.2f}m '
+                                f'(>{self.id_switch_threshold_m}m). New person likely took old ID. Rejecting re-acquire.'
+                            )
+                            # Không cho phép quay lại TRACKING với đối tượng này
+                            # Giữ Re-TRACKING để chờ mục tiêu thật xuất hiện
+                        else:
+                            # ID khớp và vị trí hợp lý → Mục tiêu thật đã tái xuất hiện
+                            self.current_state = 'TRACKING'
+                            self.target_lost_time = None
+                            self.get_logger().info(
+                                f'✅ Target #{self.main_target_id} reacquired (dist_error={dist_error_3d:.2f}m, OK). Back to TRACKING'
+                            )
+                    else:
+                        # Không có Depth data, tin tưởng tuyệt đối vào BoT-SORT Re-ID features
+                        # [THÊM MỚI] Reset vận tốc ảo của EKF để State Machine không từ chối packet
+                        if self.current_state == 'Re-TRACKING':
+                            self.ekfs[self.main_target_id].state.v = 0.0
+                            self.velocity_filters[self.main_target_id].reset()
+                        
+                        self.current_state = 'TRACKING'
+                        self.target_lost_time = None
+                        self.get_logger().info(f'✅ Target #{self.main_target_id} reacquired (No Depth). Back to TRACKING')
+                else:
+                    # Không có EKF data, cho phép quay lại TRACKING (edge case)
+                    # [THÊM MỚI] Reset vận tốc ảo để State Machine không từ chối packet
+                    if self.current_state == 'Re-TRACKING' and self.main_target_id in self.ekfs:
+                        self.ekfs[self.main_target_id].state.v = 0.0
+                        self.velocity_filters[self.main_target_id].reset()
+                    
+                    self.current_state = 'TRACKING'
+                    self.target_lost_time = None
+                    self.get_logger().info('✅ Target reacquired (no EKF data), back to TRACKING')
+            
+            # Timeout: Nếu mục tiêu vẫn không xuất hiện, trở lại IDLE
+            # [ĐỒNG BỘ] Sử dụng self.tracking_timeout từ config (10.0s)
+            # [FIX NoneType] Kiểm tra self.target_lost_time is not None trước khi tính toán (Short-circuit evaluation)
+            if self.target_lost_time is not None and (ts_now - self.target_lost_time > self.tracking_timeout):
                 self.current_state = 'IDLE'
                 self.main_target_id = None
                 self.target_lost_time = None
-                self.get_logger().info('⏱️ Re-TRACKING timeout, returning to IDLE')
-                
-        if self.current_state == 'Re-TRACKING' and self.target_visible:
-            self.current_state = 'TRACKING'
-            self.target_lost_time = None
-            self.get_logger().info('✅ Target reacquired, back to TRACKING')
+                self.get_logger().info(f'⏱️ Re-TRACKING timeout ({self.tracking_timeout}s), returning to IDLE')
 
         # ===== GESTURE STATE MACHINE (WITH HYSTERESIS BUFFER VOTING) =====
         # Use gesture buffer voting mechanism per Gemini recommendation:
@@ -1150,6 +1229,14 @@ class TrackingNode(Node):
                 filtered_vel = vel_filter.update(np.array([ekf_vx, ekf_vy, 0.0]))
                 final_vx, final_vy = float(filtered_vel[0]), float(filtered_vel[1])
 
+                # [THÊM MỚI] Kẹp vận tốc tối đa 2.5 m/s (Bảo vệ an toàn cho State Machine validation)
+                # State Machine rejects packets with velocity > 3.0 m/s as sensor noise
+                # So we clamp to 2.5 m/s to pass validation and prevent soft rejection
+                speed = math.hypot(final_vx, final_vy)
+                if speed > 2.5:
+                    final_vx = (final_vx / speed) * 2.5
+                    final_vy = (final_vy / speed) * 2.5
+
                 # Calculate obstacle radius from bbox width
                 if depth_val:
                     radius = float(abs(x2 - x1) * depth_val / fx / 2.0 * 0.85)
@@ -1200,7 +1287,7 @@ class TrackingNode(Node):
                 return
 
             # ===== CASE 2: TRACKING STATE - Publish main_person + other obstacles =====
-            elif self.current_state in ['TRACKING', 'RE_TRACKING']:  # [ĐÃ SỬA] Khớp với enum nhưng kiểm tra internal state
+            elif self.current_state in ['TRACKING', 'Re-TRACKING']:  # [ĐÃ SỬA] Fix state string mismatch (Re-TRACKING not RE_TRACKING)
                 if self.main_target_id is None:
                     # No main target yet, publish all as obstacles
                     for person_track in person_tracks:

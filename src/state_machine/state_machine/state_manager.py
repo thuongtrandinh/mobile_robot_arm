@@ -23,7 +23,7 @@ class RobotState(Enum):
 class StateConfig:
     # Timing (Gesture hold removed because tracking_node.py already handles it)
     tracking_timeout: float = 0.3          
-    retracking_timeout: float = 3.0        
+    retracking_timeout: float = 10.0       # [SỬA] Tăng từ 3.0 → 10.0 để đồng bộ với tracking_node.py
     start_gesture_class: int = 0           
     stop_gesture_class: int = 1            
     velocity_filter_alpha: float = 0.3     

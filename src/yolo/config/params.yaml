@@ -3,7 +3,7 @@
 # ===== YOLO DETECTION PARAMETERS =====
 yolo:
   # Person detection (LOWERED for grayscale robustness - critical fix for 100+ FPS systems)
-  person_conf_thresh: 0.55       
+  person_conf_thresh: 0.65       
   
   # Hand gesture detection
   handsign_conf_thresh: 0.65     # CỰC KỲ QUAN TRỌNG: Hạ xuống 0.45 để không miss tay nhỏ ở độ phân giải VGA/WVGA
@@ -15,7 +15,11 @@ yolo:
 tracking:
   # Gesture recognition timing (reduced due to buffer filtering)
   gesture_hold_time: 1.0          # Reduced from 1.2 (voting buffer compensates)
-  tracking_timeout: 10.0           # Max time (s) person can be lost before re-tracking
+  tracking_timeout: 10.0          # Max time (s) person can be lost before re-tracking
+  
+  # [THÊM MỚI] ID Switch Detection threshold (3D distance in meters)
+  # If target re-appears but moved > 1.5m from EKF prediction, reject as ID Switch (likely different person)
+  id_switch_threshold_m: 1.5      # 1.5 meters = reasonable max jump distance for 10s occlusion
   
   # BoT-SORT tracking parameters
   track_thresh: 0.40              # CRITICAL: Lower threshold for patient tracking
@@ -42,7 +46,7 @@ depth_filter:
 
 # ===== HISTOGRAM EQUALIZATION (Grayscale enhancement) =====
 image_processing:
-  enable_histogram_equalization: true  # Apply CLAHE to enhance grayscale contrast
+  enable_histogram_equalization: false  # Apply CLAHE to enhance grayscale contrast
   clahe_clip_limit: 2.0                # Contrast limiting (2.0-4.0 recommended)
   clahe_tile_size: 8                   # Tile size for local contrast enhancement
 
