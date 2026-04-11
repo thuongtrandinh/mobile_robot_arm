@@ -8,6 +8,7 @@ Features:
 - Kalman prediction for position during occlusion/gaps
 """
 
+import math
 import numpy as np
 from typing import Optional, List, Tuple
 
@@ -221,3 +222,106 @@ class KalmanPredictor:
         self.state = np.zeros(4, dtype=np.float32)
         self.P = np.eye(4, dtype=np.float32) * 0.1
         self.initialized = False
+
+
+class GoalPoseFilter:
+    """
+    Advanced Goal Pose filter for Navigation Controllers (RL-MPC Optimized).
+    
+    Tích hợp bộ phân tích xu hướng (Trend Analysis) để hành xử như con người:
+    - Người đi ra xa: Đạp ga bám theo bình thường.
+    - Người tiến lại gần xe: Chủ động rà phanh từ xa (chậm dần) để nhường đường.
+    - Chạm mốc 1.5m: Khóa bánh dừng hẳn mượt mà.
+    
+    Logic:
+    1. Track khoảng cách frame này vs frame trước (delta_dist)
+    2. Nếu delta_dist < -0.01m (khoảng cách đang giảm) → nearby approaching
+    3. Áp dụng damping 30% tới raw_goal để giảm tốc độ chủ động
+    4. Bộ lọc EMA không đối xứng: phanh chậm 0.15, đuổi theo nhanh 0.25
+    """
+    
+    def __init__(self, safe_distance: float = 1.5, 
+                 alpha_follow: float = 0.25,   # Tăng tốc để đuổi theo (Phản hồi nhanh)
+                 alpha_brake: float = 0.15,    # Giảm tốc mượt mà (Rà phanh êm ái)
+                 creep_thresh: float = 0.08):
+        """
+        Args:
+            safe_distance: Target distance to maintain (1.5m)
+            alpha_follow: EMA coefficient when expanding goal (person moving away) - faster response
+            alpha_brake: EMA coefficient when contracting goal (person moving close) - smoother deceleration
+            creep_thresh: Threshold for anti-creep snap-to-zero (8cm)
+        """
+        self.safe_distance = safe_distance
+        self.alpha_follow = alpha_follow
+        self.alpha_brake = alpha_brake
+        self.creep_thresh = creep_thresh
+        
+        self.last_goal_x = 0.0
+        self.last_goal_y = 0.0
+        self.prev_distance = None  # Lưu vết khoảng cách để phân tích xu hướng
+
+    def process(self, ekf_x: float, ekf_y: float) -> Tuple[float, float]:
+        """
+        Process position and output filtered goal based on approach trend.
+        
+        Args:
+            ekf_x: Filtered person X position (camera frame)
+            ekf_y: Filtered person Y position (camera frame)
+            
+        Returns:
+            (goal_x, goal_y): Filtered goal position for Nav2
+        """
+        distance_to_person = math.hypot(ekf_x, ekf_y)
+        
+        # Khởi tạo khoảng cách ở frame đầu tiên
+        if self.prev_distance is None:
+            self.prev_distance = distance_to_person
+            
+        # 1. PHÂN TÍCH XU HƯỚNG (Trend Analysis)
+        delta_dist = distance_to_person - self.prev_distance
+        self.prev_distance = distance_to_person
+        
+        # Nếu khoảng cách giảm > 1cm mỗi frame -> Người đang đi hướng về phía xe
+        is_approaching = delta_dist < -0.01 
+        
+        # 2. TÍNH TOÁN RAW GOAL (Đích đến thô)
+        if distance_to_person > self.safe_distance:
+            ratio = (distance_to_person - self.safe_distance) / distance_to_person
+            raw_goal_x = ekf_x * ratio
+            raw_goal_y = ekf_y * ratio
+            
+            # LOGIC THÔNG MINH: Đang ở xa (VD: 2m) nhưng người tiến lại gần
+            if is_approaching:
+                # Xe chủ động giảm 70% lực tiến (Damping)
+                # Thay vì cố lao lên, xe sẽ lơi ga và đi chậm dần lại chờ người tới
+                damping = 0.3 
+                raw_goal_x *= damping
+                raw_goal_y *= damping
+        else:
+            # Chạm mốc 1.5m -> Cắt đích về 0 (Lệnh phanh)
+            raw_goal_x = 0.0
+            raw_goal_y = 0.0
+            
+        # 3. BỘ LỌC BẤT ĐỐI XỨNG (Asymmetric EMA)
+        current_mag = math.hypot(self.last_goal_x, self.last_goal_y)
+        raw_mag = math.hypot(raw_goal_x, raw_goal_y)
+        
+        # Nếu đích đang thu hẹp lại (cần phanh) -> Dùng alpha_brake để hãm từ từ êm ái
+        # Nếu đích đang xa ra (cần đuổi theo) -> Dùng alpha_follow để bám sát không bị trễ
+        alpha = self.alpha_brake if raw_mag < current_mag else self.alpha_follow
+        
+        self.last_goal_x = alpha * raw_goal_x + (1 - alpha) * self.last_goal_x
+        self.last_goal_y = alpha * raw_goal_y + (1 - alpha) * self.last_goal_y
+        
+        # 4. CHỐNG TRƯỜN (Anti-creep Snap to Zero)
+        if raw_mag == 0.0 and math.hypot(self.last_goal_x, self.last_goal_y) < self.creep_thresh:
+            self.last_goal_x = 0.0
+            self.last_goal_y = 0.0
+            
+        return float(self.last_goal_x), float(self.last_goal_y)
+        
+    def reset(self):
+        """Khôi phục biến trạng thái khi mất dấu hoặc reset IDLE"""
+        self.last_goal_x = 0.0
+        self.last_goal_y = 0.0
+        self.prev_distance = None

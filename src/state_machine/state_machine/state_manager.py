@@ -15,7 +15,7 @@ class RobotState(Enum):
     IDLE = "IDLE"                      
     START = "START"                    
     TRACKING = "TRACKING"              
-    RE_TRACKING = "RE_TRACKING"        
+    RE_TRACKING = "RE_TRACKING"  # [ĐÃ SỬA] Khớp với interface yêu cầu
     STOP = "STOP"                      
 
 

@@ -31,32 +31,14 @@ def generate_launch_description():
         output='screen'
     )
 
-    # 2. ROS2 CONTROL NODE (Manager)
-    controller_manager = Node(
-        package='controller_manager',
-        executable='ros2_control_node',
-        parameters=[{'robot_description': robot_description_content}, controller_config],
+    # 2. ODOMETRY CALCULATOR NODE
+    # Nút Python tính toán odometry từ joint_states và phát ra /diff_cont/odom cho EKF
+    odom_calculator_node = Node(
+        package='bringup',
+        executable='odom_calculator.py',
+        name='diff_cont',  # Đặt tên này để nó tự vào yaml đọc thông số wheel_radius, wheel_separation
+        parameters=[controller_config],
         output='screen'
-    )
-
-    # 3. SPAWNERS (Bộ điều khiển)
-    # Khởi tạo Joint State Broadcaster
-    joint_broad_spawner = Node(
-        package="controller_manager",
-        executable="spawner",
-        arguments=["joint_broad"],
-    )
-
-    # Khởi tạo Differential Drive Controller (Odom & Cmd_vel)
-    diff_drive_spawner = Node(
-        package="controller_manager",
-        executable="spawner",
-        arguments=[
-            "diff_cont",
-            "--controller-ros-args",
-            "--remap", "~/odom:=/odom",
-            "--remap", "~/cmd_vel:=/cmd_vel",
-        ],
     )
 
     # 4. MICRO-ROS AGENT
@@ -81,12 +63,8 @@ def generate_launch_description():
     return LaunchDescription([
         # Khởi động ngay lập tức
         robot_state_publisher_node,
-        micro_ros_agent_node,
-        controller_manager,
-        
-        # Đợi tuần tự để ổn định hệ thống
-        TimerAction(period=5.0, actions=[joint_broad_spawner]),
-        TimerAction(period=5.0, actions=[diff_drive_spawner]),
+        odom_calculator_node,
+        # micro_ros_agent_node,
         
         # Khởi động cảm biến sau cùng
         TimerAction(period=5.0, actions=[lidar_launch]),

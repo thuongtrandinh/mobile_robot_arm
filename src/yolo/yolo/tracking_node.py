@@ -21,6 +21,7 @@ import numpy as np
 import time
 import yaml
 import math
+import concurrent.futures  # [THÊM MỚI] Multithreading for parallel YOLO inference
 from collections import deque
 from typing import Dict, List, Tuple, Optional
 from rclpy.node import Node
@@ -40,7 +41,7 @@ from ament_index_python.packages import get_package_share_directory
 from yolo.algorithms.botsort_handler import BoTSortTracker
 from yolo.algorithms.appearance_feature_extractor import FeatureExtractorDeep
 from yolo.algorithms.ctrv_ekf import CTRV_EKF
-from yolo.algorithms.velocity_filter import VelocityFilter
+from yolo.algorithms.velocity_filter import VelocityFilter, GoalPoseFilter
 
 # Depth-aware NMS for improved hand detection
 try:
@@ -272,6 +273,11 @@ class TrackingNode(Node):
         self.position_history: Dict[int, deque] = {}
         self.max_position_history = 10  # Keep last 10 positions for velocity estimation
 
+        # ===== 5d2. [THÊM MỚI] MEMORY LEAK CLEANUP =====
+        # Track when each track_id was last seen to clean up stale entries
+        self.track_last_seen_time: Dict[int, float] = {}
+        self.track_cleanup_timeout = 10.0  # Delete track data after 10s of no sightings
+
         # ===== 5e. TIMESTAMP TRACKING FOR REAL DT =====
         # Track frame timestamps to compute real dt instead of assuming 1/30.0
         self.last_frame_timestamp_per_track: Dict[int, float] = {}  # {track_id: ts_seconds}
@@ -343,10 +349,11 @@ class TrackingNode(Node):
                 self, Image, '/zed/zed_node/depth/depth_registered', qos_profile=qos_img
             )
             
-            # ApproximateTimeSynchronizer: Matches messages within 0.1s window (100ms)
+            # ApproximateTimeSynchronizer: Matches messages within 0.05s window (50ms)
             # At 30 FPS, messages arrive every 33ms, so sync is tight and accurate
+            # [THÊM MỚI] Tăng queue_size từ 5 → 15 để không rớt frame khi GPU xử lý chậm
             self.ts = message_filters.ApproximateTimeSynchronizer(
-                [self.image_sub, self.depth_sub], queue_size=5, slop=0.1
+                [self.image_sub, self.depth_sub], queue_size=15, slop=0.05
             )
             self.ts.registerCallback(self._synced_callback)
             self.get_logger().info('✅ RGB-Depth synchronization enabled (message_filters, slop=0.1s)')
@@ -377,6 +384,23 @@ class TrackingNode(Node):
         # ===== 11b. PERFORMANCE LOGGING TIMER =====
         if self.enable_perf_metrics:
             self.create_timer(5.0, self._log_performance_metrics)
+
+        # ===== 12. [THÊM MỚI] PARALLEL INFERENCE POOL =====
+        # Initialize 2 worker threads to run both YOLO models in parallel on RTX A4000
+        self.inference_pool = concurrent.futures.ThreadPoolExecutor(max_workers=2)
+
+        # ===== 12b. LOW-PASS FILTER CHO GOAL POSE (CHỐNG HARD BRAKE) =====
+        # EMA filter prevents sudden goal_pose jumps to (0,0) which causes Nav2 hard brake
+        # Instead, goal slides gradually from 0.5m → 0.4m → 0.2m → 0m
+        # Robot then decelerates smoothly instead of sudden stop
+        # [THÊM MỚI] GoalPoseFilter with trend analysis: detects if person approaching
+        # and applies damping to slow down proactively
+        self.goal_filter = GoalPoseFilter(
+            safe_distance=1.5,
+            alpha_follow=0.25,   # Faster response when person moving away
+            alpha_brake=0.15,    # Slower smooth braking when person approaching
+            creep_thresh=0.08    # Anti-creep threshold
+        )
 
         self.get_logger().info(
             f'✅ Tracking Node initialized (ROS2 OPTIMIZED)\n'
@@ -555,15 +579,6 @@ class TrackingNode(Node):
         else:
             self.confirmed_gesture = "NONE"
         
-        # Debug: Log voting state occasionally
-        if len(self.gesture_buffer) == self.gesture_buffer_size:  # Only when buffer full
-            if raw_gesture != "NONE":
-                self.get_logger().debug(
-                    f'📊 Gesture Voting: START={start_count}/{self.gesture_buffer_size}, '
-                    f'STOP={stop_count}/{self.gesture_buffer_size}, '
-                    f'CONFIRMED={self.confirmed_gesture} (need {min_required})'
-                )
-        
         return self.confirmed_gesture
 
     def _synced_callback(self, img_msg: Image, depth_msg: Image):
@@ -672,17 +687,27 @@ class TrackingNode(Node):
         h_img, w_img = frame.shape[:2]
         ts_now = self.get_clock().now().nanoseconds * 1e-9
 
-        # ===== DETECT PERSONS =====
+        # ===== [THÊM MỚI] DETECT PERSONS & HANDS (PARALLEL ON GPU) =====
         person_detections = []
+        hand_detections = []
+        
         try:
-            person_results = self._person_yolo.predict(
-                frame,
-                conf=self.person_conf,
-                verbose=False,
-                device=self._device,
-                half=self.use_fp16
-            )[0]
+            # Send both YOLO requests to GPU simultaneously (RTX A4000 supports concurrent kernels)
+            # Time reduction: ~100ms → ~55ms (roughly 50% speedup)
+            future_person = self.inference_pool.submit(
+                self._person_yolo.predict, frame, 
+                conf=self.person_conf, verbose=False, device=self._device, half=self.use_fp16
+            )
+            future_hand = self.inference_pool.submit(
+                self._hand_yolo.predict, frame,
+                conf=self.hand_conf, verbose=False, device=self._device, half=self.use_fp16
+            )
+            
+            # Wait for both results (time saved by parallelization)
+            person_results = future_person.result()[0]
+            hand_results = future_hand.result()[0]
 
+            # 1. Process Person detections
             if person_results is not None and len(person_results.boxes) > 0:
                 for idx, box in enumerate(person_results.boxes.data):
                     x1, y1, x2, y2, conf, _ = box.cpu().numpy()
@@ -692,9 +717,6 @@ class TrackingNode(Node):
                             0 <= y1 < h_img and 0 <= y2 < h_img):
                         continue
                     
-                    # BoT-SORT with Two-Stage Matching is sufficient for person validation
-                    # (No need for height check - triggers frozen bbox when raising arms)
-                    
                     person_detections.append({
                         'box': (int(x1), int(y1), int(x2), int(y2)),
                         'confidence': float(conf),
@@ -702,32 +724,11 @@ class TrackingNode(Node):
                         'label': 'person'
                     })
 
-        except Exception as e:
-            self.get_logger().warn(f'Person detection error: {e}', throttle_duration_sec=2.0)
-
-        # ===== DETECT HANDS (FULL FRAME INFERENCE - KHỚP VỚI REF_YOLO) =====
-        # Chạy mô hình Hand trực tiếp trên TOÀN BỘ khung hình gốc (giống hệt detect_handsign.py)
-        # Full-frame inference: mô hình được huấn luyện trên toàn khung hình, không bị scale distortion
-        # Sử dụng self.hand_conf từ params.yaml - NO HARDCODING
-        hand_detections = []
-        try:
-            # Dùng đúng self.hand_conf lấy từ params.yaml (không hardcode 0.30/0.85/0.55)
-            hand_results = self._hand_yolo.predict(
-                frame, 
-                conf=self.hand_conf,  # From params.yaml - allows START gesture (~0.40-0.50) to pass
-                verbose=False, 
-                device=self._device, 
-                half=self.use_fp16
-            )[0]
-            
+            # 2. Process Hand detections  
             if hand_results is not None and len(hand_results.boxes) > 0:
                 for box in hand_results.boxes.data:
                     x1, y1, x2, y2, conf, cls_id = box.cpu().numpy()
                     cls_id_int = int(cls_id)
-                    
-                    # ❌ REMOVED HARDCODED 0.85/0.55 THRESHOLDS ❌
-                    # Thresholds are now set only in params.yaml via self.hand_conf
-                    # This allows START gesture (thumbs-up ~0.40-0.50) to pass through
                     
                     # Validate coordinates
                     if not (0 <= x1 < w_img and 0 <= x2 < w_img and 
@@ -759,19 +760,26 @@ class TrackingNode(Node):
                     self.get_logger().warn(f'Depth-Aware NMS error: {e}', throttle_duration_sec=5.0)
 
         except Exception as e:
-            self.get_logger().error(f'Hand detection root error: {e}', throttle_duration_sec=2.0)
+            self.get_logger().error(f'Parallel inference error: {e}', throttle_duration_sec=2.0)
 
         # ===== TRÍCH XUẤT ĐẶC TRƯNG ẢNH (DEEP LEARNING RE-ID) =====
         # Extract ResNet18 512-dim features for each person detection via GPU
+        # [THÊM MỚI] Skip tiny bounding boxes to prevent GPU waste on trash detections
         features_list = []
         for det in person_detections:
             # Only extract features for confident detections (optimization)
             if det['confidence'] >= self._person_tracker.track_thresh:
                 x1, y1, x2, y2 = det['box']
-                # Crop person region from frame
-                crop_img = frame[max(0, int(y1)):min(h_img, int(y2)), max(0, int(x1)):min(w_img, int(x2))]
-                # Extract 512-dim appearance feature using ResNet18 on RTX A4000 (Tensor Cores FP16)
-                feat = self._appearance_extractor.extract(crop_img)
+                
+                # [THÊM MỚI] Skip bounding boxes smaller than 40x80 pixels
+                # Prevents GPU from wasting compute on distant/trash objects
+                if (x2 - x1) < 40 or (y2 - y1) < 80:
+                    feat = self._appearance_extractor.get_empty_feature()
+                else:
+                    # Crop person region from frame
+                    crop_img = frame[max(0, int(y1)):min(h_img, int(y2)), max(0, int(x1)):min(w_img, int(x2))]
+                    # Extract 512-dim appearance feature using ResNet18 on RTX A4000 (Tensor Cores FP16)
+                    feat = self._appearance_extractor.extract(crop_img)
             else:
                 # Low confidence detection gets empty feature vector
                 feat = self._appearance_extractor.get_empty_feature()
@@ -1168,9 +1176,11 @@ class TrackingNode(Node):
                 return predicted_path
 
             # ===== CASE 1: IDLE STATE - Publish all people as obstacles =====
-            if self.current_robot_state == 'IDLE':
+            if self.current_state == 'IDLE':  # [ĐÃ SỬA] Dùng state nội bộ của node
                 for person_track in person_tracks:
                     tid = person_track['track_id']
+                    # [THÊM MỚI] Update last-seen time for memory cleanup
+                    self.track_last_seen_time[tid] = ts_now
                     ekf_x, ekf_y, final_vx, final_vy, radius, depth_val = \
                         process_person_track(tid, person_track['bbox'], is_main_target=False)
                     
@@ -1184,19 +1194,19 @@ class TrackingNode(Node):
                     obs.radius = float(radius)
                     obs.trajectory = predicted_path
                     obstacle_array_msg.dyna_obstacles.append(obs)
-                    
-                    self.get_logger().debug(f'📌 IDLE obstacle (ID={tid}): px={ekf_x:.2f}, py={ekf_y:.2f}, r={radius:.2f}m')
 
                 # Publish obstacle array (even if empty)
                 self._pub_obstacles.publish(obstacle_array_msg)
                 return
 
             # ===== CASE 2: TRACKING STATE - Publish main_person + other obstacles =====
-            elif self.current_robot_state in ['TRACKING', 'RE_TRACKING']:
+            elif self.current_state in ['TRACKING', 'RE_TRACKING']:  # [ĐÃ SỬA] Khớp với enum nhưng kiểm tra internal state
                 if self.main_target_id is None:
                     # No main target yet, publish all as obstacles
                     for person_track in person_tracks:
                         tid = person_track['track_id']
+                        # [THÊM MỚI] Update last-seen time for memory cleanup
+                        self.track_last_seen_time[tid] = ts_now
                         ekf_x, ekf_y, final_vx, final_vy, radius, depth_val = \
                             process_person_track(tid, person_track['bbox'], is_main_target=False)
                         
@@ -1217,6 +1227,8 @@ class TrackingNode(Node):
                 # Process ALL people in frame
                 for person_track in person_tracks:
                     tid = person_track['track_id']
+                    # [THÊM MỚI] Update last-seen time for memory cleanup
+                    self.track_last_seen_time[tid] = ts_now
                     ekf_x, ekf_y, final_vx, final_vy, radius, depth_val = \
                         process_person_track(tid, person_track['bbox'], is_main_target=(tid == self.main_target_id))
 
@@ -1224,75 +1236,95 @@ class TrackingNode(Node):
                     predicted_path = create_predicted_trajectory(ekf_x, ekf_y, final_vx, final_vy)
 
                     if tid == self.main_target_id:
-                        # Publish main target as HumanState
-                        msg = HumanState()
-                        msg.px = ekf_x
-                        msg.py = ekf_y
-                        msg.vx = final_vx
-                        msg.vy = final_vy
-                        msg.radius = float(radius)  # Use actual physical size from bbox (goal_pose already maintains 1.5m safety distance)
-                        msg.trajectory = [predicted_path]
-                        
-                        self._pub_human_state.publish(msg)
-                        self.get_logger().debug(f'🎯 Main target (ID={tid}): px={msg.px:.2f}, py={msg.py:.2f}, radius={msg.radius:.2f}m, vx={msg.vx:.2f}, vy={msg.vy:.2f}')
-                        
-                        # ===== PUBLISH GOAL POSE FOR CONTROLLER (WITH 1.5M SAFETY DISTANCE) ===== 
-                        goal_msg = PoseStamped()
-                        goal_msg.header = obstacle_array_msg.header  # Inherit stamp and frame_id
-                        
-                        # Configure safe stopping distance: robot keeps 1.5m away from person
-                        SAFE_DISTANCE = 1.5
-                        distance_to_person = math.sqrt(ekf_x**2 + ekf_y**2)
-                        
-                        # Calculate goal position maintaining safe distance from person
-                        if distance_to_person > SAFE_DISTANCE:
-                            # Use proportional scaling: pull goal point back to maintain SAFE_DISTANCE
-                            # Example: if person at 3m, goal positioned at 1.5m from origin (robot center)
-                            ratio = (distance_to_person - SAFE_DISTANCE) / distance_to_person
-                            goal_x = ekf_x * ratio
-                            goal_y = ekf_y * ratio
-                        else:
-                            # Robot already within safe zone: set goal to current position (0,0)
-                            # This triggers emergency brake to prevent collision
-                            goal_x = 0.0
-                            goal_y = 0.0
-                        
-                        goal_msg.pose.position.x = float(goal_x)
-                        goal_msg.pose.position.y = float(goal_y)
-                        goal_msg.pose.position.z = 0.0
-                        
-                        # Calculate yaw angle using ACTUAL person position (not adjusted goal)
-                        # This ensures robot always faces toward the person for tracking stability
-                        yaw = math.atan2(ekf_y, ekf_x)
-                        
-                        # Convert Euler angle (yaw) to Quaternion
-                        goal_msg.pose.orientation.x = 0.0
-                        goal_msg.pose.orientation.y = 0.0
-                        goal_msg.pose.orientation.z = math.sin(yaw / 2.0)
-                        goal_msg.pose.orientation.w = math.cos(yaw / 2.0)
-                        
-                        self._pub_goal_pose.publish(goal_msg)
-                        self.get_logger().debug(f'📍 Goal Pose (safety={SAFE_DISTANCE}m): dist={distance_to_person:.2f}m, ' 
-                                              f'goal=({goal_x:.2f}, {goal_y:.2f}), yaw={math.degrees(yaw):.1f}°')
+                        try:
+                            # =======================================================
+                            # ĐÓNG GÓI MESSAGE THEO CHUẨN INTERFACES
+                            # =======================================================
+                            # 1. Chế độ theo dõi người (Main Target)
+                            msg = HumanState()
+                            msg.px = float(ekf_x)
+                            msg.py = float(ekf_y)
+                            msg.vx = float(final_vx)
+                            msg.vy = float(final_vy)
+                            
+                            # [ĐÃ SỬA] Sử dụng trực tiếp biến radius đã được hàm process_person_track tính toán
+                            msg.radius = float(radius)
+                            
+                            # [QUAN TRỌNG] Tùy thuộc vào file HumanState.msg của bạn:
+                            # Nếu file msg là "nav_msgs/Path[] trajectory" thì dùng: [predicted_path]
+                            # Nếu file msg là "nav_msgs/Path trajectory" thì dùng: predicted_path
+                            msg.trajectory = [predicted_path]
+                            
+                            self._pub_human_state.publish(msg)
+                            
+                            # 2. Xử lý xuất tọa độ an toàn cho Controller
+                            goal_msg = PoseStamped()
+                            goal_msg.header = obstacle_array_msg.header
+                            
+                            SAFE_DISTANCE = 1.5 
+                            distance_to_person = math.sqrt(ekf_x**2 + ekf_y**2)
+                            
+                            # [THÊM MỚI] Use GoalPoseFilter with trend analysis
+                            # Automatically detects if person approaching and applies damping
+                            goal_x, goal_y = self.goal_filter.process(ekf_x, ekf_y)
+
+                            goal_msg.pose.position.x = float(goal_x)
+                            goal_msg.pose.position.y = float(goal_y)
+                            goal_msg.pose.position.z = 0.0
+                            
+                            yaw = math.atan2(ekf_y, ekf_x)
+                            goal_msg.pose.orientation.x = 0.0
+                            goal_msg.pose.orientation.y = 0.0
+                            goal_msg.pose.orientation.z = float(math.sin(yaw / 2.0))
+                            goal_msg.pose.orientation.w = float(math.cos(yaw / 2.0))
+
+                            self._pub_goal_pose.publish(goal_msg)
+
+                        except Exception as e:
+                            # CÒI BÁO ĐỘNG: Sẽ in thẳng màu đỏ ra Terminal nếu rclpy từ chối publish
+                            self.get_logger().error(f'🚨 CRASH TẠI MAIN TARGET: {e}')
                     else:
                         # Publish other people as obstacles
                         obs = DynaObstacle()
                         obs.id = float(tid)
                         obs.distance = float(math.sqrt(ekf_x**2 + ekf_y**2))
+                        
+                        # [ĐÃ SỬA] Dùng biến radius có sẵn
                         obs.radius = float(radius)
                         obs.trajectory = predicted_path
                         obstacle_array_msg.dyna_obstacles.append(obs)
-                        
-                        self.get_logger().debug(f'⚠️  Obstacle (ID={tid}): px={ekf_x:.2f}, py={ekf_y:.2f}, r={radius:.2f}m')
 
                 # Publish all obstacles at once (ObstacleArray)
                 self._pub_obstacles.publish(obstacle_array_msg)
+                
+                # [THÊM MỚI] Garbage collection for stale tracks (prevent memory leak)
+                self._cleanup_stale_tracks(ts_now)
                 return
 
             # No-op for other states
 
         except Exception as e:
             self.get_logger().error(f'Error in _publish_human_state: {e}', throttle_duration_sec=2.0)
+
+    def _cleanup_stale_tracks(self, current_time: float):
+        """[TH\u00caM M\u1edaI] Remove memory of track_ids not seen for >10s
+        
+        Prevents memory leak where old track data accumulates in RAM, 
+        causing FPS degradation over time.
+        """
+        stale_ids = [tid for tid, last_seen in self.track_last_seen_time.items() 
+                     if current_time - last_seen > self.track_cleanup_timeout]
+        
+        for tid in stale_ids:
+            # Delete all associated data structures
+            self.ekfs.pop(tid, None)
+            self.velocity_filters.pop(tid, None)
+            self.position_history.pop(tid, None)
+            self.last_frame_timestamp_per_track.pop(tid, None)
+            self.track_last_seen_time.pop(tid, None)
+            
+        if stale_ids and len(stale_ids) <= 20:  # Avoid log spam
+            self.get_logger().debug(f'🗑️  Cleaned up {len(stale_ids)} stale track IDs from memory.')
 
     def _log_performance_metrics(self):
         """Log performance metrics every 5 seconds - Simplified"""

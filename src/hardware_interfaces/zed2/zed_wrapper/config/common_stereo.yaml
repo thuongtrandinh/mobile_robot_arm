@@ -39,14 +39,14 @@
 
         video:
             brightness: 4               # [DYNAMIC] Mặc định
-            contrast: 6                 # [DYNAMIC] Tăng từ 4 → 6 để làm rõ nếp gấp ngón tay
+            contrast: 8                 # [DYNAMIC] Tăng từ 4 → 6 để làm rõ nếp gấp ngón tay
             hue: 0                      # [DYNAMIC] Mặc định
             saturation: 0               # [DYNAMIC] Tăng từ 4 → 5 để phân biệt màu da rõ hơn
-            sharpness: 5                # [DYNAMIC] Tăng từ 4 → 5 để làm sắc nét viền tay
-            gamma: 8                    # [DYNAMIC] Mặc định
-            auto_exposure_gain: false   # [DYNAMIC] TẮT tự động bù sáng (fix washed-out)
-            exposure: 60                # [DYNAMIC] Giảm từ 80 → 60 để tay không bị chói trắng
-            gain: 50                    # [DYNAMIC] Giảm từ 80 → 50 để giảm nhiễu hạt (noise) trong phòng
+            sharpness: 6                # [DYNAMIC] Tăng từ 4 → 5 để làm sắc nét viền tay
+            gamma: 4                    # [DYNAMIC] Mặc định
+            auto_exposure_gain: true   # [DYNAMIC] TẮT tự động bù sáng (fix washed-out)
+            exposure: 80                # [DYNAMIC] Giảm từ 80 → 60 để tay không bị chói trắng
+            gain: 80                    # [DYNAMIC] Giảm từ 80 → 50 để giảm nhiễu hạt (noise) trong phòng
             auto_whitebalance: true     # [DYNAMIC] Giữ tự động cân bằng trắng
             whitebalance_temperature: 42 # [DYNAMIC] - [28,65] x100 - works only if `auto_whitebalance` is false
             enable_24bit_output: true # [SDK >= 5.1] Enable BGR 24-bit output for lower bandwidth usage. YOLO-optimized: publish BGR directly for tracking_node
