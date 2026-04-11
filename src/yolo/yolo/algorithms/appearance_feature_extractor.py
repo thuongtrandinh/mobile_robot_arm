@@ -50,8 +50,12 @@ class FeatureExtractorDeep:
             )
         ])
 
-        # Bộ lọc CLAHE khôi phục chi tiết bề mặt
+        # Bộ lọc CLAHE khôi phục chi tiết bề mặt từ ảnh xám
         self.clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+        
+        # [ĐÃ TỐI ƯU] Kernel Morphology cho preprocessing màu sắc
+        # Giúp loại bỏ nhiễu nhỏ và kết nối các vùng màu sắc liên quan
+        self.kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
     
     def get_empty_feature(self):
         return np.zeros((self.feature_dim,), dtype=np.float32)
@@ -59,6 +63,11 @@ class FeatureExtractorDeep:
     def extract(self, img_crop):
         """
         Extract 512-dim ReID feature from a person crop image.
+        
+        [ĐÃ TỐI ƯU] Tối ưu hố việc sử dụng thông tin màu sắc từ ảnh RGB:
+        - Trích xuất màu sắc trang phục (quần, áo, phụ kiện)
+        - Giữ lại cấu trúc hình dáng (vai, hông, tỷ lệ cơ thể)
+        - Kháng nhiễu ánh sáng thông qua chuẩn hóa
         """
         if img_crop is None or img_crop.size == 0:
             return self.get_empty_feature()
@@ -78,24 +87,74 @@ class FeatureExtractorDeep:
         
         try:
             # =================================================================
-            # 2. BỘ LỌC ẢNH XÁM (GRAYSCALE OPTIMIZATION)
+            # 2. [ĐÃ TỐI ƯU] CHUẨN HÓA MÀU SẮC (COLOR NORMALIZATION)
             # =================================================================
+            # Chuyển BGR → LAB color space (độc lập với ánh sáng)
+            # LAB space giúp trích xuất màu sắc nguyên bản mà không bị ảnh hưởng 
+            # bởi sự thay đổi cường độ sáng (ví dụ: ánh đèn vàng/xanh trong lab)
+            
             if len(img_crop.shape) == 3 and img_crop.shape[2] == 3:
-                gray = cv2.cvtColor(img_crop, cv2.COLOR_BGR2GRAY)
+                # Ảnh đầu vào là BGR
+                img_bgr = img_crop
             elif len(img_crop.shape) == 3 and img_crop.shape[2] == 4:
-                gray = cv2.cvtColor(img_crop, cv2.COLOR_BGRA2GRAY)
-            elif len(img_crop.shape) == 2 or img_crop.shape[2] == 1:
-                gray = img_crop
+                # Ảnh đầu vào là BGRA, tách alpha channel
+                img_bgr = cv2.cvtColor(img_crop, cv2.COLOR_BGRA2BGR)
+            elif len(img_crop.shape) == 2 or (len(img_crop.shape) == 3 and img_crop.shape[2] == 1):
+                # Ảnh đầu vào là Grayscale, không thể trích xuất đặc trưng màu sắc
+                # Sử dụng bộ lọc CLAHE trên ảnh xám
+                gray = img_crop if len(img_crop.shape) == 2 else img_crop[:, :, 0]
+                enhanced_gray = self.clahe.apply(gray)
+                enhanced_rgb = cv2.cvtColor(enhanced_gray, cv2.COLOR_GRAY2RGB)
+                tensor = self.transforms(enhanced_rgb).unsqueeze(0).to(self.device)
+                if self.half:
+                    tensor = tensor.half()
+                with torch.no_grad():
+                    feat = self.model(tensor)
+                feat = torch.nn.functional.normalize(feat, p=2, dim=1)
+                return feat.cpu().numpy().flatten().astype(np.float32)
             else:
-                gray = cv2.cvtColor(img_crop, cv2.COLOR_BGR2GRAY)
-
-            enhanced_gray = self.clahe.apply(gray)
-            enhanced_rgb = cv2.cvtColor(enhanced_gray, cv2.COLOR_GRAY2RGB)
+                img_bgr = cv2.cvtColor(img_crop, cv2.COLOR_BGR2BGR)  # Fallback
 
             # =================================================================
-            # 3. TRÍCH XUẤT ĐẶC TRƯNG TENSOR CORES
+            # 3. [ĐÃ TỐI ƯU] TĂNG CƯỜNG ĐẶC TRƯNG MÀU SẮC (COLOR ENHANCEMENT)
             # =================================================================
-            tensor = self.transforms(enhanced_rgb).unsqueeze(0).to(self.device)
+            # Chuyển BGR → LAB để xử lý trong không gian độc lập với ánh sáng
+            img_lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB)
+            
+            # Tách thành các kênh L, A, B
+            l_channel, a_channel, b_channel = cv2.split(img_lab)
+            
+            # Tăng cường kênh L (Luminance) bằng CLAHE để khôi phục chi tiết
+            # Điều này giúp các feature về hình dáng (vai, hông) được rõ ràng hơn
+            l_enhanced = self.clahe.apply(l_channel)
+            
+            # Tăng cường độ bão hòa (Saturation) của kênh A, B để màu sắc nổi bật hơn
+            # Điều này giúp ResNet18 nhận diện tốt hơn màu sắc trang phục
+            # Hệ số 1.15 giúp tăng saturation 15% mà không gây mất tự nhiên
+            a_enhanced = cv2.convertScaleAbs(a_channel.astype(np.float32) - 128, alpha=1.15) + 128 - 127
+            b_enhanced = cv2.convertScaleAbs(b_channel.astype(np.float32) - 128, alpha=1.15) + 128 - 127
+            
+            # Clamp về [0, 255]
+            a_enhanced = np.clip(a_enhanced, 0, 255).astype(np.uint8)
+            b_enhanced = np.clip(b_enhanced, 0, 255).astype(np.uint8)
+            
+            # Merge lại các kênh LAB
+            img_lab_enhanced = cv2.merge([l_enhanced, a_enhanced, b_enhanced])
+            
+            # Chuyển ngược lại BGR
+            img_enhanced = cv2.cvtColor(img_lab_enhanced, cv2.COLOR_LAB2BGR)
+            
+            # =================================================================
+            # 4. [ĐÃ TỐI ƯU] LOẠI BỎ NHIỄU (NOISE REDUCTION)
+            # =================================================================
+            # Sử dụng Bilateral Filter để mịn hóa mà giữ lại các cạnh (edges)
+            # Cực kỳ quan trọng để loại bỏ nhiễu camera nhưng giữ lại đường nét quần áo
+            img_denoised = cv2.bilateralFilter(img_enhanced, d=7, sigmaColor=15, sigmaSpace=15)
+
+            # =================================================================
+            # 5. TRÍCH XUẤT ĐẶC TRƯNG TENSOR CORES
+            # =================================================================
+            tensor = self.transforms(img_denoised).unsqueeze(0).to(self.device)
             
             if self.half:
                 tensor = tensor.half()
@@ -103,6 +162,7 @@ class FeatureExtractorDeep:
             with torch.no_grad():
                 feat = self.model(tensor)
             
+            # Normalize feature vector (quan trọng cho similarity matching)
             feat = torch.nn.functional.normalize(feat, p=2, dim=1)
             return feat.cpu().numpy().flatten().astype(np.float32)
         

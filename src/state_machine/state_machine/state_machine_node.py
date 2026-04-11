@@ -79,7 +79,7 @@ class RobotStateMachineNode(Node):
         super().__init__('robot_state_machine')
         
         self.declare_parameter('tracking_timeout', 0.5)       
-        self.declare_parameter('retracking_timeout', 5.0)     
+        self.declare_parameter('retracking_timeout', 10.0)    # [SỬA] Tăng từ 5.0 → 10.0 để đồng bộ với tracking_node.py
         self.declare_parameter('velocity_filter_alpha', 0.3)  
         
         tracking_timeout = self.get_parameter('tracking_timeout').value
