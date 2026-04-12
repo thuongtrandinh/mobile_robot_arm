@@ -145,7 +145,7 @@ def generate_launch_description():
             "map_frame_id": "map",
             "odom_topic": "/odometry/filtered",
             "imu_topic": "/imu",
-            "subscribe_scan": "true",
+            "subscribe_scan": "false",
             "scan_topic": "/scan",
             "depth": use_zed,
             "subscribe_rgb": use_zed,

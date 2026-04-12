@@ -5,6 +5,7 @@ Panels:
     Property Tree Widget:
       Expanded:
         - /Global Options1
+        - /Image1
         - /ParticleCloud1/Topic1
         - /MarkerArray3
       Splitter Ratio: 0.5
@@ -83,11 +84,27 @@ Visualization Manager:
           Value: true
         right_wheel:
           Value: true
+        zed2_baro_link:
+          Value: true
+        zed2_camera_center:
+          Value: true
+        zed2_camera_link:
+          Value: true
         zed2_left_camera_frame:
+          Value: true
+        zed2_left_camera_frame_optical:
           Value: true
         zed2_link:
           Value: true
+        zed2_mag_link:
+          Value: true
         zed2_right_camera_frame:
+          Value: true
+        zed2_right_camera_frame_optical:
+          Value: true
+        zed2_temp_left_link:
+          Value: true
+        zed2_temp_right_link:
           Value: true
         zed_camera_link:
           Value: true
@@ -124,11 +141,23 @@ Visualization Manager:
                 right_wheel:
                   {}
                 zed_camera_link:
-                  zed2_left_camera_frame:
-                    {}
                   zed2_link:
                     {}
-                  zed2_right_camera_frame:
+            zed2_camera_link:
+              zed2_camera_center:
+                zed2_baro_link:
+                  {}
+                zed2_left_camera_frame:
+                  zed2_left_camera_frame_optical:
+                    {}
+                  zed2_temp_left_link:
+                    {}
+                zed2_mag_link:
+                  {}
+                zed2_right_camera_frame:
+                  zed2_right_camera_frame_optical:
+                    {}
+                  zed2_temp_right_link:
                     {}
       Update Interval: 0
       Value: true
@@ -253,7 +282,7 @@ Visualization Manager:
       Enabled: true
       Invert Rainbow: false
       Max Color: 255; 255; 255
-      Max Intensity: 0
+      Max Intensity: 47
       Min Color: 0; 0; 0
       Min Intensity: 0
       Name: LaserScan
@@ -284,7 +313,7 @@ Visualization Manager:
         Durability Policy: Volatile
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: /zed/zed_node/rgb/color/rect/image
+        Value: /zed2/zed_node/rgb/color/rect/image
       Value: true
     - Class: rviz_default_plugins/MarkerArray
       Enabled: false

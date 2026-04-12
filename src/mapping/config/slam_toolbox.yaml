@@ -1,53 +1,46 @@
 slam_toolbox:
   ros__parameters:
+    # Cấu hình cơ bản
+    use_sim_time: false
     odom_frame: odom
     map_frame: map
     base_frame: base_footprint
     scan_topic: /scan
-    mode: mapping
-    
-    # ==========================================
-    # SOLVER PARAMETERS
-    # ==========================================
-    # Solver plugin (solver_plugins can be: solver_plugins::CeresSolver, solver_plugins::SpaSolver, solver_plugins::G2oSolver)
-    solver_plugin: solver_plugins::CeresSolver
-    
-    ceres_num_threads: 4  # Giảm xuống 4 hoặc 8 tùy CPU của bạn (đừng để 50)
-    num_threads: 4        # Thêm dòng này để chắc chắn cho các solver khác nếu cần
-    # Ceres solver
-    ceres_linear_solver: SPARSE_NORMAL_CHOLESKY
-    ceres_preconditioner: SCHUR_JACOBI
-    ceres_trust_strategy: LEVENBERG_MARQUARDT
-    ceres_dogleg_type: TRADITIONAL_DOGLEG
-    ceres_loss_function: None
-    
-    # ==========================================
-    # SCAN MATCHER PARAMETERS
-    # ==========================================
-    # Minimum distance traveled (m) before processing scan
-    # TUNED: Increased to reduce jerky corrections
-    minimum_travel_distance: 0.3  # Increased from 0.2
-    
+    mode: mapping # Chế độ vẽ bản đồ
 
-    minimum_laser_range: 0.2
+    # Cấu hình ROS
+    debug_logging: false
+    throttle_scans: 1
+    transform_publish_period: 0.02 # 50Hz để mượt TF bản đồ
+    map_update_interval: 1.0
+    resolution: 0.05
+    max_laser_range: 12.0 # Tùy thuộc vào Lidar A2M8 (thường là 8-12m)
+    minimum_time_interval: 0.5
+    transform_timeout: 0.2
+    tf_buffer_duration: 30.0
+    stack_capacity: 40000000
 
-    # Minimum angle rotated (rad) before processing scan
-    # TUNED: Increased to reduce jerky corrections  
-    minimum_travel_heading: 0.3  # Increased from 0.2
-    
-    # Scan buffer size
-    scan_buffer_size: 20  # Increased from 10
-    scan_buffer_maximum_scan_distance: 10.0  # Increased from 10.0
-    
-    # Link match minimum response fine (lower = stricter matching)
-    # TUNED: Increased to be less aggressive
-    link_match_minimum_response_fine: 0.2  # Increased from 0.1
-    
-    # Link scan maximum distance (m)
-    link_scan_maximum_distance: 2.0  # Increased from 1.5
-    
-    # Loop search maximum distance (m)
-    loop_search_maximum_distance: 4.0  # Increased from 3.0
+    # Cấu hình thuật toán Scan Matching
+    use_scan_matching: true
+    use_scan_barycenter: true
+    minimum_travel_distance: 0.2
+    minimum_travel_heading: 0.174 # ~10 độ
+    scan_buffer_size: 10
+    scan_buffer_maximum_scan_distance: 10.0
+    link_match_minimum_response_fine: 0.1
+    link_scan_maximum_distance: 1.5
+
+    # Cấu hình Loop Closure (Tối ưu bản đồ)
+    do_loop_closing: true
+    loop_match_minimum_chain_size: 10
+    loop_match_maximum_variance_coarse: 3.0
+    loop_match_minimum_response_coarse: 0.35
+    loop_match_minimum_response_fine: 0.45
+
+    # Khoảng cách tối ưu hóa
+    distance_variance_penalty: 0.5
+    angle_variance_penalty: 1.0
+    loop_search_maximum_distance: 3.0
     
     # Do loop closing
     # TUNED: Disabled to prevent jerky corrections when robot is stationary

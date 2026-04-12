@@ -44,7 +44,7 @@
             saturation: 4               # [DYNAMIC] Tăng từ 4 → 5 để phân biệt màu da rõ hơn
             sharpness: 6                # [DYNAMIC] Tăng từ 4 → 5 để làm sắc nét viền tay
             gamma: 4                    # [DYNAMIC] Mặc định
-            auto_exposure_gain: true   # [DYNAMIC] TẮT tự động bù sáng (fix washed-out)
+            auto_exposure_gain: true    # [DYNAMIC] TẮT tự động bù sáng (fix washed-out)
             exposure: 80                # [DYNAMIC] Giảm từ 80 → 60 để tay không bị chói trắng
             gain: 80                    # [DYNAMIC] Giảm từ 80 → 50 để giảm nhiễu hạt (noise) trong phòng
             auto_whitebalance: true     # [DYNAMIC] Giữ tự động cân bằng trắng
@@ -102,7 +102,7 @@
             # 'zedx.yaml', 'zedxmini.yaml', 'virtual.yaml' files
 
         pos_tracking:
-            pos_tracking_enabled: true # True to enable positional tracking from start
+            pos_tracking_enabled: false # True to enable positional tracking from start
             pos_tracking_mode: 'GEN_1' # Matches the ZED SDK setting: 'GEN_1', 'GEN_2', 'GEN_3'
             imu_fusion: true # enable/disable IMU fusion. When set to false, only the optical odometry will be used.
             publish_tf: true # [overwritten by launch file options] publish `odom -> camera_link` TF

@@ -16,14 +16,14 @@ ekf_filter_node:
     odom0: /diff_cont/odom
     odom0_config: [false, false, false,
                    false, false, false,
-                   true,  false, false,   # Lấy vận tốc vX
+                   true,  false, false,   # Chỉ lấy vận tốc vX
                    false, false, false,   # Tắt yaw vận tốc, để IMU xử lý
                    false, false, false]
-    odom0_differential: true
+    odom0_differential: false  # Tắt: Encoder sẽ cung cấp vị trí tuyệt đối
     odom0_queue_size: 20
-    odom0_covariance: [1.0,  0.0, 0.0, 0.0,  0.0,  0.0,
-                       0.0,  1.0, 0.0, 0.0,  0.0,  0.0,
-                       0.0,  0.0, 1.0, 0.0,  0.0,  0.0,
+    odom0_covariance: [0.5,  0.0, 0.0, 0.0,  0.0,  0.0,
+                       0.0,  0.5, 0.0, 0.0,  0.0,  0.0,
+                       0.0,  0.0, 0.5, 0.0,  0.0,  0.0,
                        0.0,  0.0, 0.0, 0.25, 0.0,  0.0,
                        0.0,  0.0, 0.0, 0.0,  0.25, 0.0,
                        0.0,  0.0, 0.0, 0.0,  0.0,  0.25]
@@ -31,7 +31,7 @@ ekf_filter_node:
     # IMU odometry
     imu0: /zed2/zed_node/imu/data
     imu0_config: [false, false, false,
-                  false, false, false,
+                  false, false, true,  # Lấy yaw (Z) từ IMU
                   false, false, false,
                   false, false, true,  # Lấy vận tốc góc (Angular velocity Z)
                   true,  false, false] # Lấy gia tốc X hỗ trợ
@@ -46,21 +46,22 @@ ekf_filter_node:
                       0.0,  0.0,  0.0,  0.0, 0.05, 0.0,
                       0.0,  0.0,  0.0,  0.0, 0.0, 0.05]
 
-    # VIO odometry from rtabmap_odom/rgbd_odometry (30Hz)
+    # VIO odometry from rtabmap_odom/rgbd_odometry (30Hz) - Viị trí tuyệt đối
     odom1: /zed2/odom_vio
     odom1_config: [true,  true,  false,  # Lấy X, Y
-                   false, false, true,   # Lấy Yaw
+                   false, false, false,   # Lấy Yaw
                    false, false, false,
                    false, false, false,
                    false, false, false]
-    odom1_differential: true  # Đồng bộ mượt với IMU 200Hz
+    odom1_differential: false  # Bắt: VIO cung cấp vị trí tuyệt đối, không còn tích phân vận tốc
+    odom1_relative: true       # Bật: Robot luôn xuất phát tại (0,0,0)
     odom1_queue_size: 20
-    odom1_covariance: [5.0,  0.0, 0.0, 0.0, 0.0, 0.0,
-                       0.0,  5.0, 0.0, 0.0, 0.0, 0.0,
-                       0.0,  0.0, 5.0, 0.0, 0.0, 0.0,
-                       0.0,  0.0, 0.0, 0.1, 0.0, 0.0,
-                       0.0,  0.0, 0.0, 0.0, 0.1, 0.0,
-                       0.0,  0.0, 0.0, 0.0, 0.0, 0.1]
+    odom1_covariance: [10.0, 0.0, 0.0, 0.0, 0.0, 0.0,  # EKF sẽ "it tin" VIO hơn
+                       0.0, 10.0, 0.0, 0.0, 0.0, 0.0,   # để tránh giật tằc thời
+                       0.0,  0.0, 10.0, 0.0, 0.0, 0.0,
+                       0.0,  0.0, 0.0, 1.0, 0.0, 0.0,
+                       0.0,  0.0, 0.0, 0.0, 1.0, 0.0,
+                       0.0,  0.0, 0.0, 0.0, 0.0, 1.0]
 
     process_noise_covariance: [0.05, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
                                0.0, 0.05, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
