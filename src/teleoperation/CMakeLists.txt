@@ -10,9 +10,14 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
+find_package(sensor_msgs REQUIRED)
 add_executable(teleoperation src/KeyboardInput.cpp src/main.cpp)
 ament_target_dependencies(teleoperation rclcpp geometry_msgs)
-install(TARGETS teleoperation DESTINATION lib/${PROJECT_NAME})
+
+add_executable(joy_control src/JoyControl.cpp)
+ament_target_dependencies(joy_control rclcpp geometry_msgs sensor_msgs)
+
+install(TARGETS teleoperation joy_control DESTINATION lib/${PROJECT_NAME})
 
 install (
   DIRECTORY src include
