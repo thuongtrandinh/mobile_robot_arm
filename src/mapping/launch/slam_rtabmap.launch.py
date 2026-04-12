@@ -90,17 +90,17 @@ def generate_launch_description():
     )
     rgb_topic_arg = DeclareLaunchArgument(
         "rgb_topic",
-        default_value="/zed/zed_node/rgb/color/rect/image",
+        default_value="/zed2/zed_node/rgb/color/rect/image",
         description="RGB image topic used when use_zed=true",
     )
     depth_topic_arg = DeclareLaunchArgument(
         "depth_topic",
-        default_value="/zed/zed_node/depth/depth_registered",
+        default_value="/zed2/zed_node/depth/depth_registered",
         description="Depth image topic used when use_zed=true",
     )
     camera_info_topic_arg = DeclareLaunchArgument(
         "camera_info_topic",
-        default_value="/zed/zed_node/rgb/color/rect/camera_info",
+        default_value="/zed2/zed_node/rgb/color/rect/camera_info",
         description="Camera info topic used when use_zed=true",
     )
     # topic_queue_size_arg = DeclareLaunchArgument(
@@ -125,7 +125,7 @@ def generate_launch_description():
         name="ekf_filter_node",
         output="screen",
         parameters=[
-            os.path.join(localization_dir, "config", "ekf_zed2.yaml"),
+            os.path.join(mapping_dir, "config", "ekf_encoder_zed_vio.yaml"),
             {"use_sim_time": use_sim_time},
         ],
     )
@@ -156,7 +156,7 @@ def generate_launch_description():
             # "approx_sync_max_interval": approx_sync_max_interval,
             # "topic_queue_size": topic_queue_size,
             # "sync_queue_size": sync_queue_size,
-            "odom_sensor_sync": "false",
+            "odom_sensor_sync": "true",  # BẬT để đồng bộ ảnh + odom
             "visual_odometry": "false",
             "icp_odometry": "false",
             "publish_tf_odom": "false",
@@ -167,7 +167,7 @@ def generate_launch_description():
             "qos_imu": "2",
             "qos_scan": "2",
             "qos_odom": "2",
-            "wait_for_transform": "0.5",
+            "wait_for_transform": "1.5",  # Tăng từ 0.5 lên 1.5 để chờ ZED2 chậm
             "qos_image": "2",
             "qos_camera_info": "2",
         }.items(),

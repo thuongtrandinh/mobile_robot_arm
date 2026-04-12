@@ -30,7 +30,7 @@ ekf_filter_node:
     # ========================================================
     # INPUT 2: CAMERA ZED 2 (Nguồn Vị Trí Tuyệt Đối)
     # ========================================================
-    odom1: /zed/zed_node/odom
+    odom1: /zed2/zed_node/odom
     # CHỈ LẤY: x, y (vị trí) và yaw (hướng xe)
     odom1_config: [true,  true,  false, 
                    false, false, true,  
@@ -44,7 +44,7 @@ ekf_filter_node:
     # ========================================================
     # INPUT 3: IMU TỪ ZED 2 (Bù trừ độ trễ bẻ lái)
     # ========================================================
-    imu0: /zed/zed_node/imu/data
+    imu0: /zed2/zed_node/imu/data
     # CHỈ LẤY: vyaw (tốc độ bẻ lái tức thời)
     imu0_config: [false, false, false,
                   false, false, false,
