@@ -16,7 +16,15 @@ def generate_launch_description():
     # Đường dẫn file cấu hình
     xacro_file = os.path.join(descriptions_pkg, 'model', 'wheeled', 'urdf', 'mobile_robot.urdf.xacro')
     controller_config = os.path.join(descriptions_pkg, 'model', 'wheeled', 'config', 'ros2_control.yaml')
-    custom_zed_config_dir = os.path.join(zed_wrapper_pkg, 'config')
+    
+    # Xác định đường dẫn đầy đủ tới các file config ZED
+    # Đảm bảo node ZED2 đọc đúng các file này thay vì dùng bản mặc định
+    zed_config_common = os.path.join(zed_wrapper_pkg, 'config', 'common_stereo.yaml')
+    zed_config_camera = os.path.join(zed_wrapper_pkg, 'config', 'zed2.yaml')
+    
+    # File override để ép ZED đọc đúng cấu hình với camera_flip: true
+    # Tạo đường dẫn đầu tiên, có thể tạo file override nếu cần
+    zed_override_config = os.path.join(zed_wrapper_pkg, 'config', 'common_stereo.yaml')
 
     # 1. ROBOT STATE PUBLISHER (Truyền is_sim:=false vào Xacro)
     robot_description_content = ParameterValue(
@@ -57,7 +65,11 @@ def generate_launch_description():
 
     zed2_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(os.path.join(zed_wrapper_pkg, 'launch', 'zed_camera.launch.py')),
-        launch_arguments={'camera_model': 'zed2', 'config_path': custom_zed_config_dir}.items()
+        launch_arguments={
+            'camera_model': 'zed2',
+            'camera_name': 'zed2',
+            'ros_params_override_path': zed_override_config
+        }.items()
     )
 
     return LaunchDescription([

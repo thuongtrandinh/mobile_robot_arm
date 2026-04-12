@@ -73,7 +73,7 @@ const char* joint_names[2] = {"left_wheel_joint", "right_wheel_joint"};
 
 /* ---------- BIẾN ENCODER & PID (GIỮ NGUYÊN HỆ SỐ) ---------- */
 float speed_left = 0, speed_right = 0, setpoint_left = 0, setpoint_right = 0;
-float Kp_L = 800, Ki_L = 3000, Kd_L = 3.5;
+float Kp_L = 810, Ki_L = 2800, Kd_L = 3.5;
 float Kp_R = 810, Ki_R = 2500, Kd_R = 3.7;
 
 float Error1=0, pre_Error1=0, pre_pre_Error1=0, duty_left=0, pre_duty_left=0;
@@ -81,6 +81,14 @@ float Error2=0, pre_Error2=0, pre_pre_Error2=0, duty_right=0, pre_duty_right=0;
 
 int32_t enc_left=0, pre_enc_left=0, delta_left=0;
 int32_t enc_right=0, pre_enc_right=0, delta_right=0;
+
+/* ---------- BIẾN ĐỒNG BỘ CHÉO (Cross-Coupling Synchronization) ---------- */
+float K_sync_D = 150.0f;    // Khâu D (Phản I cũ) - chống rừng lắc vận tốc
+float K_sync_P = 800.0f;    // Khâu P (Phản II cũ) - kéo 2 vị trí lại gần nhau
+float K_sync_I = 50.0f;     // Khâu I (Phản III cũ) - tích phân vị trí
+
+float pos_error = 0.0f;     // Lưu chênh lệch vị trí
+float pos_error_sum = 0.0f; // Lưu cộng dồn cũa chênh lệch vị trí
 
 /* USER CODE END PV */
 
@@ -128,8 +136,8 @@ void cmd_vel_callback(const void *msgin)
     float w = msg->twist.angular.z;  // rad/s
 
     __disable_irq();
-    setpoint_right  = ((-v) - (wheel_base / 2.0f) * (w));
-    setpoint_left = ((-v) + (wheel_base / 2.0f) * (w));
+    setpoint_right  = (v - (wheel_base / 2.0f) * (w));
+    setpoint_left = (v + (wheel_base / 2.0f) * (w));
     __enable_irq();
 }
 /* USER CODE END PFP */
@@ -688,17 +696,22 @@ void StartDefaultTask(void *argument)
 	joint_msg.velocity.size = 2;
 	joint_msg.velocity.capacity = 2;
 
-	while (!rmw_uros_epoch_synchronized()) {
-      rmw_uros_sync_session(1000);
-      osDelay(10);
-  }
+	rmw_uros_sync_session(1000);
 
+	uint32_t sync_counter = 0;
 	while (1)
 	{
+
+		// --- Đồng bộ Clock với Master --- //
+		sync_counter++;
+		if(sync_counter >=3000){
+			rmw_uros_sync_session(10);
+			sync_counter = 0;
+		}
 		// --- TÍNH TOÁN ĐỘNG HỌC (KINEMATICS) ---
 		// Vận tốc góc (rad/s) = vận tốc dài (m/s) / bán kính (m)
-		double wl = (double)(-speed_left / wheel_radius);
-		double wr = (double)(-speed_right / wheel_radius);
+		double wl = (double)(speed_left / wheel_radius);
+		double wr = (double)(speed_right / wheel_radius);
 
 		// Tích phân vị trí (rad) = vị trí cũ + (vận tốc * thời gian)
 		// Task chạy chu kỳ 20ms = 0.02s
@@ -731,10 +744,49 @@ void MotorTask(void *argument)
   /* Infinite loop */
   for(;;)
   {
+	  // 1. Chạy 2 bộ PID độc lập
 	  PID_Calculate1();
-	  PWM_Calculate1();
 	  PID_Calculate2();
+
+	  // 2. THUẬT TOÁN ĐỒNG BỘ PID Vị TRÍ
+	  if (setpoint_left != 0.0f && setpoint_left == setpoint_right) 
+	  {
+		  // 1. Sai số vận tốc (Khâu D cũa Vị trí)
+		  float speed_error = speed_left - speed_right;
+		  
+		  // 2. Sai số vị trí (Khâu P cũa Vị trí) - Tích phân cũa vận tốc
+		  pos_error += speed_error * 0.01f;
+		  
+		  // 3. Tích phân cũa Sai số vị trí (Khâu I cũa Vị trí)
+		  pos_error_sum += pos_error * 0.01f;
+
+		  // Anti-Windup cho khâu I mới (Tránh xe bị giật khi khởi động)
+		  if(pos_error_sum > 15.0f) pos_error_sum = 15.0f;
+		  else if(pos_error_sum < -15.0f) pos_error_sum = -15.0f;
+
+		  // 4. Xuất lực bù đồng bộ (PID hoàn chỉnh)
+		  float duty_sync_adjust = (K_sync_D * speed_error) + 
+		                           (K_sync_P * pos_error) + 
+		                           (K_sync_I * pos_error_sum);
+
+		  duty_left  -= duty_sync_adjust;
+		  duty_right += duty_sync_adjust;
+
+		  // Chặn giới hạn PWM
+		  if(duty_left > 699) duty_left = 699; else if (duty_left < -699) duty_left = -699;
+		  if(duty_right > 699) duty_right = 699; else if (duty_right < -699) duty_right = -699;
+	  }
+	  else 
+	  {
+		  // Xóa sạch bộ nhớ khi xe rẽ hoặc dừng
+		  pos_error = 0.0f;
+		  pos_error_sum = 0.0f; 
+	  }
+
+	  // 3. Xuất PWM ra Driver BTS7960
+	  PWM_Calculate1();
 	  PWM_Calculate2();
+	  
 	  osDelay(10);
   }
   /* USER CODE END MotorTask */
