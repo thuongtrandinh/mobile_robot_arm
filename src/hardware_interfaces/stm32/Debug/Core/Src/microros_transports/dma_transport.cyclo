@@ -1,4 +1,0 @@
-../Core/Src/microros_transports/dma_transport.c:14:6:cubemx_transport_open	1
-../Core/Src/microros_transports/dma_transport.c:26:6:cubemx_transport_close	1
-../Core/Src/microros_transports/dma_transport.c:35:8:cubemx_transport_write	4
-../Core/Src/microros_transports/dma_transport.c:55:8:cubemx_transport_read	6
