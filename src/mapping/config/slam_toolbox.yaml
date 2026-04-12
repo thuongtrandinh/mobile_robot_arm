@@ -1,136 +1,64 @@
 slam_toolbox:
   ros__parameters:
-    # Cấu hình cơ bản
+    # ==========================================
+    # CẤU HÌNH CƠ BẢN (CORE)
+    # ==========================================
     use_sim_time: false
     odom_frame: odom
     map_frame: map
     base_frame: base_footprint
     scan_topic: /scan
-    mode: mapping # Chế độ vẽ bản đồ
-
-    # Cấu hình ROS
+    mode: mapping # Chế độ vẽ bản đồ (sẽ chuyển thành localization khi chạy Nav2)
     debug_logging: false
-    throttle_scans: 1
-    transform_publish_period: 0.02 # 50Hz để mượt TF bản đồ
-    map_update_interval: 1.0
-    resolution: 0.05
-    max_laser_range: 12.0 # Tùy thuộc vào Lidar A2M8 (thường là 8-12m)
-    minimum_time_interval: 0.5
+    throttle_scans: 1 # Xử lý từng scan một (do Lidar quét ~10Hz là khá nhẹ định)
+
+    # ==========================================
+    # ĐỒNG BỘ THỜI GIAN & TF
+    # ==========================================
+    # Phát TF map -> odom ở 20Hz (0.05s). Nhanh hơn sẽ mượt RViz, nhưng tốn CPU.
+    transform_publish_period: 0.05 
     transform_timeout: 0.2
     tf_buffer_duration: 30.0
-    stack_capacity: 40000000
 
-    # Cấu hình thuật toán Scan Matching
+    # ==========================================
+    # CẬP NHẬT BẢN ĐỒ (MAPPING)
+    # ==========================================
+    map_update_interval: 1.0 # Cập nhật hiển thị map trên RViz mỗi 1 giây
+    resolution: 0.05         # Độ phân giải 5cm/pixel (Chuẩn cho Nav2)
+    max_laser_range: 10.0    # Tầm nhìn tối đa của Lidar A2M8. Đặt 10m để an toàn.
+
+    # ==========================================
+    # SCAN MATCHING (QUYẾT ĐỊNH ĐỘ MƯỢT)
+    # ==========================================
     use_scan_matching: true
     use_scan_barycenter: true
+    
+    # Chỉ xử lý Lidar khi xe đã di chuyển ít nhất 20cm hoặc xoay 10 độ.
+    # ĐIỀU NÀY GIÚP XE KHÔNG BỊ GIẬT KHI ĐỨNG YÊN.
     minimum_travel_distance: 0.2
-    minimum_travel_heading: 0.174 # ~10 độ
+    minimum_travel_heading: 0.174 
+    minimum_time_interval: 0.5 
+
     scan_buffer_size: 10
     scan_buffer_maximum_scan_distance: 10.0
     link_match_minimum_response_fine: 0.1
     link_scan_maximum_distance: 1.5
 
-    # Cấu hình Loop Closure (Tối ưu bản đồ)
-    do_loop_closing: true
+    # ==========================================
+    # LOOP CLOSURE (CHỐNG TRÔI BẢN ĐỒ)
+    # ==========================================
+    do_loop_closing: true # BẮT BUỘC BẬT khi vẽ map để sửa lỗi góc xoay tích lũy
     loop_match_minimum_chain_size: 10
     loop_match_maximum_variance_coarse: 3.0
     loop_match_minimum_response_coarse: 0.35
     loop_match_minimum_response_fine: 0.45
-
-    # Khoảng cách tối ưu hóa
-    distance_variance_penalty: 0.5
-    angle_variance_penalty: 1.0
     loop_search_maximum_distance: 3.0
-    
-    # Do loop closing
-    # TUNED: Disabled to prevent jerky corrections when robot is stationary
-    do_loop_closing: true  # Changed from true
-    
-    # Loop match minimum chain size
-    loop_match_minimum_chain_size: 15  # Increased from 10
-    
-    # Loop match maximum variance coarse
-    loop_match_maximum_variance_coarse: 4.0  # Increased from 3.0
-    
-    # Loop match minimum response coarse
-    loop_match_minimum_response_coarse: 0.4  # Increased from 0.35
-    
-    # Loop match minimum response fine
-    loop_match_minimum_response_fine: 0.5  # Increased from 0.45
-    
+
     # ==========================================
-    # CORRELATION PARAMETERS
-    # ==========================================
-    # Correlation search space dimension
-    correlation_search_space_dimension: 0.5
-    correlation_search_space_resolution: 0.01
-    correlation_search_space_smear_deviation: 0.1
-    
-    # ==========================================
-    # LOOP CLOSURE PARAMETERS
-    # ==========================================
-    # Loop search space dimension
-    loop_search_space_dimension: 8.0
-    loop_search_space_resolution: 0.05
-    loop_search_space_smear_deviation: 0.03
-    
-    # ==========================================
-    # SCAN MATCHER - DISTANCE VARIANCE PENALTY
+    # TỐI ƯU HÓA (PENALTY TIES)
     # ==========================================
     distance_variance_penalty: 0.5
     angle_variance_penalty: 1.0
-    
-    # ==========================================
-    # SCAN MATCHER - FINE/COARSE SEARCH
-    # ==========================================
     fine_search_angle_offset: 0.00349
     coarse_search_angle_offset: 0.349
     coarse_angle_resolution: 0.0349
-    
-    # ==========================================
-    # OPTIMIZATION PARAMETERS
-    # ==========================================
-    # Minimum time interval (sec) between scans for optimization
-    # TUNED: Increased significantly to reduce jerky corrections
-    minimum_time_interval: 0.5  # Increased from 0.5
-    
-    # Transform publish period (sec)
-    # TUNED: Publish slower to reduce jerkiness (slower TF updates)
-    transform_publish_period: 0.1  # Increased from 0.02 (5x slower!)
-    
-    # Map update interval (sec)
-    # TUNED: Update map less frequently
-    map_update_interval: 2.0  # Increased from 5.0
-    
-    # Resolution (m/pixel)
-    resolution: 0.05
-    
-    # Max laser range (m) - match your Lidar spec
-    max_laser_range: 8.0
-    
-    # Minimum laser range (m)
-    minimum_angle_penalty: 0.9
-    minimum_distance_penalty: 0.5
-    
-    # ==========================================
-    # TF PARAMETERS
-    # ==========================================
-    use_scan_matching: true
-    use_scan_barycenter: true
-    
-    # TF timeout (sec)
-    tf_buffer_duration: 30.0
-    
-    # Stack size for thread (bytes)
-    stack_size_to_use: 40000000
-    
-    # ==========================================
-    # THROTTLE PARAMETERS
-    # ==========================================
-    enable_interactive_mode: true
-    
-    # Throttle scans (process every Nth scan)
-    throttle_scans: 1
-    
-    # Transform timeout (sec)
-    transform_timeout: 0.2
