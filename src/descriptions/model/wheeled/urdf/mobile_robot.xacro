@@ -46,22 +46,22 @@
 	</material>
 	    
 <xacro:property name="robot_mass" value="4"/>
-	<xacro:property name="body_length" value="0.3"/>
-	<xacro:property name="body_width" value="0.4"/>
-	<xacro:property name="body_height" value="0.3"/>
+	<xacro:property name="body_length" value="0.28"/>    <!-- 28cm dài (đổi từ 40cm) -->
+	<xacro:property name="body_width" value="0.4"/>     <!-- 40cm rộng (đổi từ 28cm) -->
+	<xacro:property name="body_height" value="0.4"/>    <!-- 40cm cao -->
 	<xacro:property name="body_mass" value="15"/>
 	
 	<xacro:property name="frame_beam_radius" value="0.008"/>
 	<xacro:property name="frame_beam_mass" value="0.2"/>
 	<xacro:property name="frame_beam_20" value="0.02"/>
 	<xacro:property name="frame_beam_40" value="0.04"/>
-	<xacro:property name="mica_sheet_thickness" value="0.005"/>
+	<xacro:property name="mica_sheet_thickness" value="0.005"/>   <!-- 0.5cm dày -->
 	<xacro:property name="mica_mass" value="0.2"/>
 	 
-	<xacro:property name="wheel_radius" value="0.05"/>
+	<xacro:property name="wheel_radius" value="0.05"/>  <!-- 10cm đường kính, tức 5cm radius -->
 	<xacro:property name="wheel_width" value="0.03"/>
 	<xacro:property name="wheel_mass" value="0.3"/>
-	<xacro:property name="wheel_separation" value="0.48"/>
+	<xacro:property name="wheel_separation" value="0.46"/>  <!-- 46cm khoảng cách 2 bánh -->
 	<xacro:property name="PI" value="3.1415926535897931"/>
 	    
 	<xacro:macro name="cylinder_inertia" params="m r h">
@@ -77,7 +77,7 @@
 	</xacro:macro>
 
 <joint name="base_footprint_joint" type="fixed">
-    	<origin xyz="0.0 0.0 ${wheel_radius}" rpy="0.0 0.0 0.0"/>
+    	<origin xyz="0.0 0.0 0.08" rpy="0.0 0.0 0.0"/>  <!-- 8cm từ đáy thân xuống mặt đất -->
         <parent link="base_footprint"/>
         <child link="base_link"/>
     </joint>
@@ -127,7 +127,7 @@
     <joint name="post_fl_joint" type="fixed">
         <parent link="base_link"/>
         <child link="post_fl"/>
-        <origin xyz="0.15 -0.2 0.15"/>
+        <origin xyz="0.14 -0.20 0.20"/>  <!-- Góc trước trái, tâm cao 20cm (0-40cm cao) -->
     </joint>
 
     <link name="post_fl">
@@ -156,7 +156,7 @@
     <joint name="post_fr_joint" type="fixed">
         <parent link="base_link"/>
         <child link="post_fr"/>
-        <origin xyz="0.15 0.2 0.15"/>
+        <origin xyz="0.14 0.20 0.20"/>  <!-- Góc trước phải, tâm cao 20cm (0-40cm cao) -->
     </joint>
 
     <link name="post_fr">
@@ -185,7 +185,7 @@
     <joint name="post_bl_joint" type="fixed">
         <parent link="base_link"/>
         <child link="post_bl"/>
-        <origin xyz="-0.15 -0.2 0.15"/>
+        <origin xyz="-0.14 -0.20 0.20"/>  <!-- Góc sau trái, tâm cao 20cm (0-40cm cao) -->
     </joint>
 
     <link name="post_bl">
@@ -214,7 +214,7 @@
     <joint name="post_br_joint" type="fixed">
         <parent link="base_link"/>
         <child link="post_br"/>
-        <origin xyz="-0.15 0.2 0.15"/>
+        <origin xyz="-0.14 0.20 0.20"/>  <!-- Góc sau phải, tâm cao 20cm (0-40cm cao) -->
     </joint>
 
     <link name="post_br">
@@ -243,7 +243,7 @@
     <joint name="layer_middle_joint" type="fixed">
         <parent link="base_link"/>
         <child link="layer_middle"/>
-        <origin xyz="0.0 0.0 0.15" rpy="0.0 0.0 0.0"/>
+        <origin xyz="0.0 0.0 0.07" rpy="0.0 0.0 0.0"/>  <!-- 7cm từ đáy thân -->
     </joint>
 
     <link name="layer_middle">
@@ -272,7 +272,7 @@
     <joint name="layer_top_joint" type="fixed">
         <parent link="base_link"/>
         <child link="layer_top"/>
-        <origin xyz="0.0 0.0 0.295" rpy="0.0 0.0 0.0"/>
+        <origin xyz="0.0 0.0 0.33" rpy="0.0 0.0 0.0"/>  <!-- 33cm từ đáy thân -->
     </joint>
 
     <link name="layer_top">
@@ -355,20 +355,20 @@
 <joint name="caster_wheel_joint" type="fixed">
 		<parent link="base_link"/>
 		<child link="caster_wheel"/>
-		<origin xyz="-0.1 0.0 -0.022"/>
+		<origin xyz="-0.11 0.0 -0.035"/>  <!-- Caster wheel: 11cm phía sau tâm, từ đáy thân 8cm + 1.5cm bán kính -->
 	</joint>
 
 	<link name="caster_wheel">
 		<visual>
 			<geometry>
-				<sphere radius="0.03"/>
+				<sphere radius="0.015"/>  <!-- 1.5cm radius = 3cm đường kính -->
 			</geometry>
 			<material name="red"/>
 		</visual>
 
 		<collision>
 			<geometry>
-				<sphere radius="0.03"/>
+				<sphere radius="0.015"/>
 			</geometry>
 		</collision>
 
@@ -379,7 +379,7 @@
 	</link>
 
 <joint name="joint_scan" type="fixed">
-		<origin xyz="0.0 0.0 0.4" rpy="0 0 ${PI}"/>
+		<origin xyz="0.0 0.0 0.435" rpy="0 0 ${PI}"/>  <!-- LiDAR: 43.5cm từ đáy thân, trung tâm -->
 		<parent link="base_link"/>
 		<child link="laser"/>
 	</joint>
@@ -409,6 +409,6 @@
     <joint name="zed2_base_joint" type="fixed">
         <parent link="base_link"/>
         <child link="zed2_camera_link"/>
-        <origin xyz="0.15 0.0 0.35" rpy="0 0 0"/>
+        <origin xyz="0.13 0.0 0.455" rpy="0 0 0"/>  <!-- ZED2: 45.5cm từ đáy, 13cm cách tâm về phía trước -->
     </joint>
 </robot>
