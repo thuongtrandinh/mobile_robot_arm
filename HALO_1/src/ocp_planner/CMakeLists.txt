@@ -17,6 +17,7 @@ find_package(interfaces REQUIRED)
 find_package(OpenCV REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(casadi REQUIRED)
+find_package(CURL REQUIRED)
 
 ################################################
 ## Build ##
@@ -50,7 +51,8 @@ target_compile_definitions(${PROJECT_NAME}_node PRIVATE ROS_BUILD)
 
 target_link_libraries(${PROJECT_NAME}_node
   ${OpenCV_LIBRARIES}
-  casadi::casadi
+  casadi
+  CURL::libcurl
   dw
 )
 
