@@ -16,10 +16,10 @@ ekf_filter_node:
     odom0: /diff_cont/odom
     odom0_config: [false, false, false,
                    false, false, false,
-                   true,  false, false,   # Lấy vận tốc vX
+                   true,  false, false,   # Lấy vận tốc vX (Vận tốc thẳng của bánh xe)
                    false, false, false,   # Tắt yaw vận tốc, để IMU xử lý
                    false, false, false]
-    odom0_differential: true
+    odom0_differential: false              # SỬA: FALSE vì đã lấy vận tốc thì không được vi phân
     odom0_queue_size: 20
     odom0_covariance: [1.0,  0.0, 0.0, 0.0,  0.0,  0.0,
                        0.0,  1.0, 0.0, 0.0,  0.0,  0.0,
@@ -46,21 +46,22 @@ ekf_filter_node:
                       0.0,  0.0,  0.0,  0.0, 0.05, 0.0,
                       0.0,  0.0,  0.0,  0.0, 0.0, 0.05]
 
-    # VIO odometry from rtabmap_odom/rgbd_odometry (30Hz)
-    odom1: /zed2/odom_vio
-    odom1_config: [true,  true,  false,  # Lấy X, Y
-                   false, false, true,   # Lấy Yaw
-                   false, false, false,
-                   false, false, false,
-                   false, false, false]
-    odom1_differential: true  # Đồng bộ mượt với IMU 200Hz
+    # VIO odometry from ZED 2 Camera
+    odom1: /zed2/zed_node/odom
+    odom1_config: [false, false, false,  # TẮT: X, Y, Z (Không lấy vị trí tuyệt đối)
+                   false, false, false,  # TẮT: Roll, Pitch, Yaw
+                   true,  true,  false,  # BẬT: vX, vY (Vận tốc trượt từ ZED)
+                   false, false, true]   # BẬT: vYaw (Vận tốc góc từ ZED)
+    odom1_differential: false             # SỬA: FALSE - dùng trực tiếp vận tốc, không đạo hàm posed
     odom1_queue_size: 20
-    odom1_covariance: [5.0,  0.0, 0.0, 0.0, 0.0, 0.0,
-                       0.0,  5.0, 0.0, 0.0, 0.0, 0.0,
-                       0.0,  0.0, 5.0, 0.0, 0.0, 0.0,
-                       0.0,  0.0, 0.0, 0.1, 0.0, 0.0,
-                       0.0,  0.0, 0.0, 0.0, 0.1, 0.0,
-                       0.0,  0.0, 0.0, 0.0, 0.0, 0.1]
+    odom1_covariance: [0.0,  0.0,  0.0,  0.0, 0.0, 0.0,  # Tắt: X, Y, Z
+                       0.0,  0.0,  0.0,  0.0, 0.0, 0.0,  # Tắt: Roll, Pitch, Yaw
+                       0.05, 0.0,  0.0,  0.0, 0.0, 0.0,  # vX covariance
+                       0.0,  0.05, 0.0,  0.0, 0.0, 0.0,  # vY covariance
+                       0.0,  0.0,  0.0,  0.0, 0.0, 0.0,  # vZ covariance
+                       0.0,  0.0,  0.0,  0.05, 0.0, 0.0, # aX covariance (nhưng tắt)
+                       0.0,  0.0,  0.0,  0.0, 0.05, 0.0,  # aY covariance (nhưng tắt)
+                       0.0,  0.0,  0.0,  0.0, 0.0, 0.05]  # vYaw covariance
 
     process_noise_covariance: [0.05, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
                                0.0, 0.05, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
