@@ -68,6 +68,8 @@ def generate_launch_description():
         launch_arguments={
             'camera_model': 'zed2',
             'camera_name': 'zed2',
+            'publish_tf': 'false',
+            'publish_map_tf': 'false',
             'ros_params_override_path': zed_override_config
         }.items()
     )
