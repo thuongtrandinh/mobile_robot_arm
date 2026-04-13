@@ -19,7 +19,7 @@ def launch_setup(context, *args, **kwargs):
     init_x = context.launch_configurations.get('x_pos', '0.0')
     init_y = context.launch_configurations.get('y_pos', '0.0')
     init_height = context.launch_configurations.get('height', '0.1')
-    world_name = context.launch_configurations.get('world', 'amr_simulation.world')
+    world_name = context.launch_configurations.get('world', 'parallel_hallways.world')
     launch_rviz_str = context.launch_configurations.get('launch_rviz', 'true')
     launch_rviz = launch_rviz_str.lower() == 'true'
     headless = context.launch_configurations.get('headless', 'false').lower() == 'true'
@@ -179,8 +179,8 @@ def generate_launch_description():
         DeclareLaunchArgument('launch_rviz', default_value='true', description='Launch RViz2'),
         DeclareLaunchArgument('headless', default_value='false', description='Run Gazebo in server-only mode'),
         DeclareLaunchArgument('spawn_controllers', default_value='true', description='Spawn ros2_control controllers'),
-        DeclareLaunchArgument('world', default_value='room_20x20.world',
+        DeclareLaunchArgument('world', default_value='parallel_hallways.world',
                               description='World file to load',
-                              choices=['amr_simulation.world', 'empty.world', 'room_20x20.world', 'small_house.world', 'small_warehouse.world']),
+                              choices=['amr_simulation.world', 'empty.world', 'parallel_hallways.world', 'room_20x20.world', 'small_house.world', 'small_warehouse.world']),
         OpaqueFunction(function=launch_setup),
     ])

@@ -8,9 +8,9 @@
 #include <nav_msgs/msg/path.hpp>
 
 #include "backward.hpp"
-#include "ocp_planner/msg/control_var.hpp"
-#include "ocp_planner/msg/joint_state.hpp"
-#include "ocp_planner/srv/ocp_local_plann.hpp"
+#include "interfaces/msg/control_var.hpp"
+#include "interfaces/msg/joint_state.hpp"
+#include "interfaces/srv/ocp_local_plann.hpp"
 #include "planner.h"
 
 // using json = nlohmann::json;
@@ -28,8 +28,8 @@ rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr astar_path_pub;
 
 
 void PlannSrvCallback(
-    const std::shared_ptr<ocp_planner::srv::OcpLocalPlann::Request> req,
-    std::shared_ptr<ocp_planner::srv::OcpLocalPlann::Response> res) {
+  const std::shared_ptr<interfaces::srv::OcpLocalPlann::Request> req,
+  std::shared_ptr<interfaces::srv::OcpLocalPlann::Response> res) {
   robot_plann::JointState ob_state;
   const auto &robot_state = req->ob.robot_state;
   ob_state.robot.px = robot_state.pose.x;
@@ -93,14 +93,14 @@ void PlannSrvCallback(
   res->astar_path.clear();
   std::vector<robot_plann::Point> astar_path = _planner->GetAStarPath();
   for (size_t i = 0; i < astar_path.size(); ++i) {
-    ocp_planner::msg::Point pt;
+    interfaces::msg::Point pt;
     pt.x = astar_path.at(i).x;
     pt.y = astar_path.at(i).y;
     res->astar_path.push_back(pt);
   }
 
   res->control_vars.clear();
-  ocp_planner::msg::ControlVar cur_control_var{};
+  interfaces::msg::ControlVar cur_control_var{};
   res->success = false;
   if (!mpc_return.success) {
     res->al = -req->ob.robot_state.vl / kDT;
@@ -149,7 +149,7 @@ int main(int argc, char **argv) {
   robot_plann::_planner =
       std::make_unique<robot_plann::Planner>(robot_plann::_verbose);
 
-  auto plann_srv = robot_plann::_node->create_service<ocp_planner::srv::OcpLocalPlann>(
+  auto plann_srv = robot_plann::_node->create_service<interfaces::srv::OcpLocalPlann>(
       "/ocp_plann", robot_plann::PlannSrvCallback);
 
   robot_plann::astar_path_pub =

@@ -12,34 +12,11 @@ find_package(rclpy REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
-find_package(rosidl_default_generators REQUIRED)
+find_package(interfaces REQUIRED)
 
 find_package(OpenCV REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(casadi REQUIRED)
-
-################################################
-## Declare ROS messages and services ##
-################################################
-
-# Generate messages
-rosidl_generate_interfaces(${PROJECT_NAME}
-  "msg/DynaObstacle.msg"
-  "msg/ObstacleArray.msg"
-  "msg/RobotState.msg"
-  "msg/HumanState.msg"
-  "msg/ObstacleState.msg"
-  "msg/WallState.msg"
-  "msg/Point.msg"
-  "msg/PolyState.msg"
-  "msg/JointState.msg"
-  "msg/ControlVar.msg"
-  "srv/OcpLocalPlann.srv"
-  DEPENDENCIES std_msgs geometry_msgs nav_msgs
-)
-
-# Get typesupport target for linking against self-generated interfaces
-rosidl_get_typesupport_target(cpp_typesupport_target ${PROJECT_NAME} "rosidl_typesupport_cpp")
 
 ################################################
 ## Build ##
@@ -66,12 +43,12 @@ ament_target_dependencies(${PROJECT_NAME}_node
   std_msgs
   geometry_msgs
   nav_msgs
+  interfaces
 )
 
 target_compile_definitions(${PROJECT_NAME}_node PRIVATE ROS_BUILD)
 
 target_link_libraries(${PROJECT_NAME}_node
-  "${cpp_typesupport_target}"
   ${OpenCV_LIBRARIES}
   casadi::casadi
   dw
@@ -81,29 +58,38 @@ target_link_libraries(${PROJECT_NAME}_node
 ################# pybind11 #####################
 ################################################
 
-# Use conda environment Python (pybind11 3.x uses FindPython3)
-set(Python3_EXECUTABLE "$ENV{CONDA_PREFIX}/bin/python")
-set(Python3_INCLUDE_DIRS "$ENV{CONDA_PREFIX}/include/python3.8")
-find_package(Python3 COMPONENTS Interpreter Development.Module REQUIRED)
+option(BUILD_OCP_PYTHON_BINDINGS "Build pybind11 module for ocp_planner" ON)
 
-# Add pybind11 subdirectory
-add_subdirectory(extern/pybind11)
+if(BUILD_OCP_PYTHON_BINDINGS)
+  # Prefer conda Python when available, otherwise fall back to system Python.
+  if(DEFINED ENV{CONDA_PREFIX} AND EXISTS "$ENV{CONDA_PREFIX}/bin/python")
+    set(Python3_EXECUTABLE "$ENV{CONDA_PREFIX}/bin/python")
+  endif()
 
-# Build Python binding module (STANDALONE - no ROS dependency)
-pybind11_add_module(${PROJECT_NAME}_py
-  src/ocp_bind.cc
-  src/astar.cc
-  src/smooth.cc
-  src/lookahead.cc
-  src/planner.cc
-  src/mpc.cc
-)
+  find_package(Python3 COMPONENTS Interpreter Development.Module)
+  if(Python3_FOUND)
+    # Add pybind11 subdirectory
+    add_subdirectory(extern/pybind11)
 
-target_link_libraries(${PROJECT_NAME}_py
-  PRIVATE
-  ${OpenCV_LIBRARIES}
-  casadi::casadi
-)
+    # Build Python binding module (STANDALONE - no ROS dependency)
+    pybind11_add_module(${PROJECT_NAME}_py
+      src/ocp_bind.cc
+      src/astar.cc
+      src/smooth.cc
+      src/lookahead.cc
+      src/planner.cc
+      src/mpc.cc
+    )
+
+    target_link_libraries(${PROJECT_NAME}_py
+      PRIVATE
+      ${OpenCV_LIBRARIES}
+      casadi::casadi
+    )
+  else()
+    message(WARNING "Python3 (Interpreter + Development.Module) not found. Skipping ocp_planner pybind module.")
+  endif()
+endif()
 
 ################################################
 ## Install ##
@@ -113,9 +99,11 @@ install(TARGETS ${PROJECT_NAME}_node
   DESTINATION lib/${PROJECT_NAME}
 )
 
-# Install Python binding to lib directory
-install(TARGETS ${PROJECT_NAME}_py
-  LIBRARY DESTINATION lib
-)
+if(TARGET ${PROJECT_NAME}_py)
+  # Install Python binding to lib directory
+  install(TARGETS ${PROJECT_NAME}_py
+    LIBRARY DESTINATION lib
+  )
+endif()
 
 ament_package()
