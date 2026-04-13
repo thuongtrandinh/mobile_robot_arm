@@ -59,6 +59,7 @@ target_link_libraries(${PROJECT_NAME}_node
 ################################################
 
 <<<<<<< HEAD
+<<<<<<< HEAD
 option(BUILD_OCP_PYTHON_BINDINGS "Build pybind11 module for ocp_planner" ON)
 
 if(BUILD_OCP_PYTHON_BINDINGS)
@@ -101,6 +102,9 @@ find_package(Python3 COMPONENTS Interpreter Development.Module REQUIRED)
 =======
 option(BUILD_OCP_PYTHON_BINDINGS "Build pybind11 module for ocp_planner" ON)
 >>>>>>> 3ea914c (feat: fix error for ocp)
+=======
+option(BUILD_OCP_PYTHON_BINDINGS "Build pybind11 module for ocp_planner" OFF)
+>>>>>>> a922a9a (fix: disable pybind11 python bindings due to missing extern/pybind11 submodule)
 
 if(BUILD_OCP_PYTHON_BINDINGS)
   # Prefer conda Python when available, otherwise fall back to system Python.
