@@ -70,8 +70,17 @@ def generate_launch_description():
     )
     rtabmap_args_arg = DeclareLaunchArgument(
         "rtabmap_args",
-        default_value="",
-        description="Extra RTAB-Map args, e.g. '-d' to reset database on start",
+        default_value=(
+            "--delete_db_on_start "               # Xóa map cũ mỗi lần chạy lại để tránh nhiễu
+            "--Reg/Strategy 1 "                   # Sử dụng ICP của Lidar để khớp các frame (Lidar mạnh hơn Visual ở điểm này)
+            "--Grid/Sensor 0 "                    # Chỉ dùng Lidar 2D để vẽ map (Cấm ZED 2 vẽ bậy lên sàn)
+            "--Grid/3D false "                    # Ép chạy chế độ 2D hoàn toàn
+            "--Grid/RayTracing true "             # Bật tia laser động để xóa bóng mờ khi có vật thể di chuyển
+            "--RGBD/NeighborLinkRefining true "   # Dùng Lidar để tinh chỉnh lại sai số Odometry của bánh xe
+            "--Grid/NoiseFilteringRadius 0.05 "   # Bán kính lọc nhiễu 5cm
+            "--Grid/NoiseFilteringMinNeighbors 2" # Loại bỏ các điểm laser lẻ loi (nhiễu)
+        ),
+        description="Tham số tối ưu cho DDMR sử dụng ZED2 và Lidar 2D",
     )
     use_rviz_arg = DeclareLaunchArgument(
         "use_rviz",
