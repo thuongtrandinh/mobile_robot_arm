@@ -58,15 +58,7 @@ target_link_libraries(${PROJECT_NAME}_node
 ################# pybind11 #####################
 ################################################
 
-<<<<<<< HEAD
-# Use conda environment Python when available; otherwise fall back to system Python.
-if(DEFINED ENV{CONDA_PREFIX} AND NOT "$ENV{CONDA_PREFIX}" STREQUAL "")
-  set(Python3_EXECUTABLE "$ENV{CONDA_PREFIX}/bin/python")
-endif()
-find_package(Python3 COMPONENTS Interpreter Development.Module REQUIRED)
-=======
-option(BUILD_OCP_PYTHON_BINDINGS "Build pybind11 module for ocp_planner" ON)
->>>>>>> 3ea914c (feat: fix error for ocp)
+option(BUILD_OCP_PYTHON_BINDINGS "Build pybind11 module for ocp_planner" OFF)
 
 if(BUILD_OCP_PYTHON_BINDINGS)
   # Prefer conda Python when available, otherwise fall back to system Python.
