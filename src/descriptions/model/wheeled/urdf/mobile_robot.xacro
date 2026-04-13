@@ -61,7 +61,7 @@
 	<xacro:property name="wheel_radius" value="0.05"/>
 	<xacro:property name="wheel_width" value="0.03"/>
 	<xacro:property name="wheel_mass" value="0.3"/>
-	<xacro:property name="wheel_separation" value="0.5"/>
+	<xacro:property name="wheel_separation" value="0.48"/>
 	<xacro:property name="PI" value="3.1415926535897931"/>
 	    
 	<xacro:macro name="cylinder_inertia" params="m r h">

@@ -61,7 +61,7 @@ ekf_filter_node:
                        0.0,  0.0,  0.0,  0.0, 0.0, 0.0,  # vZ covariance
                        0.0,  0.0,  0.0,  0.05, 0.0, 0.0, # aX covariance (nhưng tắt)
                        0.0,  0.0,  0.0,  0.0, 0.05, 0.0,  # aY covariance (nhưng tắt)
-                       0.0,  0.0,  0.0,  0.0, 0.0, 0.05]  # vYaw covariance
+                       0.0,  0.0,  0.0,  0.0, 0.0, 5.0]   # vYaw covariance - TĂNG LÊN để không tin ZED 2 khi xoay
 
     process_noise_covariance: [0.05, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
                                0.0, 0.05, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,

@@ -11,8 +11,8 @@ class OdomCalculator(Node):
         super().__init__('odom_calculator')
         
         # Thông số mặc định (sẽ bị ghi đè nếu bạn truyền file yaml vào)
-        self.declare_parameter('wheel_radius', 0.046)
-        self.declare_parameter('wheel_separation', 0.5) 
+        self.declare_parameter('wheel_radius', 0.05)
+        self.declare_parameter('wheel_separation', 0.48) 
         
         self.radius = self.get_parameter('wheel_radius').value
         self.separation = self.get_parameter('wheel_separation').value
