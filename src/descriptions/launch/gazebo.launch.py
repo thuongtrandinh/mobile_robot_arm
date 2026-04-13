@@ -179,7 +179,7 @@ def generate_launch_description():
         DeclareLaunchArgument('launch_rviz', default_value='true', description='Launch RViz2'),
         DeclareLaunchArgument('headless', default_value='false', description='Run Gazebo in server-only mode'),
         DeclareLaunchArgument('spawn_controllers', default_value='true', description='Spawn ros2_control controllers'),
-        DeclareLaunchArgument('world', default_value='room_20x20.world',
+        DeclareLaunchArgument('world', default_value='parallel_hallways.world',
                               description='World file to load',
                               choices=['amr_simulation.world', 'empty.world', 'parallel_hallways.world', 'room_20x20.world', 'small_house.world', 'small_warehouse.world']),
         OpaqueFunction(function=launch_setup),

@@ -58,6 +58,7 @@ target_link_libraries(${PROJECT_NAME}_node
 ################# pybind11 #####################
 ################################################
 
+<<<<<<< HEAD
 option(BUILD_OCP_PYTHON_BINDINGS "Build pybind11 module for ocp_planner" ON)
 
 if(BUILD_OCP_PYTHON_BINDINGS)
@@ -90,6 +91,48 @@ if(BUILD_OCP_PYTHON_BINDINGS)
     message(WARNING "Python3 (Interpreter + Development.Module) not found. Skipping ocp_planner pybind module.")
   endif()
 endif()
+=======
+<<<<<<< HEAD
+# Use conda environment Python when available; otherwise fall back to system Python.
+if(DEFINED ENV{CONDA_PREFIX} AND NOT "$ENV{CONDA_PREFIX}" STREQUAL "")
+  set(Python3_EXECUTABLE "$ENV{CONDA_PREFIX}/bin/python")
+endif()
+find_package(Python3 COMPONENTS Interpreter Development.Module REQUIRED)
+=======
+option(BUILD_OCP_PYTHON_BINDINGS "Build pybind11 module for ocp_planner" ON)
+>>>>>>> 3ea914c (feat: fix error for ocp)
+
+if(BUILD_OCP_PYTHON_BINDINGS)
+  # Prefer conda Python when available, otherwise fall back to system Python.
+  if(DEFINED ENV{CONDA_PREFIX} AND EXISTS "$ENV{CONDA_PREFIX}/bin/python")
+    set(Python3_EXECUTABLE "$ENV{CONDA_PREFIX}/bin/python")
+  endif()
+
+  find_package(Python3 COMPONENTS Interpreter Development.Module)
+  if(Python3_FOUND)
+    # Add pybind11 subdirectory
+    add_subdirectory(extern/pybind11)
+
+    # Build Python binding module (STANDALONE - no ROS dependency)
+    pybind11_add_module(${PROJECT_NAME}_py
+      src/ocp_bind.cc
+      src/astar.cc
+      src/smooth.cc
+      src/lookahead.cc
+      src/planner.cc
+      src/mpc.cc
+    )
+
+    target_link_libraries(${PROJECT_NAME}_py
+      PRIVATE
+      ${OpenCV_LIBRARIES}
+      casadi::casadi
+    )
+  else()
+    message(WARNING "Python3 (Interpreter + Development.Module) not found. Skipping ocp_planner pybind module.")
+  endif()
+endif()
+>>>>>>> 4f6363e (feat: fix error for ocp)
 
 ################################################
 ## Install ##
