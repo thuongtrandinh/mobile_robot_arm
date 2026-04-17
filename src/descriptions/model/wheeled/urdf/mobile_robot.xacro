@@ -400,15 +400,9 @@
         </inertial>
     </link>
 
-    <xacro:include filename="$(find zed_wrapper)/urdf/zed_macro.urdf.xacro" />
+    <xacro:include filename="$(find realsense2_description)/urdf/_d435i.urdf.xacro"/>
     
-    <xacro:zed_camera name="zed2" model="zed2" enable_gnss="false">
-        <origin xyz="0 0 0" rpy="0 0 0"/>
-    </xacro:zed_camera>
-
-    <joint name="zed2_base_joint" type="fixed">
-        <parent link="base_link"/>
-        <child link="zed2_camera_link"/>
-        <origin xyz="0.13 0.0 0.455" rpy="0 0 0"/>  <!-- ZED2: 45.5cm từ đáy, 13cm cách tâm về phía trước -->
-    </joint>
+    <xacro:sensor_d435i parent="base_link" name="camera" use_nominal_extrinsics="true">
+        <origin xyz="0.13 0.0 0.455" rpy="0 0 0"/>
+    </xacro:sensor_d435i>
 </robot>
