@@ -1,0 +1,59 @@
+# ===== D435i Camera Configuration =====
+# Lưu ý: camera_name, device_type, camera_namespace được truyền qua launch_arguments
+# File này chỉ chứa ROS parameters cho realsense2_camera_node
+
+# --- Cấu hình Luồng Dữ Liệu (Stream Configuration) ---
+enable_color: true
+enable_depth: true
+enable_sync: true                          # Đồng bộ color & depth
+align_depth.enable: true                   # Khớp depth theo color resolution
+
+# --- Profile (width,height,fps) ---
+rgb_camera.color_profile: "640,480,30"
+depth_module.depth_profile: "640,480,30"
+
+# --- Format ---
+rgb_camera.color_format: "RGB8"
+depth_module.depth_format: "Z16"
+rgb_camera.enable_auto_exposure: true
+depth_module.enable_auto_exposure: true
+
+# --- Cấu hình Hồng ngoại (Infrared) ---
+enable_infra1: true
+enable_infra2: true
+depth_module.infra1_format: "Y8"
+depth_module.infra2_format: "Y8"
+
+# --- Cấu hình IMU (Cực kỳ quan trọng cho Localization) ---
+enable_gyro: true
+enable_accel: true
+unite_imu_method: "2"                      # 2 = Linear Interpolation (tốt nhất cho SLAM/EKF)
+angular_velocity_cov: 0.01
+linear_accel_cov: 0.01
+
+# --- Cấu hình PointCloud ---
+pointcloud.enable: true
+pointcloud.ordered_pc: true
+pointcloud.stream_filter: 2                # 2 = Color stream
+pointcloud.allow_no_texture_points: false
+
+# --- Cấu hình Transform (TF) ---
+publish_tf: true
+tf_publish_rate: 0.0
+
+# --- Bộ Lọc Hậu Xử Lý (Post-Processing Filters) ---
+decimation_filter.enable: true
+decimation_filter.filter_magnitude: 2      # Giảm độ phân giải để tăng tốc (2 = giảm 2x)
+
+spatial_filter.enable: true
+spatial_filter.holes_fill: 2               # Lấp đầy các lỗ trống trong depth
+
+temporal_filter.enable: true
+# temporal_filter.smooth_alpha: 0.4       # Mặc định là 0.4
+
+# --- Cấu hình khác ---
+clip_distance: -2.0
+diagnostics_period: 0.0
+initial_reset: false
+reconnect_timeout: 6.0
+wait_for_device_timeout: -1.0

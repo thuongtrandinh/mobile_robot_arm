@@ -11,20 +11,14 @@ def generate_launch_description():
     # Khai báo đường dẫn các gói
     descriptions_pkg = get_package_share_directory('descriptions')
     lidar_pkg = get_package_share_directory('lidar')   
-    zed_wrapper_pkg = get_package_share_directory('zed_wrapper') 
+    realsense2_camera_pkg = get_package_share_directory('realsense2_camera') 
     
     # Đường dẫn file cấu hình
     xacro_file = os.path.join(descriptions_pkg, 'model', 'wheeled', 'urdf', 'mobile_robot.urdf.xacro')
     controller_config = os.path.join(descriptions_pkg, 'model', 'wheeled', 'config', 'ros2_control.yaml')
     
-    # Xác định đường dẫn đầy đủ tới các file config ZED
-    # Đảm bảo node ZED2 đọc đúng các file này thay vì dùng bản mặc định
-    zed_config_common = os.path.join(zed_wrapper_pkg, 'config', 'common_stereo.yaml')
-    zed_config_camera = os.path.join(zed_wrapper_pkg, 'config', 'zed2.yaml')
-    
-    # File override để ép ZED đọc đúng cấu hình với camera_flip: true
-    # Tạo đường dẫn đầu tiên, có thể tạo file override nếu cần
-    zed_override_config = os.path.join(zed_wrapper_pkg, 'config', 'common_stereo.yaml')
+    # Đường dẫn config D435i
+    d435i_config = os.path.join(descriptions_pkg, 'model', 'wheeled', 'config', 'd435i.yaml')
 
     # 1. ROBOT STATE PUBLISHER (Truyền is_sim:=false vào Xacro)
     robot_description_content = ParameterValue(
@@ -57,20 +51,20 @@ def generate_launch_description():
         output='screen'
     )
 
-    # 5. SENSORS (Lidar & ZED2)
+    # 5. SENSORS (Lidar & D435i Camera)
     lidar_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(os.path.join(lidar_pkg, 'launch', 'a2m8.launch.py')),
         launch_arguments={'baud_rate': '256000', 'serial_port': '/dev/rplidar', 'frame_id': 'laser'}.items()
     )
 
-    zed2_launch = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(os.path.join(zed_wrapper_pkg, 'launch', 'zed_camera.launch.py')),
+    d435i_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(os.path.join(realsense2_camera_pkg, 'launch', 'rs_launch.py')),
         launch_arguments={
-            'camera_model': 'zed2',
-            'camera_name': 'zed2',
-            'publish_tf': 'false',
-            'publish_map_tf': 'false',
-            'ros_params_override_path': zed_override_config
+            'camera_name': 'camera',
+            'camera_namespace': 'camera',
+            'config_file': d435i_config,
+            'device_type': 'd435i',
+            'output': 'screen',
         }.items()
     )
 
@@ -82,5 +76,5 @@ def generate_launch_description():
         
         # Khởi động cảm biến sau cùng
         TimerAction(period=5.0, actions=[lidar_launch]),
-        TimerAction(period=10.0, actions=[zed2_launch])
+        TimerAction(period=10.0, actions=[d435i_launch])
     ])

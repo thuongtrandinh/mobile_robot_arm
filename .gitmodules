@@ -1,2 +1,0 @@
-[submodule "src/hardware_interfaces/stm32/micro_ros_stm32cubemx_utils"]
-	url = https://github.com/YOUR_USERNAME/micro_ros_stm32cubemx_utils.git
