@@ -21,8 +21,8 @@ ekf_filter_node:
                    false, false, false]
     odom0_differential: false              # SỬA: FALSE vì đã lấy vận tốc thì không được vi phân
     odom0_queue_size: 20
-    # TĂNG nhiễu của Encoder lên để EKF ít tin vào nó hơn (dễ bị trượt bánh)
-    odom0_twist_covariance: [1.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+    # HẠ suất nhiễu của Encoder (vX) để EKF cực kỳ tin tưởng bánh xe khi đi thẳng (0.001 = tin tưởng cực cao)
+    odom0_twist_covariance: [0.001, 0.0, 0.0, 0.0, 0.0, 0.0,
                              0.0, 1.0, 0.0, 0.0, 0.0, 0.0,
                              0.0, 0.0, 1.0, 0.0, 0.0, 0.0,
                              0.0, 0.0, 0.0, 1.0, 0.0, 0.0,
@@ -55,13 +55,13 @@ ekf_filter_node:
                    false, false, true]   # BẬT: vYaw (Vận tốc góc từ ZED - hỗ trợ IMU)
     odom1_differential: false             # SỬA: FALSE - dùng trực tiếp vận tốc, không đạo hàm posed
     odom1_queue_size: 20
-    # GIẢM tối đa nhiễu của ZED 2 để EKF tin tưởng tuyệt đối vào ZED cho cả tịnh tiến và xoay
-    odom1_twist_covariance: [0.001, 0.0,  0.0,  0.0,  0.0,  0.0,   # vX - tin tưởng cực cao
-                             0.0,  0.001, 0.0,  0.0,  0.0,  0.0,   # vY - tin tưởng cực cao
-                             0.0,  0.0,  0.001, 0.0,  0.0,  0.0,   # vZ
-                             0.0,  0.0,  0.0,  0.01, 0.0,  0.0,   # wX
-                             0.0,  0.0,  0.0,  0.0,  0.01, 0.0,   # wY
-                             0.0,  0.0,  0.0,  0.0,  0.0,  0.005]  # wZ (vYaw) - tin tưởng cực cao
+    # ZED 2: HẠ tin tưởng vX (tăng lên 0.5) để EKF ưu tiên Encoder, nhưng GIỮ tin tưởng cao cho vY (0.001) để chống trượt ngang
+    odom1_twist_covariance: [0.5,   0.0,   0.0,   0.0,  0.0,  0.0,   # vX - HẠ xuống vì encoder đáng tin hơn
+                             0.0,   0.001, 0.0,   0.0,  0.0,  0.0,   # vY - GIỮ cực thấp để chống LẬT ngang
+                             0.0,   0.0,   0.001, 0.0,  0.0,  0.0,   # vZ
+                             0.0,   0.0,   0.0,   0.01, 0.0,  0.0,   # wX
+                             0.0,   0.0,   0.0,   0.0,  0.01, 0.0,   # wY
+                             0.0,   0.0,   0.0,   0.0,  0.0,  0.005]  # wZ (vYaw) - GIỮ cực thấp để quay chính xác
 
     process_noise_covariance: [0.05, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
                                0.0, 0.05, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
