@@ -59,7 +59,9 @@ class TrackingNode(Node):
 
         # ===== 1. PARAMETERS (DYNAMIC + YAML CONFIG) =====
         # --- Runtime parameters ---
-        self.declare_parameter('camera_image_topic', '/zed/zed_node/rgb/color/rect/image')
+        self.declare_parameter('camera_image_topic', '/camera/color/image_raw')
+        self.declare_parameter('depth_topic', '/camera/aligned_depth_to_color/image_raw')
+        self.declare_parameter('camera_info_topic', '/camera/color/camera_info')
         self.declare_parameter('person_model_path', 'yolov8n.pt')
         self.declare_parameter('hand_model_path', 'handsign.pt')
         self.declare_parameter('use_cuda', True)
@@ -100,7 +102,7 @@ class TrackingNode(Node):
             self.clahe_clip_limit = config['image_processing']['clahe_clip_limit']
             self.clahe_tile_size = config['image_processing']['clahe_tile_size']
             
-            # ===== CAMERA INTRINSICS (WVGA - 672x376) =====
+            # ===== CAMERA INTRINSICS (VGA - 640x480) =====
             # Load directly from config dict (no ROS parameter declaration needed)
             self.cam_w = config['camera']['width']
             self.cam_h = config['camera']['height']
@@ -111,13 +113,15 @@ class TrackingNode(Node):
             
             self.get_logger().info(f'✅ Loaded configuration from {config_path}')
             self.get_logger().info(
-                f'✅ Loaded ZED2 Camera Config: {self.cam_w}x{self.cam_h}, '
+                f'✅ Loaded D435i Camera Config: {self.cam_w}x{self.cam_h}, '
                 f'fx={self.fx:.2f}, fy={self.fy:.2f}, cx={self.cx:.2f}, cy={self.cy:.2f}'
             )
         except Exception as e:
             self.get_logger().warn(f'⚠️  Failed to load params.yaml: {e}. Using defaults.')
 
         camera_topic = self.get_parameter('camera_image_topic').value
+        depth_topic = self.get_parameter('depth_topic').value
+        camera_info_topic = self.get_parameter('camera_info_topic').value
         person_model_name = self.get_parameter('person_model_path').value
         hand_model_name = self.get_parameter('hand_model_path').value
         use_cuda = self.get_parameter('use_cuda').value
@@ -290,10 +294,10 @@ class TrackingNode(Node):
         
         # ===== 6a. CAMERA INTRINSICS =====
         # fx, cx, cy will be obtained from CameraInfo topic
-        # Default values for ZED2 WVGA (672x376) - actual values will be overwritten
-        self.fx = 263.127      # Focal length X for WVGA
-        self.cy_cam = 187.776  # Principle point Y for WVGA
-        self.cx_cam = 346.277  # Principle point X for WVGA
+        # Default values for D435i VGA (640x480) - actual values will be overwritten
+        self.fx = 386.0      # Focal length X for VGA
+        self.cy_cam = 240.0  # Principle point Y for VGA
+        self.cx_cam = 320.0  # Principle point X for VGA
         self.camera_info_received = False  # Flag to track if we got camera info yet
         
         # ===== 6b. EMA SMOOTHING FOR BOUNDING BOXES (REMOVED FOR PERFORMANCE) =====
@@ -344,10 +348,10 @@ class TrackingNode(Node):
         )
         
         if HAS_DEPTH_NMS:
-            # 🔗 SYNCHRONIZER: Wait for both RGB and Depth with max 0.1s tolerance
+            # 🔗 SYNCHRONIZER: Wait for both RGB and Depth with max 0.05s tolerance
             # Ensures 3D coordinates are computed from perfectly aligned sensor readings
             self.depth_sub = message_filters.Subscriber(
-                self, Image, '/zed/zed_node/depth/depth_registered', qos_profile=qos_img
+                self, Image, depth_topic, qos_profile=qos_img
             )
             
             # ApproximateTimeSynchronizer: Matches messages within 0.05s window (50ms)
@@ -365,7 +369,7 @@ class TrackingNode(Node):
         # Subscribe to camera info separately (no sync needed)
         self.create_subscription(
             CameraInfo,
-            '/zed/zed_node/rgb/camera_info',
+            camera_info_topic,
             self._camera_info_callback,
             qos_profile=qos_img
         )
