@@ -57,13 +57,22 @@ def generate_launch_description():
         launch_arguments={'baud_rate': '256000', 'serial_port': '/dev/rplidar', 'frame_id': 'laser'}.items()
     )
 
+    # --- SỬA LẠI KHỞI TẠO D435i Ở ĐÂY ---
     d435i_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(os.path.join(realsense2_camera_pkg, 'launch', 'rs_launch.py')),
         launch_arguments={
             'camera_name': 'camera',
-            'camera_namespace': 'camera',
-            'config_file': d435i_config,
+            'camera_namespace': '',                 # Để trống để sửa lỗi lặp /camera/camera
+            'config_file': d435i_config,            # Vẫn nạp YAML để lấy cấu hình các bộ lọc phụ
             'device_type': 'd435i',
+            'enable_gyro': 'true',                  # Bắt buộc bật Gyro
+            'enable_accel': 'true',                 # Bắt buộc bật Accel
+            'unite_imu_method': '2',                # Nội suy IMU tạo ra topic /camera/imu cho EKF
+            'enable_sync': 'true',                  # Đồng bộ thời gian ảnh Color và Depth
+            'align_depth.enable': 'true',           # Căn chỉnh khung hình Depth khớp với RGB
+            'rgb_camera.color_profile': '640,480,30',
+            'depth_module.depth_profile': '640,480,30',
+            'initial_reset': 'true',                # Tự động reset phần cứng khi chạy launch
             'output': 'screen',
         }.items()
     )
@@ -74,7 +83,7 @@ def generate_launch_description():
         odom_calculator_node,
         # micro_ros_agent_node,
         
-        # Khởi động cảm biến sau cùng
+        # Khởi động cảm biến sau cùng (Lidar trước, Camera 10s sau để tránh quá tải CPU/USB)
         TimerAction(period=5.0, actions=[lidar_launch]),
         TimerAction(period=10.0, actions=[d435i_launch])
     ])
