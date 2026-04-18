@@ -26,6 +26,71 @@ int _verbose = 1;
 rclcpp::Node::SharedPtr _node;
 rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr astar_path_pub;
 
+namespace {
+robot_plann::MpcParams::Ptr BuildMpcParamsFromNode(const rclcpp::Node::SharedPtr &node) {
+  auto params = std::make_shared<robot_plann::MpcParams>();
+  params->np = static_cast<uint16_t>(
+      node->declare_parameter<int>("mpc.horizon_steps", robot_plann::kNP));
+  params->dt = node->declare_parameter<double>("mpc.dt", robot_plann::kDT);
+  params->max_linear_vel =
+      node->declare_parameter<double>("mpc.max_linear_vel", robot_plann::kMaxLinearVel);
+  params->max_angular_vel =
+      node->declare_parameter<double>("mpc.max_angular_vel", robot_plann::kMaxAngularVel);
+  params->max_linear_acc =
+      node->declare_parameter<double>("mpc.max_linear_acc", robot_plann::kMaxLinearAcc);
+  params->max_angular_acc =
+      node->declare_parameter<double>("mpc.max_angular_acc", robot_plann::kMaxAngularAcc);
+  params->wheel_half_track = node->declare_parameter<double>("mpc.wheel_half_track", 0.3);
+  params->local_obst_num = node->declare_parameter<int>("mpc.local_obst_num", 8);
+
+  params->weights.slack = node->declare_parameter<double>("mpc.weights.slack", 99999.0);
+  params->weights.pose_x = node->declare_parameter<double>("mpc.weights.pose_x", 5.0);
+  params->weights.pose_y = node->declare_parameter<double>("mpc.weights.pose_y", 5.0);
+  params->weights.yaw_rate = node->declare_parameter<double>("mpc.weights.yaw_rate", 1.0);
+  params->weights.terminal_x = node->declare_parameter<double>("mpc.weights.terminal_x", 100.0);
+  params->weights.terminal_y = node->declare_parameter<double>("mpc.weights.terminal_y", 100.0);
+  params->weights.input_acc = node->declare_parameter<double>("mpc.weights.input_acc", 2.0);
+  params->weights.input_yaw_acc =
+      node->declare_parameter<double>("mpc.weights.input_yaw_acc", 0.5);
+  params->weights.smooth_acc = node->declare_parameter<double>("mpc.weights.smooth_acc", 0.05);
+  params->weights.smooth_yaw_acc =
+      node->declare_parameter<double>("mpc.weights.smooth_yaw_acc", 0.05);
+
+  if (params->np < 2) {
+    RCLCPP_WARN(node->get_logger(), "mpc.horizon_steps must be >= 2, forcing 2");
+    params->np = 2;
+  }
+  if (params->np > robot_plann::kNP) {
+    RCLCPP_WARN(
+        node->get_logger(),
+        "mpc.horizon_steps=%u exceeds compiled max kNP=%d, clamping to %d",
+        params->np,
+        robot_plann::kNP,
+        robot_plann::kNP);
+    params->np = robot_plann::kNP;
+  }
+  if (params->dt <= 0.0) {
+    RCLCPP_WARN(node->get_logger(), "mpc.dt must be > 0, fallback to %.3f", robot_plann::kDT);
+    params->dt = robot_plann::kDT;
+  }
+  if (params->wheel_half_track <= 0.0) {
+    RCLCPP_WARN(node->get_logger(), "mpc.wheel_half_track must be > 0, fallback to 0.3");
+    params->wheel_half_track = 0.3;
+  }
+  if (params->max_linear_vel <= 0.0) {
+    params->max_linear_vel = robot_plann::kMaxLinearVel;
+  }
+  if (params->max_linear_acc <= 0.0) {
+    params->max_linear_acc = robot_plann::kMaxLinearAcc;
+  }
+  if (params->local_obst_num < 0) {
+    params->local_obst_num = 0;
+  }
+
+  return params;
+}
+}  // namespace
+
 
 void PlannSrvCallback(
     const std::shared_ptr<interfaces::srv::OcpLocalPlann::Request> req,
@@ -102,28 +167,32 @@ void PlannSrvCallback(
   res->control_vars.clear();
   interfaces::msg::ControlVar cur_control_var{};
   res->success = false;
+  const int horizon = _planner->GetMpcHorizonSteps();
+  const double dt = _planner->GetMpcDt();
+  const double half_track = _planner->GetWheelHalfTrack();
+
   if (!mpc_return.success) {
-    res->al = -req->ob.robot_state.vl / kDT;
-    res->ar = -req->ob.robot_state.vr / kDT;
+    res->al = -req->ob.robot_state.vl / dt;
+    res->ar = -req->ob.robot_state.vr / dt;
     res->revised_goal.x = sub_goal.x();
     res->revised_goal.y = sub_goal.y();
     cur_control_var.al = res->al;
     cur_control_var.ar = res->ar;
-    for (int i = 0; i < kNP; ++i) {
+    for (int i = 0; i < horizon; ++i) {
       res->control_vars.push_back(cur_control_var);
     }
 
   } else {
-    res->al = mpc_return.stages[0].uk.acc - mpc_return.stages[0].uk.dr * 0.3;
-    res->ar = mpc_return.stages[0].uk.acc + mpc_return.stages[0].uk.dr * 0.3;
+    res->al = mpc_return.stages[0].uk.acc - mpc_return.stages[0].uk.dr * half_track;
+    res->ar = mpc_return.stages[0].uk.acc + mpc_return.stages[0].uk.dr * half_track;
     res->revised_goal.x = sub_goal.x();
     res->revised_goal.y = sub_goal.y();
 
-    for (int i = 0; i < kNP; ++i) {
+    for (int i = 0; i < horizon; ++i) {
       cur_control_var.al =
-          mpc_return.stages.at(i).uk.acc - mpc_return.stages.at(i).uk.dr * 0.3;
+          mpc_return.stages.at(i).uk.acc - mpc_return.stages.at(i).uk.dr * half_track;
       cur_control_var.ar =
-          mpc_return.stages.at(i).uk.acc + mpc_return.stages.at(i).uk.dr * 0.3;
+          mpc_return.stages.at(i).uk.acc + mpc_return.stages.at(i).uk.dr * half_track;
       res->control_vars.push_back(cur_control_var);
     }
     res->success = true;
@@ -144,9 +213,21 @@ void TestRun() {}
 int main(int argc, char **argv) {
   rclcpp::init(argc, argv);
   robot_plann::_node = std::make_shared<rclcpp::Node>("opt_planner");
+  auto mpc_params = robot_plann::BuildMpcParamsFromNode(robot_plann::_node);
 
-  robot_plann::_planner =
-      std::make_unique<robot_plann::Planner>(robot_plann::_verbose);
+  robot_plann::_planner = std::make_unique<robot_plann::Planner>(
+      mpc_params, robot_plann::_verbose);
+
+  RCLCPP_INFO(
+      robot_plann::_node->get_logger(),
+      "MPC config: horizon=%u dt=%.3f (%.2f Hz) max_v=%.2f max_a=%.2f wheel_half_track=%.3f local_obst_num=%d",
+      mpc_params->np,
+      mpc_params->dt,
+      1.0 / mpc_params->dt,
+      mpc_params->max_linear_vel,
+      mpc_params->max_linear_acc,
+      mpc_params->wheel_half_track,
+      mpc_params->local_obst_num);
 
   auto plann_srv = robot_plann::_node->create_service<interfaces::srv::OcpLocalPlann>(
       "/ocp_plann", robot_plann::PlannSrvCallback);

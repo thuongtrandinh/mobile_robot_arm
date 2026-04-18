@@ -31,11 +31,12 @@ class Mpc {
     params_.reset(new MpcParams);
     params_->dt = kDT;
     params_->np = kNP;
-    params_->max_linear_vel = 1.0;
-    params_->max_linear_acc = 1.0;
-    params_->max_angular_vel = 1.0;
-    params_->max_angular_acc = 1.0;
-    params_->local_obst_num = 6;
+    params_->max_linear_vel = kMaxLinearVel;
+    params_->max_linear_acc = kMaxLinearAcc;
+    params_->max_angular_vel = kMaxAngularVel;
+    params_->max_angular_acc = kMaxAngularAcc;
+    params_->wheel_half_track = 0.3;
+    params_->local_obst_num = 8;
   }
 
   void SetParams(MpcParams::Ptr params) {

@@ -1,0 +1,42 @@
+opt_planner:
+  ros__parameters:
+    # MPC prediction horizon (must be <= compiled kNP)
+    mpc.horizon_steps: 10
+    # MPC discretization timestep [s] -> MPC frequency = 1 / dt
+    mpc.dt: 0.25
+    mpc.max_linear_vel: 0.5
+    mpc.max_angular_vel: 0.5
+    mpc.max_linear_acc: 0.1
+    mpc.max_angular_acc: 0.1
+    # Half distance between wheels used in v/w <-> wheel constraints
+    mpc.wheel_half_track: 0.3
+    mpc.local_obst_num: 8
+
+    # MPC objective weights
+    mpc.weights.slack: 99999.0
+    mpc.weights.pose_x: 5.0
+    mpc.weights.pose_y: 5.0
+    mpc.weights.yaw_rate: 1.0
+    mpc.weights.terminal_x: 100.0
+    mpc.weights.terminal_y: 100.0
+    mpc.weights.input_acc: 2.0
+    mpc.weights.input_yaw_acc: 0.5
+    mpc.weights.smooth_acc: 0.05
+    mpc.weights.smooth_yaw_acc: 0.05
+
+rl_ocp_policy_bridge:
+  ros__parameters:
+    # Legacy single-loop period (kept only for backward compatibility)
+    timer_period: 0.1
+    # RL policy loop frequency [Hz] = 1 / policy_period
+    policy_period: 0.2
+    # MPC service request loop frequency [Hz] = 1 / mpc_period
+    mpc_period: 0.2
+    # When true, planner service is called only after a new RL sub-goal is produced
+    sync_mpc_to_policy: true
+    # Integration step used to convert planner acceleration to cmd_vel
+    control_dt: 0.25
+    # Expected MPC horizon control steps for trajectory visualization
+    mpc_horizon_steps: 10
+    # Warn as unstable when consecutive MPC predicted trajectories differ too much [m]
+    mpc_stability_warn_threshold: 0.35

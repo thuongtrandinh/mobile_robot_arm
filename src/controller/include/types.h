@@ -114,13 +114,28 @@ struct JointStateForPython {
 };
 
 struct MpcParams {
+  struct CostWeights {
+    double slack = 99999.0;
+    double pose_x = 5.0;
+    double pose_y = 5.0;
+    double yaw_rate = 1.0;
+    double terminal_x = 100.0;
+    double terminal_y = 100.0;
+    double input_acc = 2.0;
+    double input_yaw_acc = 0.5;
+    double smooth_acc = 0.05;
+    double smooth_yaw_acc = 0.05;
+  };
+
   uint16_t np;
   double dt;
   double max_linear_vel;
   double max_angular_vel;
   double max_linear_acc;
   double max_angular_acc;
+  double wheel_half_track;
   int local_obst_num;
+  CostWeights weights;
 
   typedef std::shared_ptr<MpcParams> Ptr;
 };

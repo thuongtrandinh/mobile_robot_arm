@@ -157,7 +157,7 @@ MpcReturn Planner::PlannExec(const JointState &state,
       move_forward_ = true;
     }
 
-    while(final_path.size() < kNP) {
+    while (final_path.size() < static_cast<size_t>(GetMpcHorizonSteps())) {
       final_path.push_back(final_path.back());
     }
   }
@@ -475,8 +475,9 @@ Eigen::Vector2d Planner::PidCalc(const JointState &state) {
   Eigen::Vector2d desired_vel;
   desired_vel << 0.8 * dist_error, 2.0 * alpha;
 
-  acc_ctrl(0) = (desired_vel(0) - state.robot.v) / (kDT * 0.5);
-  acc_ctrl(1) = (desired_vel(1) - state.robot.yaw_rate) / (kDT * 0.5);
+  const double dt = GetMpcDt();
+  acc_ctrl(0) = (desired_vel(0) - state.robot.v) / (dt * 0.5);
+  acc_ctrl(1) = (desired_vel(1) - state.robot.yaw_rate) / (dt * 0.5);
 
   return acc_ctrl;
 }
@@ -529,21 +530,22 @@ robot_plann::MPCOutputForPython Planner::RunSlover(
     std::cout << "Ocp plann failed!" << std::endl;
     cur_control_var.al = ans.al;
     cur_control_var.ar = ans.ar;
-    for (int i = 0; i < kNP; ++i) {
+    for (int i = 0; i < GetMpcHorizonSteps(); ++i) {
       ans.control_vars.push_back(cur_control_var);
     }
 
   } else {
-    ans.al = mpc_return.stages[0].uk.acc - mpc_return.stages[0].uk.dr * 0.3;
-    ans.ar = mpc_return.stages[0].uk.acc + mpc_return.stages[0].uk.dr * 0.3;
+    const double half_track = GetWheelHalfTrack();
+    ans.al = mpc_return.stages[0].uk.acc - mpc_return.stages[0].uk.dr * half_track;
+    ans.ar = mpc_return.stages[0].uk.acc + mpc_return.stages[0].uk.dr * half_track;
     ans.revised_goal.x = input.sub_goal.x;
     ans.revised_goal.y = input.sub_goal.y;
    
-    for (int i = 0; i < kNP; ++i) {
+    for (int i = 0; i < GetMpcHorizonSteps(); ++i) {
       cur_control_var.al =
-          mpc_return.stages.at(i).uk.acc - mpc_return.stages.at(i).uk.dr * 0.3;
+          mpc_return.stages.at(i).uk.acc - mpc_return.stages.at(i).uk.dr * half_track;
       cur_control_var.ar =
-          mpc_return.stages.at(i).uk.acc + mpc_return.stages.at(i).uk.dr * 0.3;
+          mpc_return.stages.at(i).uk.acc + mpc_return.stages.at(i).uk.dr * half_track;
 
       ans.control_vars.push_back(cur_control_var);
     }

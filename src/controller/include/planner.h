@@ -31,28 +31,28 @@ namespace robot_plann {
 class Planner {
  public:
   explicit Planner(int verbose = 0)
-    : has_map_(false), 
-      visual_flag_(false),
+    : Planner(CreateDefaultMpcParams(), verbose) {}
+
+  explicit Planner(const MpcParams::Ptr &mpc_params, int verbose = 0)
+    : visual_flag_(false),
+      has_map_(false),
       move_forward_(true),
       verbose_(verbose) {
+    mpc_params_ = std::make_shared<MpcParams>(*mpc_params);
+
     astar_planner_ = std::make_unique<AStar>(verbose);
 
     path_smoother_ = std::make_unique<SmoothCorner>();
     path_smoother_->SetDeltaMax(0.1);
 
     vel_planner_ = std::make_unique<LookAhead>();
-    vel_planner_->SetParams(kMaxLinearVel, kMaxLinearAcc, kMaxAngularVel);
+    vel_planner_->SetParams(
+        mpc_params_->max_linear_vel,
+        mpc_params_->max_linear_acc,
+        mpc_params_->max_angular_vel);
     ocp_planner_ = std::make_unique<Mpc>(verbose);
 
-    MpcParams::Ptr mpc_params = std::make_shared<MpcParams>();
-    mpc_params->dt = kDT;
-    mpc_params->np = kNP;
-    mpc_params->max_linear_vel  = kMaxLinearVel;
-    mpc_params->max_linear_acc  = kMaxLinearAcc;
-    mpc_params->max_angular_vel = kMaxAngularVel;
-    mpc_params->max_angular_acc = kMaxAngularAcc;
-    mpc_params->local_obst_num = 8;
-    ocp_planner_->SetParams(mpc_params);
+    ocp_planner_->SetParams(mpc_params_);
 #ifdef ROS_BUILD
     a_start_smooth_path_ = std::make_shared<nav_msgs::msg::Path>();
 #endif
@@ -83,6 +83,18 @@ class Planner {
 
   inline std::vector<Point> GetAStarPath() const {
     return astar_path_;
+  }
+
+  inline int GetMpcHorizonSteps() const {
+    return static_cast<int>(mpc_params_->np);
+  }
+
+  inline double GetMpcDt() const {
+    return mpc_params_->dt;
+  }
+
+  inline double GetWheelHalfTrack() const {
+    return mpc_params_->wheel_half_track;
   }
 
   static Wall ClipWall(double x1, double y1, double x2, double y2, 
@@ -124,6 +136,20 @@ class Planner {
   bool has_map_;
   bool move_forward_;
   int verbose_;
+  MpcParams::Ptr mpc_params_;
+
+  static MpcParams::Ptr CreateDefaultMpcParams() {
+    auto params = std::make_shared<MpcParams>();
+    params->dt = kDT;
+    params->np = kNP;
+    params->max_linear_vel = kMaxLinearVel;
+    params->max_linear_acc = kMaxLinearAcc;
+    params->max_angular_vel = kMaxAngularVel;
+    params->max_angular_acc = kMaxAngularAcc;
+    params->wheel_half_track = 0.3;
+    params->local_obst_num = 8;
+    return params;
+  }
 
 };
 

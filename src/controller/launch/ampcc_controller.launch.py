@@ -1,13 +1,15 @@
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
+from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
     use_sim_time = LaunchConfiguration("use_sim_time")
     respawn = LaunchConfiguration("respawn")
     log_level = LaunchConfiguration("log_level")
+    tuning_config = LaunchConfiguration("tuning_config")
 
     use_sim_time_arg = DeclareLaunchArgument(
         "use_sim_time",
@@ -27,12 +29,22 @@ def generate_launch_description():
         description="Logging level: debug, info, warn, error, fatal",
     )
 
+    tuning_config_arg = DeclareLaunchArgument(
+        "tuning_config",
+        default_value=PathJoinSubstitution([
+            FindPackageShare("controller"),
+            "config",
+            "mpc_tuning.yaml",
+        ]),
+        description="YAML file containing MPC and policy tuning parameters",
+    )
+
     ampcc_node = Node(
         package="controller",
         executable="ampcc_node",
         name="opt_planner",
         output="screen",
-        parameters=[{"use_sim_time": use_sim_time}],
+        parameters=[tuning_config, {"use_sim_time": use_sim_time}],
         respawn=respawn,
         arguments=["--ros-args", "--log-level", log_level],
     )
@@ -41,5 +53,6 @@ def generate_launch_description():
         use_sim_time_arg,
         respawn_arg,
         log_level_arg,
+        tuning_config_arg,
         ampcc_node,
     ])

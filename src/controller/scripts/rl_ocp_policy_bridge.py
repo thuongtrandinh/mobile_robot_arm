@@ -5,19 +5,18 @@ import os
 import shlex
 import subprocess
 import sys
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import rclpy
 from interfaces.msg import ObstacleState, WallState, PolyState, Point as PolyPoint
 from interfaces.msg import JointState as InterfaceJointState
 from interfaces.srv import OcpLocalPlann
-from geometry_msgs.msg import PoseStamped, TwistStamped, Point as RosPoint
+from geometry_msgs.msg import PoseStamped, TwistStamped
 from nav_msgs.msg import OccupancyGrid, Odometry
 from rcl_interfaces.msg import SetParametersResult
 from rclpy.node import Node
 from sensor_msgs.msg import LaserScan
 from std_msgs.msg import String
-from visualization_msgs.msg import Marker, MarkerArray
 
 
 class RlOcpPolicyBridge(Node):
@@ -38,7 +37,12 @@ class RlOcpPolicyBridge(Node):
         self.declare_parameter("obstacle_radius", 0.2)
         self.declare_parameter("obstacle_sample_step", 16)
         self.declare_parameter("timer_period", 0.1)
+        self.declare_parameter("policy_period", 0.2)
+        self.declare_parameter("mpc_period", 0.05)
+        self.declare_parameter("sync_mpc_to_policy", True)
         self.declare_parameter("control_dt", 0.25)
+        self.declare_parameter("mpc_horizon_steps", 10)
+        self.declare_parameter("mpc_stability_warn_threshold", 0.35)
         self.declare_parameter("max_linear_speed", 1.0)
         self.declare_parameter("max_angular_speed", 3.0)
 
@@ -59,6 +63,8 @@ class RlOcpPolicyBridge(Node):
         self.declare_parameter("visualize_planner_scene", True)
         self.declare_parameter("planner_scene_marker_topic", "/planner/debug_markers")
         self.declare_parameter("planner_scene_frame", "map")
+        self.declare_parameter("action_debug_topic", "/debug/policy_actions_scene")
+        self.declare_parameter("planner_scene_debug_topic", "/debug/planner_scene")
 
         self.declare_parameter("odom_topic", "/odometry/filtered")
         self.declare_parameter("scan_topic", "/scan")
@@ -80,7 +86,15 @@ class RlOcpPolicyBridge(Node):
         self.v_pref = self.get_parameter("v_pref").get_parameter_value().double_value
         self.obstacle_radius = self.get_parameter("obstacle_radius").get_parameter_value().double_value
         self.obstacle_sample_step = self.get_parameter("obstacle_sample_step").get_parameter_value().integer_value
+        self.policy_period = max(0.001, self.get_parameter("policy_period").get_parameter_value().double_value)
+        self.mpc_period = max(0.001, self.get_parameter("mpc_period").get_parameter_value().double_value)
+        self.sync_mpc_to_policy = self.get_parameter("sync_mpc_to_policy").get_parameter_value().bool_value
         self.control_dt = self.get_parameter("control_dt").get_parameter_value().double_value
+        self.mpc_horizon_steps = max(1, self.get_parameter("mpc_horizon_steps").get_parameter_value().integer_value)
+        self.mpc_stability_warn_threshold = max(
+            0.0,
+            self.get_parameter("mpc_stability_warn_threshold").get_parameter_value().double_value,
+        )
         self.max_linear_speed = self.get_parameter("max_linear_speed").get_parameter_value().double_value
         self.max_angular_speed = self.get_parameter("max_angular_speed").get_parameter_value().double_value
         self.planner_half_width = self.get_parameter("planner_half_width").get_parameter_value().double_value
@@ -102,6 +116,8 @@ class RlOcpPolicyBridge(Node):
         self.visualize_planner_scene = self.get_parameter("visualize_planner_scene").get_parameter_value().bool_value
         self.planner_scene_marker_topic = self.get_parameter("planner_scene_marker_topic").get_parameter_value().string_value
         self.planner_scene_frame = self.get_parameter("planner_scene_frame").get_parameter_value().string_value
+        self.action_debug_topic = self.get_parameter("action_debug_topic").get_parameter_value().string_value
+        self.planner_scene_debug_topic = self.get_parameter("planner_scene_debug_topic").get_parameter_value().string_value
 
         self.odom_topic = self.get_parameter("odom_topic").get_parameter_value().string_value
         self.scan_topic = self.get_parameter("scan_topic").get_parameter_value().string_value
@@ -122,6 +138,9 @@ class RlOcpPolicyBridge(Node):
 
         self.pending_future = None
         self.last_wheel_speed: Optional[Tuple[float, float]] = None
+        self.latest_sub_goal: Optional[Tuple[float, float]] = None
+        self.latest_sub_goal_seq = 0
+        self.last_requested_sub_goal_seq = -1
         self.worker: Optional[subprocess.Popen] = None
         self.last_request_for_viz: Optional[OcpLocalPlann.Request] = None
         self.last_pose_for_viz: Optional[Tuple[float, float, float]] = None
@@ -130,6 +149,9 @@ class RlOcpPolicyBridge(Node):
         self.runtime_use_walls = self.use_wall_constraints
         self.runtime_use_poly = self.use_demo_poly_obstacle
         self.success_streak = 0
+        self.goal_reached = False
+        self.prev_predicted_traj: Optional[List[Tuple[float, float]]] = None
+        self.last_stability_delta_rms = 0.0
 
         self._start_policy_worker()
 
@@ -139,19 +161,25 @@ class RlOcpPolicyBridge(Node):
         self.create_subscription(OccupancyGrid, self.map_topic, self._map_callback, 10)
 
         self.cmd_pub = self.create_publisher(TwistStamped, self.cmd_topic, 10)
-        self.action_viz_pub = self.create_publisher(MarkerArray, self.action_marker_topic, 10)
-        self.scene_viz_pub = self.create_publisher(MarkerArray, self.planner_scene_marker_topic, 10)
         self.debug_joint_state_pub = self.create_publisher(InterfaceJointState, self.debug_joint_state_topic, 10)
         self.policy_debug_status_pub = self.create_publisher(String, self.policy_debug_status_topic, 10)
+        self.action_debug_pub = self.create_publisher(String, self.action_debug_topic, 10)
+        self.planner_scene_debug_pub = self.create_publisher(String, self.planner_scene_debug_topic, 10)
         self.ocp_client = self.create_client(OcpLocalPlann, self.planner_service)
         self.add_on_set_parameters_callback(self._on_parameters_changed)
 
-        timer_period = self.get_parameter("timer_period").get_parameter_value().double_value
-        self.create_timer(timer_period, self._control_loop)
+        # Keep legacy timer_period declared for backward compatibility,
+        # but run policy and MPC loops on dedicated timers.
+        self.create_timer(self.policy_period, self._policy_loop)
+        self.create_timer(self.mpc_period, self._planner_loop)
 
         self.get_logger().info("RL OCP policy bridge started")
         self.get_logger().info(f"Model: {self.model_path}")
         self.get_logger().info(f"Service: {self.planner_service}")
+        self.get_logger().info(
+            f"Loop rates: policy={1.0 / self.policy_period:.2f} Hz, mpc={1.0 / self.mpc_period:.2f} Hz"
+        )
+        self.get_logger().info(f"Sync MPC requests to policy updates: {self.sync_mpc_to_policy}")
         self.get_logger().info(f"Action visualization: {self.visualize_actions} ({self.action_marker_topic})")
         self.get_logger().info(
             f"JointState debug topic: {self.publish_debug_joint_state} ({self.debug_joint_state_topic})"
@@ -193,6 +221,10 @@ class RlOcpPolicyBridge(Node):
             elif p.name == "planner_hard_half_height":
                 self.planner_hard_half_height = float(p.value)
                 update_effective_bounds = True
+            elif p.name == "mpc_horizon_steps":
+                self.mpc_horizon_steps = max(1, int(p.value))
+            elif p.name == "mpc_stability_warn_threshold":
+                self.mpc_stability_warn_threshold = max(0.0, float(p.value))
 
         if update_effective_bounds:
             self.effective_half_width = min(self.planner_half_width, self.planner_hard_half_width)
@@ -469,22 +501,19 @@ class RlOcpPolicyBridge(Node):
     def _publish_action_visualization(self, selected_sub_goal: Optional[Tuple[float, float]]) -> None:
         if self.current_pose is None:
             return
-
-        now = self.get_clock().now().to_msg()
         candidates = self._generate_action_candidates()
         obstacles = self._scan_to_obstacle_tuples()
 
-        valid_points: List[RosPoint] = []
-        masked_points: List[RosPoint] = []
+        valid_points: List[Tuple[float, float]] = []
+        masked_points: List[Tuple[float, float]] = []
         closest_selected: Optional[Tuple[float, float]] = None
         best_dist = float("inf")
 
         for lx, ly, wx, wy in candidates:
-            p = RosPoint(x=float(wx), y=float(wy), z=0.05)
             if self._is_action_masked(lx, ly, wx, wy, obstacles):
-                masked_points.append(p)
+                masked_points.append((float(wx), float(wy)))
             else:
-                valid_points.append(p)
+                valid_points.append((float(wx), float(wy)))
 
             if selected_sub_goal is not None:
                 dist = math.hypot(selected_sub_goal[0] - wx, selected_sub_goal[1] - wy)
@@ -502,99 +531,31 @@ class RlOcpPolicyBridge(Node):
                 "walls_enabled": bool(self.runtime_use_walls),
                 "poly_enabled": bool(self.runtime_use_poly),
                 "planner_fail_streak": int(self.consecutive_planner_failures),
+                "policy_hz": float(1.0 / self.policy_period),
+                "mpc_hz": float(1.0 / self.mpc_period),
                 "selected_sub_goal": list(selected_sub_goal) if selected_sub_goal is not None else None,
+                "cached_sub_goal": list(self.latest_sub_goal) if self.latest_sub_goal is not None else None,
+                "cached_sub_goal_seq": int(self.latest_sub_goal_seq),
+                "goal_reached": bool(self.goal_reached),
             }
             msg = String()
             msg.data = json.dumps(status)
             self.policy_debug_status_pub.publish(msg)
 
-        if not self.visualize_actions:
-            return
-
-        markers = MarkerArray()
-
-        delete_all = Marker()
-        delete_all.header.frame_id = self.action_marker_frame
-        delete_all.header.stamp = now
-        delete_all.action = Marker.DELETEALL
-        markers.markers.append(delete_all)
-
-        valid_marker = Marker()
-        valid_marker.header.frame_id = self.action_marker_frame
-        valid_marker.header.stamp = now
-        valid_marker.ns = "policy_actions"
-        valid_marker.id = 1
-        valid_marker.type = Marker.SPHERE_LIST
-        valid_marker.action = Marker.ADD
-        valid_marker.scale.x = 0.10
-        valid_marker.scale.y = 0.10
-        valid_marker.scale.z = 0.10
-        valid_marker.color.r = 0.0
-        valid_marker.color.g = 1.0
-        valid_marker.color.b = 0.25
-        valid_marker.color.a = 0.85
-        valid_marker.points = valid_points
-        markers.markers.append(valid_marker)
-
-        masked_marker = Marker()
-        masked_marker.header.frame_id = self.action_marker_frame
-        masked_marker.header.stamp = now
-        masked_marker.ns = "policy_actions"
-        masked_marker.id = 2
-        masked_marker.type = Marker.SPHERE_LIST
-        masked_marker.action = Marker.ADD
-        masked_marker.scale.x = 0.08
-        masked_marker.scale.y = 0.08
-        masked_marker.scale.z = 0.08
-        masked_marker.color.r = 1.0
-        masked_marker.color.g = 0.1
-        masked_marker.color.b = 0.1
-        masked_marker.color.a = 0.65
-        masked_marker.points = masked_points
-        markers.markers.append(masked_marker)
-
-        selected_marker = Marker()
-        selected_marker.header.frame_id = self.action_marker_frame
-        selected_marker.header.stamp = now
-        selected_marker.ns = "policy_actions"
-        selected_marker.id = 3
-        selected_marker.type = Marker.SPHERE
-        selected_marker.action = Marker.ADD
-        selected_marker.scale.x = 0.18
-        selected_marker.scale.y = 0.18
-        selected_marker.scale.z = 0.18
-        selected_marker.color.r = 0.1
-        selected_marker.color.g = 0.4
-        selected_marker.color.b = 1.0
-        selected_marker.color.a = 1.0
-        if closest_selected is not None:
-            selected_marker.pose.position.x = float(closest_selected[0])
-            selected_marker.pose.position.y = float(closest_selected[1])
-            selected_marker.pose.position.z = 0.12
-        else:
-            selected_marker.action = Marker.DELETE
-        markers.markers.append(selected_marker)
-
-        info_marker = Marker()
-        info_marker.header.frame_id = self.action_marker_frame
-        info_marker.header.stamp = now
-        info_marker.ns = "policy_actions"
-        info_marker.id = 4
-        info_marker.type = Marker.TEXT_VIEW_FACING
-        info_marker.action = Marker.ADD
-        info_marker.scale.z = 0.25
-        info_marker.color.r = 1.0
-        info_marker.color.g = 1.0
-        info_marker.color.b = 1.0
-        info_marker.color.a = 0.95
-        px, py, _ = self.current_pose
-        info_marker.pose.position.x = float(px)
-        info_marker.pose.position.y = float(py)
-        info_marker.pose.position.z = 0.6
-        info_marker.text = f"actions={len(candidates)} valid={len(valid_points)} masked={len(masked_points)}"
-        markers.markers.append(info_marker)
-
-        self.action_viz_pub.publish(markers)
+        action_payload = {
+            "frame_id": self.action_marker_frame,
+            "goal_reached": bool(self.goal_reached),
+            "current_pose": [float(self.current_pose[0]), float(self.current_pose[1]), float(self.current_pose[2])],
+            "valid_points": valid_points,
+            "masked_points": masked_points,
+            "selected_point": [float(closest_selected[0]), float(closest_selected[1])] if closest_selected is not None else None,
+            "candidate_count": len(candidates),
+            "valid_count": len(valid_points),
+            "masked_count": len(masked_points),
+        }
+        msg = String()
+        msg.data = json.dumps(action_payload)
+        self.action_debug_pub.publish(msg)
 
     def _scan_to_obstacle_msgs(self) -> List[ObstacleState]:
         obstacles = []
@@ -731,15 +692,26 @@ class RlOcpPolicyBridge(Node):
         start_pose: Tuple[float, float, float],
         start_wheels: Tuple[float, float],
         control_vars,
-    ) -> List[Tuple[float, float]]:
+    ) -> Tuple[List[Tuple[float, float]], Dict[str, float]]:
         px, py, yaw = start_pose
         vl, vr = start_wheels
         dt = float(self.control_dt)
+        horizon_steps = max(1, int(self.mpc_horizon_steps))
+        received_steps = len(control_vars)
 
         points: List[Tuple[float, float]] = [(float(px), float(py))]
-        for cv in control_vars:
-            vl += float(cv.al) * dt
-            vr += float(cv.ar) * dt
+        # Force exactly horizon_steps predictions so RViz length reflects MPC horizon.
+        for i in range(horizon_steps):
+            if i < received_steps:
+                al = float(control_vars[i].al)
+                ar = float(control_vars[i].ar)
+            else:
+                # If solver returned fewer controls than expected, keep current wheel speed.
+                al = 0.0
+                ar = 0.0
+
+            vl += al * dt
+            vr += ar * dt
             v = 0.5 * (vl + vr)
             w = (vr - vl) / (2.0 * self.axle_half_width)
 
@@ -748,178 +720,100 @@ class RlOcpPolicyBridge(Node):
             py += v * math.sin(yaw) * dt
             points.append((float(px), float(py)))
 
-        return points
+        debug = {
+            "expected_horizon_steps": float(horizon_steps),
+            "received_control_steps": float(received_steps),
+            "predicted_points": float(len(points)),
+            "horizon_coverage": float(min(received_steps, horizon_steps)) / float(horizon_steps),
+        }
+        return points, debug
 
-    def _publish_planner_scene_markers(
+    @staticmethod
+    def _trajectory_length(points: List[Tuple[float, float]]) -> float:
+        if len(points) < 2:
+            return 0.0
+        length = 0.0
+        for i in range(1, len(points)):
+            dx = points[i][0] - points[i - 1][0]
+            dy = points[i][1] - points[i - 1][1]
+            length += math.hypot(dx, dy)
+        return float(length)
+
+    @staticmethod
+    def _trajectory_delta_rms(
+        current: List[Tuple[float, float]],
+        previous: Optional[List[Tuple[float, float]]],
+    ) -> float:
+        if previous is None:
+            return 0.0
+        n = min(len(current), len(previous))
+        if n <= 1:
+            return 0.0
+
+        acc = 0.0
+        # Skip index 0 because both trajectories start from the current robot pose.
+        for i in range(1, n):
+            dx = current[i][0] - previous[i][0]
+            dy = current[i][1] - previous[i][1]
+            acc += (dx * dx) + (dy * dy)
+        return float(math.sqrt(acc / float(n - 1)))
+
+    def _publish_planner_scene_debug(
         self,
         req: OcpLocalPlann.Request,
         predicted_traj: List[Tuple[float, float]],
+        mpc_debug: Dict[str, float],
     ) -> None:
-        if not self.visualize_planner_scene:
-            return
-
-        now = self.get_clock().now().to_msg()
-        markers = MarkerArray()
-
-        delete_all = Marker()
-        delete_all.header.frame_id = self.planner_scene_frame
-        delete_all.header.stamp = now
-        delete_all.action = Marker.DELETEALL
-        markers.markers.append(delete_all)
-
-        robot_marker = Marker()
-        robot_marker.header.frame_id = self.planner_scene_frame
-        robot_marker.header.stamp = now
-        robot_marker.ns = "planner_scene"
-        robot_marker.id = 100
-        robot_marker.type = Marker.CYLINDER
-        robot_marker.action = Marker.ADD
-        robot_marker.pose.position.x = float(req.ob.robot_state.pose.x)
-        robot_marker.pose.position.y = float(req.ob.robot_state.pose.y)
-        robot_marker.pose.position.z = 0.05
-        robot_marker.pose.orientation.w = 1.0
-        robot_marker.scale.x = 2.0 * float(self.robot_radius)
-        robot_marker.scale.y = 2.0 * float(self.robot_radius)
-        robot_marker.scale.z = 0.10
-        robot_marker.color.r = 1.0
-        robot_marker.color.g = 0.35
-        robot_marker.color.b = 0.35
-        robot_marker.color.a = 0.85
-        markers.markers.append(robot_marker)
-
-        goal_marker = Marker()
-        goal_marker.header.frame_id = self.planner_scene_frame
-        goal_marker.header.stamp = now
-        goal_marker.ns = "planner_scene"
-        goal_marker.id = 101
-        goal_marker.type = Marker.SPHERE
-        goal_marker.action = Marker.ADD
-        goal_marker.pose.position.x = float(req.ob.robot_state.gx)
-        goal_marker.pose.position.y = float(req.ob.robot_state.gy)
-        goal_marker.pose.position.z = 0.05
-        goal_marker.pose.orientation.w = 1.0
-        goal_marker.scale.x = 0.20
-        goal_marker.scale.y = 0.20
-        goal_marker.scale.z = 0.20
-        goal_marker.color.r = 0.10
-        goal_marker.color.g = 0.95
-        goal_marker.color.b = 0.95
-        goal_marker.color.a = 0.95
-        markers.markers.append(goal_marker)
-
-        sub_goal_marker = Marker()
-        sub_goal_marker.header.frame_id = self.planner_scene_frame
-        sub_goal_marker.header.stamp = now
-        sub_goal_marker.ns = "planner_scene"
-        sub_goal_marker.id = 102
-        sub_goal_marker.type = Marker.SPHERE
-        sub_goal_marker.action = Marker.ADD
-        sub_goal_marker.pose.position.x = float(req.sub_goal.x)
-        sub_goal_marker.pose.position.y = float(req.sub_goal.y)
-        sub_goal_marker.pose.position.z = 0.05
-        sub_goal_marker.pose.orientation.w = 1.0
-        sub_goal_marker.scale.x = 0.16
-        sub_goal_marker.scale.y = 0.16
-        sub_goal_marker.scale.z = 0.16
-        sub_goal_marker.color.r = 0.30
-        sub_goal_marker.color.g = 0.55
-        sub_goal_marker.color.b = 1.0
-        sub_goal_marker.color.a = 0.95
-        markers.markers.append(sub_goal_marker)
-
-        wall_marker = Marker()
-        wall_marker.header.frame_id = self.planner_scene_frame
-        wall_marker.header.stamp = now
-        wall_marker.ns = "planner_scene"
-        wall_marker.id = 110
-        wall_marker.type = Marker.LINE_LIST
-        wall_marker.action = Marker.ADD
-        wall_marker.scale.x = 0.07
-        wall_marker.color.r = 0.95
-        wall_marker.color.g = 0.90
-        wall_marker.color.b = 0.20
-        wall_marker.color.a = 0.95
-        for wall in req.ob.walls:
-            wall_marker.points.append(RosPoint(x=float(wall.sx), y=float(wall.sy), z=0.05))
-            wall_marker.points.append(RosPoint(x=float(wall.ex), y=float(wall.ey), z=0.05))
-        markers.markers.append(wall_marker)
-
-        poly_marker = Marker()
-        poly_marker.header.frame_id = self.planner_scene_frame
-        poly_marker.header.stamp = now
-        poly_marker.ns = "planner_scene"
-        poly_marker.id = 120
-        poly_marker.type = Marker.LINE_LIST
-        poly_marker.action = Marker.ADD
-        poly_marker.scale.x = 0.06
-        poly_marker.color.r = 0.75
-        poly_marker.color.g = 0.35
-        poly_marker.color.b = 1.0
-        poly_marker.color.a = 0.95
-        for poly in req.ob.poly_states:
-            n = len(poly.vertices)
-            if n < 2:
-                continue
-            for i in range(n):
-                p1 = poly.vertices[i]
-                p2 = poly.vertices[(i + 1) % n]
-                poly_marker.points.append(RosPoint(x=float(p1.x), y=float(p1.y), z=0.05))
-                poly_marker.points.append(RosPoint(x=float(p2.x), y=float(p2.y), z=0.05))
-        markers.markers.append(poly_marker)
-
-        obst_marker = Marker()
-        obst_marker.header.frame_id = self.planner_scene_frame
-        obst_marker.header.stamp = now
-        obst_marker.ns = "planner_scene"
-        obst_marker.id = 130
-        obst_marker.type = Marker.SPHERE_LIST
-        obst_marker.action = Marker.ADD
-        obst_marker.scale.x = 2.0 * float(self.obstacle_radius)
-        obst_marker.scale.y = 2.0 * float(self.obstacle_radius)
-        obst_marker.scale.z = 0.10
-        obst_marker.color.r = 1.0
-        obst_marker.color.g = 0.10
-        obst_marker.color.b = 0.10
-        obst_marker.color.a = 0.85
-        for obs in req.ob.obstacle_states:
-            obst_marker.points.append(RosPoint(x=float(obs.px), y=float(obs.py), z=0.05))
-        markers.markers.append(obst_marker)
-
-        human_marker = Marker()
-        human_marker.header.frame_id = self.planner_scene_frame
-        human_marker.header.stamp = now
-        human_marker.ns = "planner_scene"
-        human_marker.id = 140
-        human_marker.type = Marker.SPHERE_LIST
-        human_marker.action = Marker.ADD
-        human_marker.scale.x = 0.25
-        human_marker.scale.y = 0.25
-        human_marker.scale.z = 0.10
-        human_marker.color.r = 0.20
-        human_marker.color.g = 0.95
-        human_marker.color.b = 0.20
-        human_marker.color.a = 0.85
-        for hum in req.ob.human_states:
-            human_marker.points.append(RosPoint(x=float(hum.px), y=float(hum.py), z=0.05))
-        markers.markers.append(human_marker)
-
-        traj_marker = Marker()
-        traj_marker.header.frame_id = self.planner_scene_frame
-        traj_marker.header.stamp = now
-        traj_marker.ns = "planner_scene"
-        traj_marker.id = 150
-        traj_marker.type = Marker.LINE_STRIP
-        traj_marker.action = Marker.ADD
-        traj_marker.scale.x = 0.08
-        traj_marker.color.r = 0.10
-        traj_marker.color.g = 0.55
-        traj_marker.color.b = 1.00
-        traj_marker.color.a = 0.95
-        for tx, ty in predicted_traj:
-            traj_marker.points.append(RosPoint(x=float(tx), y=float(ty), z=0.08))
-        markers.markers.append(traj_marker)
-
-        self.scene_viz_pub.publish(markers)
+        x_lim = min(self.effective_half_width, self.planner_x_limit)
+        y_lim = min(self.effective_half_height, self.planner_y_limit)
+        payload = {
+            "frame_id": self.planner_scene_frame,
+            "goal_reached": bool(self.goal_reached),
+            "bounds": {
+                "xmin": float(-x_lim),
+                "xmax": float(x_lim),
+                "ymin": float(-y_lim),
+                "ymax": float(y_lim),
+            },
+            "robot": {
+                "x": float(req.ob.robot_state.pose.x),
+                "y": float(req.ob.robot_state.pose.y),
+                "theta": float(req.ob.robot_state.pose.theta),
+                "radius": float(self.robot_radius),
+            },
+            "goal": {
+                "x": float(req.ob.robot_state.gx),
+                "y": float(req.ob.robot_state.gy),
+            },
+            "sub_goal": {
+                "x": float(req.sub_goal.x),
+                "y": float(req.sub_goal.y),
+            },
+            "walls": [
+                [float(w.sx), float(w.sy), float(w.ex), float(w.ey)] for w in req.ob.walls
+            ],
+            "obstacles": [
+                [float(o.px), float(o.py), float(o.radius)] for o in req.ob.obstacle_states
+            ],
+            "polygons": [
+                [[float(v.x), float(v.y)] for v in poly.vertices] for poly in req.ob.poly_states
+            ],
+            "humans": [
+                {
+                    "px": float(h.px),
+                    "py": float(h.py),
+                    "vx": float(h.vx),
+                    "vy": float(h.vy),
+                    "radius": float(h.radius),
+                }
+                for h in req.ob.human_states
+            ],
+            "trajectory": [[float(px), float(py)] for px, py in predicted_traj],
+            "mpc_debug": mpc_debug,
+        }
+        msg = String()
+        msg.data = json.dumps(payload)
+        self.planner_scene_debug_pub.publish(msg)
 
     def _on_planner_response(self, future) -> None:
         self.pending_future = None
@@ -957,12 +851,37 @@ class RlOcpPolicyBridge(Node):
                 self.consecutive_planner_failures = 0
 
         if self.last_request_for_viz is not None and self.last_pose_for_viz is not None and self.last_wheels_for_viz is not None:
-            predicted_traj = self._predict_mpc_trajectory(
+            predicted_traj, mpc_debug = self._predict_mpc_trajectory(
                 self.last_pose_for_viz,
                 self.last_wheels_for_viz,
                 res.control_vars,
             )
-            self._publish_planner_scene_markers(self.last_request_for_viz, predicted_traj)
+            traj_len = self._trajectory_length(predicted_traj)
+            delta_rms = self._trajectory_delta_rms(predicted_traj, self.prev_predicted_traj)
+            self.last_stability_delta_rms = float(delta_rms)
+            self.prev_predicted_traj = list(predicted_traj)
+
+            is_stable = bool(delta_rms <= self.mpc_stability_warn_threshold)
+            mpc_debug.update(
+                {
+                    "trajectory_length_m": float(traj_len),
+                    "stability_delta_rms_m": float(delta_rms),
+                    "stability_warn_threshold_m": float(self.mpc_stability_warn_threshold),
+                    "stable": 1.0 if is_stable else 0.0,
+                }
+            )
+
+            if mpc_debug["horizon_coverage"] < 0.99:
+                self.get_logger().warn(
+                    f"MPC returned {int(mpc_debug['received_control_steps'])}/{int(mpc_debug['expected_horizon_steps'])} control steps"
+                )
+
+            if not is_stable:
+                self.get_logger().warn(
+                    f"MPC trajectory jitter detected (delta_rms={delta_rms:.3f} m, threshold={self.mpc_stability_warn_threshold:.3f} m)"
+                )
+
+            self._publish_planner_scene_debug(self.last_request_for_viz, predicted_traj, mpc_debug)
 
         if self.last_wheel_speed is None:
             wheel_speeds = self._wheel_speeds_from_twist()
@@ -989,7 +908,7 @@ class RlOcpPolicyBridge(Node):
         msg.twist.angular.z = float(angular)
         self.cmd_pub.publish(msg)
 
-    def _control_loop(self) -> None:
+    def _policy_loop(self) -> None:
         if self.worker is None:
             return
 
@@ -999,21 +918,52 @@ class RlOcpPolicyBridge(Node):
         px, py, _ = self.current_pose
         gx, gy = self.current_goal
         if math.hypot(gx - px, gy - py) < self.goal_tolerance:
-            self._publish_stop()
+            self.goal_reached = True
+            self.latest_sub_goal = None
+            self.prev_predicted_traj = None
+            self.last_stability_delta_rms = 0.0
+            self._publish_action_visualization(None)
             return
 
-        if self.pending_future is not None:
-            return
+        self.goal_reached = False
 
         try:
             sub_goal = self._get_sub_goal_from_policy()
             if sub_goal is None:
                 self._publish_action_visualization(None)
                 return
+            self.latest_sub_goal = sub_goal
+            self.latest_sub_goal_seq += 1
             self._publish_action_visualization(sub_goal)
-            self._send_planner_request(sub_goal)
         except Exception as exc:
-            self.get_logger().error(f"Control loop failed: {exc}")
+            self.get_logger().error(f"Policy loop failed: {exc}")
+
+    def _planner_loop(self) -> None:
+        if self.current_pose is None or self.current_goal is None:
+            return
+
+        px, py, _ = self.current_pose
+        gx, gy = self.current_goal
+        if math.hypot(gx - px, gy - py) < self.goal_tolerance:
+            self.goal_reached = True
+            self._publish_stop()
+            return
+
+        self.goal_reached = False
+        if self.pending_future is not None:
+            return
+
+        if self.latest_sub_goal is None:
+            return
+
+        if self.sync_mpc_to_policy and self.last_requested_sub_goal_seq >= self.latest_sub_goal_seq:
+            return
+
+        try:
+            self._send_planner_request(self.latest_sub_goal)
+            self.last_requested_sub_goal_seq = self.latest_sub_goal_seq
+        except Exception as exc:
+            self.get_logger().error(f"Planner loop failed: {exc}")
             self._publish_stop()
 
 

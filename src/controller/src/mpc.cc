@@ -243,8 +243,15 @@ int Mpc::SolveMpc(const Eigen::MatrixXd &A, const Eigen::MatrixXd &b,
     4 state.r
     *** */
   casadi::Opti opti = casadi::Opti("nlp");  // Optimization problem
-  const int &np = init_guess.size();
-  assert(np == params_->np);
+  const int np = static_cast<int>(params_->np);
+  if (np < 2 || np > static_cast<int>(init_guess.size())) {
+    return 1;
+  }
+  const auto &weights = params_->weights;
+  const double wheel_half_track = params_->wheel_half_track;
+  const double max_linear_vel = params_->max_linear_vel;
+  const double max_linear_acc = params_->max_linear_acc;
+
   // define variables
   const int ext_state_num = var_idx.state_var_num + var_idx.obst_dual_num;
   auto X = opti.variable(ext_state_num, np);
@@ -252,27 +259,27 @@ int Mpc::SolveMpc(const Eigen::MatrixXd &A, const Eigen::MatrixXd &b,
   // cost function 
   auto f = opti.f();
   // min slack var
-  for (int k = 0; k < np; k++) f += 99999 * pow(U(2, k), 2);
+  for (int k = 0; k < np; k++) f += weights.slack * pow(U(2, k), 2);
   // min pose error
   for (int k = 0; k < np - 1; k++) {
-    f += 5.0 * pow(X(0, k) - init_guess.at(k).xk.X, 2);  // x_err
-    f += 5.0 * pow(X(1, k) - init_guess.at(k).xk.Y, 2);  // y_err
+    f += weights.pose_x * pow(X(0, k) - init_guess.at(k).xk.X, 2);  // x_err
+    f += weights.pose_y * pow(X(1, k) - init_guess.at(k).xk.Y, 2);  // y_err
     // f += 2.0 * pow(X(3, k) - init_guess.at(k).xk.vx, 2);  // v_err
-    f += 1.0 * pow(X(4, k), 2);
+    f += weights.yaw_rate * pow(X(4, k), 2);
   }
   // terminal cost 
-  f += 100 * pow(X(0, np - 1) - init_guess.back().xk.X, 2);
-  f += 100 * pow(X(1, np - 1) - init_guess.back().xk.Y, 2);
+  f += weights.terminal_x * pow(X(0, np - 1) - init_guess.at(np - 1).xk.X, 2);
+  f += weights.terminal_y * pow(X(1, np - 1) - init_guess.at(np - 1).xk.Y, 2);
   // f += 200 * pow(X(3, np - 1), 2);
   // input regularization
   for (int k = 0; k < np - 1; k++) {
-    f += 2 * pow(U(0, k), 2);
-    f += 0.5 * pow(U(1, k), 2);
+    f += weights.input_acc * pow(U(0, k), 2);
+    f += weights.input_yaw_acc * pow(U(1, k), 2);
   }
   
   for (int k = 0; k < np - 2; k++) {
-    f += 0.05 * pow(U(0, k + 1) - U(0, k), 2);
-    f += 0.05 * pow(U(1, k + 1) - U(1, k), 2);
+    f += weights.smooth_acc * pow(U(0, k + 1) - U(0, k), 2);
+    f += weights.smooth_yaw_acc * pow(U(1, k + 1) - U(1, k), 2);
   }
 
   opti.minimize(f);
@@ -316,10 +323,10 @@ int Mpc::SolveMpc(const Eigen::MatrixXd &A, const Eigen::MatrixXd &b,
       }
     }
     // opti.subject_to(-4.7 <= X(0, k) <= 4.7);
-    opti.subject_to(-1.0 <= X(3, k) - X(4, k) * 0.3 <= 1.0);
-    opti.subject_to(-1.0 <= X(3, k) + X(4, k) * 0.3 <= 1.0);
-    opti.subject_to(-1.0 <= U(0, k) - U(1, k) * 0.3 <= 1.0);
-    opti.subject_to(-1.0 <= U(0, k) + U(1, k) * 0.3 <= 1.0);
+    opti.subject_to(-max_linear_vel <= X(3, k) - X(4, k) * wheel_half_track <= max_linear_vel);
+    opti.subject_to(-max_linear_vel <= X(3, k) + X(4, k) * wheel_half_track <= max_linear_vel);
+    opti.subject_to(-max_linear_acc <= U(0, k) - U(1, k) * wheel_half_track <= max_linear_acc);
+    opti.subject_to(-max_linear_acc <= U(0, k) + U(1, k) * wheel_half_track <= max_linear_acc);
     opti.subject_to(U(2, k) >= 0);  // s_k >= 0
   }
 
