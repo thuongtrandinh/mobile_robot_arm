@@ -106,9 +106,10 @@ def generate_launch_description():
         output='screen',
         condition=IfCondition(LaunchConfiguration('enable_tracking')),
         parameters=[{
-            # Image source
-            'camera_image_topic': '/zed/zed_node/rgb/color/rect/image',
-            'depth_topic': '/zed/zed_node/depth/depth_registered',
+            # --- ĐỒNG BỘ TOPIC D435i ---
+            'camera_image_topic': '/camera/color/image_raw',
+            'depth_topic': '/camera/aligned_depth_to_color/image_raw',
+            'camera_info_topic': '/camera/color/camera_info',
             
             # Model paths
             'person_model_path': 'yolov8n.pt',

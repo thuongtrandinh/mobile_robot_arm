@@ -1,4 +1,4 @@
-# ZED2 Hand Sign Detector Configuration (Optimized)
+# D435i Hand Sign Detector Configuration (Optimized for VGA 640x480)
 
 # ===== YOLO DETECTION PARAMETERS =====
 yolo:
@@ -6,7 +6,7 @@ yolo:
   person_conf_thresh: 0.65       
   
   # Hand gesture detection
-  handsign_conf_thresh: 0.65     # CỰC KỲ QUAN TRỌNG: Hạ xuống 0.45 để không miss tay nhỏ ở độ phân giải VGA/WVGA
+  handsign_conf_thresh: 0.45     # CỰC KỲ QUAN TRỌNG: Hạ xuống 0.45 để không miss tay nhỏ ở độ phân giải VGA
   
   # Non-Maximum Suppression
   iou_thresh: 0.50               # IOU threshold for NMS
@@ -60,11 +60,11 @@ publishing:
   enable_visualization: false     # Show opencv window (requires display)
   enable_performance_metrics: true  # Log FPS and latency
 
-# ===== ZED 2 CAMERA INTRINSICS (WVGA - 672x376) =====
+# ===== D435i CAMERA INTRINSICS (VGA - 640x480) =====
 camera:
-  width: 672
-  height: 376
-  fx: 263.127
-  fy: 263.127
-  cx: 346.277
-  cy: 187.776
+  width: 640
+  height: 480
+  fx: 386.0
+  fy: 386.0
+  cx: 320.0
+  cy: 240.0
