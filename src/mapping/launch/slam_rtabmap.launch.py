@@ -40,13 +40,12 @@ def generate_launch_description():
     rtabmap_args = LaunchConfiguration("rtabmap_args")
     use_rviz = LaunchConfiguration("use_rviz")
     rviz_config = LaunchConfiguration("rviz_config")
-    use_zed = LaunchConfiguration("use_zed")
+    
+    # --- Đổi biến từ ZED 2 sang D435i ---
+    use_camera = LaunchConfiguration("use_camera")
     rgb_topic = LaunchConfiguration("rgb_topic")
     depth_topic = LaunchConfiguration("depth_topic")
     camera_info_topic = LaunchConfiguration("camera_info_topic")
-    # topic_queue_size = LaunchConfiguration("topic_queue_size")
-    # sync_queue_size = LaunchConfiguration("sync_queue_size")
-    # approx_sync_max_interval = LaunchConfiguration("approx_sync_max_interval")
 
     use_sim_time_arg = DeclareLaunchArgument(
         "use_sim_time",
@@ -83,49 +82,37 @@ def generate_launch_description():
         default_value=default_rviz_config,
         description="RViz2 config file path",
     )
-    use_zed_arg = DeclareLaunchArgument(
-        "use_zed",
+    
+    # --- ĐỒNG BỘ TOPIC D435i ---
+    use_camera_arg = DeclareLaunchArgument(
+        "use_camera",
         default_value="true",
-        description="Enable ZED2 RGBD input for RTAB-Map (requires matching camera topics)",
+        description="Enable D435i RGBD input for RTAB-Map",
     )
     rgb_topic_arg = DeclareLaunchArgument(
         "rgb_topic",
-        default_value="/zed2/zed_node/rgb/color/rect/image",
-        description="RGB image topic used when use_zed=true",
+        default_value="/camera/color/image_raw",
+        description="RGB image topic used when use_camera=true",
     )
     depth_topic_arg = DeclareLaunchArgument(
         "depth_topic",
-        default_value="/zed2/zed_node/depth/depth_registered",
-        description="Depth image topic used when use_zed=true",
+        default_value="/camera/aligned_depth_to_color/image_raw",
+        description="Depth image topic used when use_camera=true",
     )
     camera_info_topic_arg = DeclareLaunchArgument(
         "camera_info_topic",
-        default_value="/zed2/zed_node/rgb/color/rect/camera_info",
-        description="Camera info topic used when use_zed=true",
+        default_value="/camera/color/camera_info",
+        description="Camera info topic used when use_camera=true",
     )
-    # topic_queue_size_arg = DeclareLaunchArgument(
-    #     "topic_queue_size",
-    #     default_value="30",
-    #     description="RTAB-Map topic queue size for each subscribed input",
-    # )
-    # sync_queue_size_arg = DeclareLaunchArgument(
-    #     "sync_queue_size",
-    #     default_value="30",
-    #     description="RTAB-Map synchronization queue size",
-    # )
-    # approx_sync_max_interval_arg = DeclareLaunchArgument(
-    #     "approx_sync_max_interval",
-    #     default_value="0.2",
-    #     description="Max interval (s) allowed for approximate synchronization",
-    # )
 
+    # Nạp file config EKF mới (đã đổi tên ở bước trước)
     ekf_filter_node = Node(
         package="robot_localization",
         executable="ekf_node",
         name="ekf_filter_node",
         output="screen",
         parameters=[
-            os.path.join(mapping_dir, "config", "ekf_encoder_zed_vio.yaml"),
+            os.path.join(mapping_dir, "config", "ekf.yaml"),
             {"use_sim_time": use_sim_time},
         ],
     )
@@ -144,19 +131,17 @@ def generate_launch_description():
             "frame_id": "base_footprint",
             "map_frame_id": "map",
             "odom_topic": "/odometry/filtered",
-            "imu_topic": "/imu",
+            
+            "imu_topic": "/camera/imu",            # Đã trỏ đúng topic IMU của D435i
             "subscribe_scan": "true",
             "scan_topic": "/scan",
-            "depth": use_zed,
-            "subscribe_rgb": use_zed,
+            "depth": use_camera,
+            "subscribe_rgb": use_camera,
             "rgb_topic": rgb_topic,
             "depth_topic": depth_topic,
             "camera_info_topic": camera_info_topic,
             "approx_sync": "true",
-            # "approx_sync_max_interval": approx_sync_max_interval,
-            # "topic_queue_size": topic_queue_size,
-            # "sync_queue_size": sync_queue_size,
-            "odom_sensor_sync": "true",  # BẬT để đồng bộ ảnh + odom
+            "odom_sensor_sync": "true",  
             "visual_odometry": "false",
             "icp_odometry": "false",
             "publish_tf_odom": "false",
@@ -167,7 +152,7 @@ def generate_launch_description():
             "qos_imu": "2",
             "qos_scan": "2",
             "qos_odom": "2",
-            "wait_for_transform": "1.5",  # Tăng từ 0.5 lên 1.5 để chờ ZED2 chậm
+            "wait_for_transform": "0.5",           # D435i publish TF nhanh và ổn định, hạ xuống 0.5s để giảm độ trễ
             "qos_image": "2",
             "qos_camera_info": "2",
         }.items(),
@@ -192,13 +177,10 @@ def generate_launch_description():
             rtabmap_args_arg,
             use_rviz_arg,
             rviz_config_arg,
-            use_zed_arg,
+            use_camera_arg,
             rgb_topic_arg,
             depth_topic_arg,
             camera_info_topic_arg,
-            # topic_queue_size_arg,
-            # sync_queue_size_arg,
-            # approx_sync_max_interval_arg,
             OpaqueFunction(function=_prepare_rtabmap_database),
             ekf_filter_node,
             rtabmap_slam,

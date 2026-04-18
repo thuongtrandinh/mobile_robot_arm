@@ -12,16 +12,16 @@ ekf_filter_node:
     base_link_frame: base_footprint
     world_frame: odom
 
-    # Wheel encoder odometry
+    # --- 1. Wheel encoder odometry ---
     odom0: /diff_cont/odom
     odom0_config: [false, false, false,
                    false, false, false,
                    true,  false, false,   # Lấy vận tốc vX (Vận tốc thẳng của bánh xe)
-                   false, false, false,   # Tắt yaw vận tốc, để IMU xử lý
+                   false, false, false,   
                    false, false, false]
-    odom0_differential: false              # SỬA: FALSE vì đã lấy vận tốc thì không được vi phân
+    odom0_differential: false              
     odom0_queue_size: 20
-    # HẠ suất nhiễu của Encoder (vX) để EKF cực kỳ tin tưởng bánh xe khi đi thẳng (0.001 = tin tưởng cực cao)
+    # HẠ suất nhiễu của Encoder (vX) để EKF tin tưởng bánh xe khi đi thẳng
     odom0_twist_covariance: [0.001, 0.0, 0.0, 0.0, 0.0, 0.0,
                              0.0, 1.0, 0.0, 0.0, 0.0, 0.0,
                              0.0, 0.0, 1.0, 0.0, 0.0, 0.0,
@@ -29,13 +29,13 @@ ekf_filter_node:
                              0.0, 0.0, 0.0, 0.0, 1.0, 0.0,
                              0.0, 0.0, 0.0, 0.0, 0.0, 1.0]
 
-    # IMU odometry
-    imu0: /zed2/zed_node/imu/data
+    # --- 2. IMU odometry (Intel RealSense D435i) ---
+    imu0: /camera/imu
     imu0_config: [false, false, false,
                   false, false, false,
                   false, false, false,
-                  false, false, true,  # Lấy vận tốc góc (Angular velocity Z)
-                  true,  false, false] # Lấy gia tốc X hỗ trợ
+                  false, false, true,  # Lấy vận tốc góc Yaw (Angular velocity Z)
+                  false, false, false] # Lấy gia tốc X hỗ trợ
     imu0_differential: false
     imu0_relative: true
     imu0_queue_size: 50
@@ -45,24 +45,9 @@ ekf_filter_node:
                       0.0,  0.0,  0.1, 0.0, 0.0, 0.0,
                       0.0,  0.0,  0.0,  0.5, 0.0, 0.0,
                       0.0,  0.0,  0.0,  0.0, 0.5, 0.0,
-                      0.0,  0.0,  0.0,  0.0, 0.0, 0.8]
+                      0.0,  0.0,  0.0,  0.0, 0.0, 0.01] # Hạ phương sai Yaw xuống 0.01 để EKF cực kỳ tin tưởng Gyro của D435i
 
-    # VIO odometry from ZED 2 Camera
-    odom1: /zed2/zed_node/odom
-    odom1_config: [false, false, false,  # TẮT: X, Y, Z (Không lấy vị trí tuyệt đối)
-                   false, false, false,  # TẮT: Roll, Pitch, Yaw
-                   true,  true,  false,  # BẬT: vX, vY (Vận tốc trượt từ ZED)
-                   false, false, true]   # BẬT: vYaw (Vận tốc góc từ ZED - hỗ trợ IMU)
-    odom1_differential: false             # SỬA: FALSE - dùng trực tiếp vận tốc, không đạo hàm posed
-    odom1_queue_size: 20
-    # ZED 2: HẠ tin tưởng vX (tăng lên 0.5) để EKF ưu tiên Encoder, nhưng GIỮ tin tưởng cao cho vY (0.001) để chống trượt ngang
-    odom1_twist_covariance: [0.5,   0.0,   0.0,   0.0,  0.0,  0.0,   # vX - HẠ xuống vì encoder đáng tin hơn
-                             0.0,   0.001, 0.0,   0.0,  0.0,  0.0,   # vY - GIỮ cực thấp để chống LẬT ngang
-                             0.0,   0.0,   0.001, 0.0,  0.0,  0.0,   # vZ
-                             0.0,   0.0,   0.0,   0.01, 0.0,  0.0,   # wX
-                             0.0,   0.0,   0.0,   0.0,  0.01, 0.0,   # wY
-                             0.0,   0.0,   0.0,   0.0,  0.0,  0.005]  # wZ (vYaw) - GIỮ cực thấp để quay chính xác
-
+    # Ma trận nhiễu hệ thống (Chuẩn 15x15)
     process_noise_covariance: [0.05, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
                                0.0, 0.05, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
                                0.0, 0.0, 0.06, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
