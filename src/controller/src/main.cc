@@ -1,23 +1,26 @@
 #include <Eigen/Dense>
+#include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <fstream>
 #include <iostream>
+#include <mutex>
 #include <vector>
 
 #include <rclcpp/rclcpp.hpp>
+#include <geometry_msgs/msg/twist_stamped.hpp>
+#include <nav_msgs/msg/occupancy_grid.hpp>
 #include <nav_msgs/msg/path.hpp>
 
 #include "backward.hpp"
-#include "interfaces/msg/control_var.hpp"
 #include "interfaces/msg/joint_state.hpp"
 #include "interfaces/srv/ocp_local_plann.hpp"
 #include "planner.h"
 
 // using json = nlohmann::json;
 
-namespace backward {
-backward::SignalHandling sh;
-}
+// Keep backward available for optional debugging, but do not install
+// process-wide signal handlers in runtime node execution.
 
 namespace robot_plann {
 //
@@ -25,6 +28,33 @@ std::unique_ptr<robot_plann::Planner> _planner;
 int _verbose = 1;
 rclcpp::Node::SharedPtr _node;
 rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr astar_path_pub;
+rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr local_costmap_pub;
+rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr cmd_pub;
+rclcpp::TimerBase::SharedPtr mpc_solve_timer;
+rclcpp::TimerBase::SharedPtr cmd_publish_timer;
+rclcpp::CallbackGroup::SharedPtr mpc_callback_group;
+rclcpp::CallbackGroup::SharedPtr cmd_callback_group;
+JointState _latest_state;
+bool _has_latest_state = false;
+bool _has_reference = false;
+double _mpc_solve_period = 0.05;
+double _cmd_publish_period = 0.05;
+double _mpc_solve_hz = 20.0;
+double _cmd_publish_hz = 20.0;
+double _mpc_control_dt = 0.05;
+double _cmd_max_linear_speed = 1.0;
+double _cmd_max_angular_speed = 1.0;
+double _goal_stop_distance = 0.1;
+double _latest_cmd_linear = 0.0;
+double _latest_cmd_angular = 0.0;
+std::mutex _planner_mutex;
+std::mutex _cmd_mutex;
+
+namespace {
+double ClampValue(double value, double low, double high) {
+  return std::max(low, std::min(high, value));
+}
+}
 
 namespace {
 robot_plann::MpcParams::Ptr BuildMpcParamsFromNode(const rclcpp::Node::SharedPtr &node) {
@@ -91,6 +121,112 @@ robot_plann::MpcParams::Ptr BuildMpcParamsFromNode(const rclcpp::Node::SharedPtr
 }
 }  // namespace
 
+void MpcExecTimerCallback() {
+  if (!rclcpp::ok()) {
+    return;
+  }
+
+  JointState state_snapshot;
+  bool has_state = false;
+  bool has_ref = false;
+  {
+    std::lock_guard<std::mutex> lock(_planner_mutex);
+    has_state = _has_latest_state;
+    has_ref = _has_reference;
+    if (has_state) {
+      state_snapshot = _latest_state;
+    }
+  }
+
+  if (!has_state) {
+    return;
+  }
+
+  const double dx_goal = state_snapshot.robot.gx - state_snapshot.robot.px;
+  const double dy_goal = state_snapshot.robot.gy - state_snapshot.robot.py;
+  const double goal_distance = std::hypot(dx_goal, dy_goal);
+  if (goal_distance <= _goal_stop_distance) {
+    {
+      std::lock_guard<std::mutex> lock(_planner_mutex);
+      _latest_state.robot.v = 0.0;
+      _latest_state.robot.yaw_rate = 0.0;
+    }
+    {
+      std::lock_guard<std::mutex> cmd_lock(_cmd_mutex);
+      _latest_cmd_linear = 0.0;
+      _latest_cmd_angular = 0.0;
+    }
+    return;
+  }
+
+  if (!has_ref) {
+    std::lock_guard<std::mutex> cmd_lock(_cmd_mutex);
+    _latest_cmd_linear = 0.0;
+    _latest_cmd_angular = 0.0;
+    return;
+  }
+
+  MpcReturn mpc_return;
+  {
+    std::lock_guard<std::mutex> lock(_planner_mutex);
+    mpc_return = _planner->SolveMpcFromCachedReference(state_snapshot);
+  }
+  if (!mpc_return.success) {
+    return;
+  }
+
+  double half_track = 0.3;
+  {
+    std::lock_guard<std::mutex> lock(_planner_mutex);
+    half_track = _planner->GetWheelHalfTrack();
+  }
+  double v_left = state_snapshot.robot.v - state_snapshot.robot.yaw_rate * half_track;
+  double v_right = state_snapshot.robot.v + state_snapshot.robot.yaw_rate * half_track;
+
+  const double al = mpc_return.stages[0].uk.acc - mpc_return.stages[0].uk.dr * half_track;
+  const double ar = mpc_return.stages[0].uk.acc + mpc_return.stages[0].uk.dr * half_track;
+
+  v_left += al * _mpc_control_dt;
+  v_right += ar * _mpc_control_dt;
+
+  double linear = 0.5 * (v_left + v_right);
+  double angular = (v_right - v_left) / (2.0 * half_track);
+  linear = ClampValue(linear, -_cmd_max_linear_speed, _cmd_max_linear_speed);
+  angular = ClampValue(angular, -_cmd_max_angular_speed, _cmd_max_angular_speed);
+
+  {
+    std::lock_guard<std::mutex> lock(_planner_mutex);
+    _latest_state.robot.v = linear;
+    _latest_state.robot.yaw_rate = angular;
+  }
+  {
+    std::lock_guard<std::mutex> cmd_lock(_cmd_mutex);
+    _latest_cmd_linear = linear;
+    _latest_cmd_angular = angular;
+  }
+}
+
+void CmdPublishTimerCallback() {
+  if (!rclcpp::ok()) {
+    return;
+  }
+
+  double linear = 0.0;
+  double angular = 0.0;
+  {
+    std::lock_guard<std::mutex> cmd_lock(_cmd_mutex);
+    linear = _latest_cmd_linear;
+    angular = _latest_cmd_angular;
+  }
+
+  geometry_msgs::msg::TwistStamped msg;
+  msg.header.stamp = _node->now();
+  msg.header.frame_id = "base_link";
+  msg.twist.linear.x = linear;
+  msg.twist.angular.z = angular;
+  cmd_pub->publish(msg);
+}
+
 
 void PlannSrvCallback(
     const std::shared_ptr<interfaces::srv::OcpLocalPlann::Request> req,
@@ -148,61 +284,37 @@ void PlannSrvCallback(
 
   Eigen::Vector2d sub_goal = {req->sub_goal.x, req->sub_goal.y};
 
-  auto start_stamp = std::chrono::high_resolution_clock::now();
-  auto mpc_return = _planner->PlannExec(ob_state, sub_goal);
-  auto end_stamp = std::chrono::high_resolution_clock::now();
-  double time_cost =
-      std::chrono::duration<double, std::milli>(end_stamp - start_stamp)
-          .count();
+  {
+    std::lock_guard<std::mutex> lock(_planner_mutex);
+    _latest_state = ob_state;
+    _has_latest_state = true;
+  }
 
+  bool ref_ok = false;
+  {
+    std::lock_guard<std::mutex> lock(_planner_mutex);
+    ref_ok = _planner->UpdateReferenceOnly(ob_state, sub_goal);
+    _has_reference = _has_reference || ref_ok;
+  }
+
+  res->success = ref_ok;
+  res->al = 0.0;
+  res->ar = 0.0;
+  res->revised_goal.x = sub_goal.x();
+  res->revised_goal.y = sub_goal.y();
   res->astar_path.clear();
-  std::vector<robot_plann::Point> astar_path = _planner->GetAStarPath();
-  for (size_t i = 0; i < astar_path.size(); ++i) {
-    interfaces::msg::Point pt;
-    pt.x = astar_path.at(i).x;
-    pt.y = astar_path.at(i).y;
-    res->astar_path.push_back(pt);
-  }
-
   res->control_vars.clear();
-  interfaces::msg::ControlVar cur_control_var{};
-  res->success = false;
-  const int horizon = _planner->GetMpcHorizonSteps();
-  const double dt = _planner->GetMpcDt();
-  const double half_track = _planner->GetWheelHalfTrack();
-
-  if (!mpc_return.success) {
-    res->al = -req->ob.robot_state.vl / dt;
-    res->ar = -req->ob.robot_state.vr / dt;
-    res->revised_goal.x = sub_goal.x();
-    res->revised_goal.y = sub_goal.y();
-    cur_control_var.al = res->al;
-    cur_control_var.ar = res->ar;
-    for (int i = 0; i < horizon; ++i) {
-      res->control_vars.push_back(cur_control_var);
-    }
-
-  } else {
-    res->al = mpc_return.stages[0].uk.acc - mpc_return.stages[0].uk.dr * half_track;
-    res->ar = mpc_return.stages[0].uk.acc + mpc_return.stages[0].uk.dr * half_track;
-    res->revised_goal.x = sub_goal.x();
-    res->revised_goal.y = sub_goal.y();
-
-    for (int i = 0; i < horizon; ++i) {
-      cur_control_var.al =
-          mpc_return.stages.at(i).uk.acc - mpc_return.stages.at(i).uk.dr * half_track;
-      cur_control_var.ar =
-          mpc_return.stages.at(i).uk.acc + mpc_return.stages.at(i).uk.dr * half_track;
-      res->control_vars.push_back(cur_control_var);
-    }
-    res->success = true;
-    if (_verbose >= 1) std::cout << "Time cost: " << time_cost << std::endl;
-  }
 
   nav_msgs::msg::Path refline_line = _planner->GetAStarSmoothPath();
   refline_line.header.stamp = _node->now();
   if (!refline_line.poses.empty()) {
     astar_path_pub->publish(refline_line);
+  }
+
+  nav_msgs::msg::OccupancyGrid local_costmap = _planner->GetLocalCostMap("map");
+  local_costmap.header.stamp = _node->now();
+  if (local_costmap.info.width > 0 && local_costmap.info.height > 0) {
+    local_costmap_pub->publish(local_costmap);
   }
 }
 
@@ -229,13 +341,103 @@ int main(int argc, char **argv) {
       mpc_params->wheel_half_track,
       mpc_params->local_obst_num);
 
+      robot_plann::_mpc_solve_period = robot_plann::_node->declare_parameter<double>(
+        "planner.mpc_exec_period", 0.05);
+      robot_plann::_mpc_solve_hz = robot_plann::_node->declare_parameter<double>(
+        "planner.mpc_exec_hz", 0.0);
+      if (robot_plann::_mpc_solve_hz > 0.0) {
+        robot_plann::_mpc_solve_period = 1.0 / robot_plann::_mpc_solve_hz;
+      }
+      if (robot_plann::_mpc_solve_period <= 0.0) {
+        robot_plann::_mpc_solve_period = 0.05;
+      }
+      robot_plann::_cmd_publish_period = robot_plann::_node->declare_parameter<double>(
+          "planner.cmd_publish_period", robot_plann::_mpc_solve_period);
+      robot_plann::_cmd_publish_hz = robot_plann::_node->declare_parameter<double>(
+          "planner.cmd_publish_hz", 0.0);
+      if (robot_plann::_cmd_publish_hz > 0.0) {
+        robot_plann::_cmd_publish_period = 1.0 / robot_plann::_cmd_publish_hz;
+      }
+      if (robot_plann::_cmd_publish_period <= 0.0) {
+        robot_plann::_cmd_publish_period = robot_plann::_mpc_solve_period;
+      }
+      robot_plann::_mpc_control_dt = robot_plann::_node->declare_parameter<double>(
+          "planner.mpc_control_dt", robot_plann::_mpc_solve_period);
+      if (robot_plann::_mpc_control_dt <= 0.0) {
+        robot_plann::_mpc_control_dt = robot_plann::_mpc_solve_period;
+      }
+      const std::string cmd_topic = robot_plann::_node->declare_parameter<std::string>(
+        "planner.cmd_topic", "/diff_cont/cmd_vel");
+      const std::string local_costmap_topic =
+        robot_plann::_node->declare_parameter<std::string>(
+          "planner.local_costmap_topic", "/a_star/local_costmap");
+      robot_plann::_cmd_max_linear_speed = robot_plann::_node->declare_parameter<double>(
+        "planner.cmd_max_linear_speed", mpc_params->max_linear_vel);
+      robot_plann::_cmd_max_angular_speed = robot_plann::_node->declare_parameter<double>(
+        "planner.cmd_max_angular_speed", mpc_params->max_angular_vel);
+      robot_plann::_goal_stop_distance = robot_plann::_node->declare_parameter<double>(
+        "planner.goal_stop_distance", 0.1);
+      if (robot_plann::_goal_stop_distance < 0.0) {
+        robot_plann::_goal_stop_distance = 0.0;
+      }
+
   auto plann_srv = robot_plann::_node->create_service<interfaces::srv::OcpLocalPlann>(
       "/ocp_plann", robot_plann::PlannSrvCallback);
 
   robot_plann::astar_path_pub =
       robot_plann::_node->create_publisher<nav_msgs::msg::Path>("/a_star_path", 1);
+      robot_plann::local_costmap_pub =
+        robot_plann::_node->create_publisher<nav_msgs::msg::OccupancyGrid>(local_costmap_topic, 1);
+      robot_plann::cmd_pub =
+        robot_plann::_node->create_publisher<geometry_msgs::msg::TwistStamped>(cmd_topic, 10);
 
-  rclcpp::spin(robot_plann::_node);
+      robot_plann::mpc_callback_group = robot_plann::_node->create_callback_group(
+        rclcpp::CallbackGroupType::MutuallyExclusive);
+      robot_plann::cmd_callback_group = robot_plann::_node->create_callback_group(
+        rclcpp::CallbackGroupType::MutuallyExclusive);
+
+      robot_plann::mpc_solve_timer = robot_plann::_node->create_wall_timer(
+        std::chrono::duration<double>(robot_plann::_mpc_solve_period),
+        robot_plann::MpcExecTimerCallback,
+        robot_plann::mpc_callback_group);
+      robot_plann::cmd_publish_timer = robot_plann::_node->create_wall_timer(
+        std::chrono::duration<double>(robot_plann::_cmd_publish_period),
+        robot_plann::CmdPublishTimerCallback,
+        robot_plann::cmd_callback_group);
+      RCLCPP_INFO(
+        robot_plann::_node->get_logger(),
+        "Async cascaded pipeline: reference via service, MPC solve %.2f Hz, cmd publish %.2f Hz, cmd topic %s",
+        1.0 / robot_plann::_mpc_solve_period,
+        1.0 / robot_plann::_cmd_publish_period,
+        cmd_topic.c_str());
+      RCLCPP_INFO(
+        robot_plann::_node->get_logger(),
+        "Goal stop distance enabled: %.3f m",
+        robot_plann::_goal_stop_distance);
+
+        rclcpp::executors::MultiThreadedExecutor executor(rclcpp::ExecutorOptions(), 4);
+        executor.add_node(robot_plann::_node);
+        executor.spin();
+
+        executor.cancel();
+        executor.remove_node(robot_plann::_node);
+
+        if (robot_plann::mpc_solve_timer) {
+          robot_plann::mpc_solve_timer->cancel();
+          robot_plann::mpc_solve_timer.reset();
+        }
+        if (robot_plann::cmd_publish_timer) {
+          robot_plann::cmd_publish_timer->cancel();
+          robot_plann::cmd_publish_timer.reset();
+        }
+
+        robot_plann::cmd_pub.reset();
+        robot_plann::astar_path_pub.reset();
+        robot_plann::mpc_callback_group.reset();
+        robot_plann::cmd_callback_group.reset();
+        robot_plann::_planner.reset();
+        robot_plann::_node.reset();
+
   rclcpp::shutdown();
   return 0;
 }

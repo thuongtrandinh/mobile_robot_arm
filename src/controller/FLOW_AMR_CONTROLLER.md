@@ -131,15 +131,16 @@ Quy đổi vận tốc:
 
 `sub_goal` được nhận từ request để làm đích local trước khi vào MPC.
 
-## Bước 2: Gọi planner chính
+## Bước 2: Cập nhật reference trong service callback
 
-Callback gọi:
+Service callback `/ocp_plann` hiện tại chỉ thực hiện:
 
 ```cpp
-auto mpc_return = _planner->PlannExec(ob_state, sub_goal);
+const bool ref_ok = _planner->UpdateReferenceOnly(ob_state, sub_goal);
+res->success = ref_ok;
 ```
 
-Trong `PlannExec`, pipeline thực tế là:
+Trong `UpdateReferenceOnly`, pipeline gồm:
 
 1. `UpdateCostMap(state)`
 2. `CheckAround(start_pt)` (thoát vùng kẹt nếu đang trong vật cản)
@@ -147,7 +148,8 @@ Trong `PlannExec`, pipeline thực tế là:
 4. A* search `SearchPath(cost_map_, start_pt, sub_goal)`
 5. Smoothing `SmoothSharpCorner(...)`
 6. Velocity profile `UpdateVelocity(...)`
-7. MPC solve `RunMpc(revised_state, final_path)`
+
+MPC không còn chạy trong service callback. MPC chạy ở timer độc lập 20 Hz qua `SolveMpcFromCachedReference`.
 
 ## Bước 3: UpdateCostMap
 

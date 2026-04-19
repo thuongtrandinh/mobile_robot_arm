@@ -96,6 +96,7 @@ install(
 install(
   PROGRAMS
     scripts/ampcc_rviz_visualizer.py
+    scripts/custom_env_visualizer_node.py
     scripts/eval_ppo.py
     scripts/rl_ocp_policy_bridge.py
     scripts/rl_policy_worker.py

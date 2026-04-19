@@ -66,16 +66,61 @@ Eigen::Vector2d Planner::ImgIdx2MapCoord(const cv::Point &idx, bool vis) const {
   return pt;
 }
 
-MpcReturn Planner::PlannExec(const JointState &state,
-                             Eigen::Vector2d &sub_goal) {
-  if (!has_map_) return {MpcStages(), false};
+#ifdef ROS_BUILD
+nav_msgs::msg::OccupancyGrid Planner::GetLocalCostMap(
+    const std::string &frame_id) const {
+  nav_msgs::msg::OccupancyGrid msg;
+  msg.header.frame_id = frame_id;
+
+  if (cost_map_.empty()) {
+    msg.info.resolution = static_cast<float>(kMapResol);
+    msg.info.width = 0;
+    msg.info.height = 0;
+    msg.info.origin.orientation.w = 1.0;
+    return msg;
+  }
+
+  const int width = cost_map_.cols;
+  const int height = cost_map_.rows;
+
+  msg.info.resolution = static_cast<float>(kMapResol);
+  msg.info.width = static_cast<uint32_t>(width);
+  msg.info.height = static_cast<uint32_t>(height);
+  msg.info.origin.position.x = window_center_x_ - 0.5 * width * kMapResol;
+  msg.info.origin.position.y = window_center_y_ - 0.5 * height * kMapResol;
+  msg.info.origin.position.z = 0.0;
+  msg.info.origin.orientation.x = 0.0;
+  msg.info.origin.orientation.y = 0.0;
+  msg.info.origin.orientation.z = 0.0;
+  msg.info.origin.orientation.w = 1.0;
+
+  msg.data.assign(static_cast<size_t>(width * height), 0);
+  // Convert OpenCV image coordinates (y-down) to OccupancyGrid (y-up).
+  for (int row = 0; row < height; ++row) {
+    const int src_row = height - 1 - row;
+    const int row_offset = row * width;
+    for (int col = 0; col < width; ++col) {
+      const int gray = static_cast<int>(cost_map_.at<u_char>(src_row, col));
+      int occ = static_cast<int>(std::lround((255.0 - gray) * 100.0 / 255.0));
+      occ = std::max(0, std::min(100, occ));
+      msg.data[static_cast<size_t>(row_offset + col)] = static_cast<int8_t>(occ);
+    }
+  }
+
+  return msg;
+}
+#endif
+
+bool Planner::UpdateReferenceOnly(const JointState &state,
+                                  Eigen::Vector2d &sub_goal) {
+  if (!has_map_) return false;
   try {
     this->UpdateCostMap(state);
   } catch (const std::string &e) {
     if (verbose_ >= 1) {
       std::cout << "Cost map update failed! " << e << std::endl;
     }
-    return {MpcStages(), false};
+    return false;
   }
   
   Eigen::Vector2d start_pt = {state.robot.px, state.robot.py};
@@ -85,7 +130,7 @@ MpcReturn Planner::PlannExec(const JointState &state,
     if (verbose_ >= 1) {
       std::cout << "Failed to escape from obstacle! " << std::endl;
     }
-    return {MpcStages(), false};
+    return false;
   } 
 
 
@@ -93,7 +138,7 @@ MpcReturn Planner::PlannExec(const JointState &state,
     if (verbose_ >= 1) {
       std::cout << "Sub goal is unreachable!!!" << std::endl;
     }
-    return {MpcStages(), false};
+    return false;
   }
   
   if (verbose_ > 1) std::cout << "DEBUG: check done!" << std::endl;
@@ -105,7 +150,7 @@ MpcReturn Planner::PlannExec(const JointState &state,
       std::cout << "Invalid A* path with len = " << astar_path.size() << 
           std::endl;
     }
-    return {MpcStages(), false};
+    return false;
   }
 
   auto smooth_path = path_smoother_->SmoothSharpCorner(cost_map_, astar_path);
@@ -128,38 +173,42 @@ MpcReturn Planner::PlannExec(const JointState &state,
     astar_path_ = final_path;
   }
 
+  return true;
+}
 
-  auto revised_state = state;
-  if (final_path.size() < 2) {
+MpcReturn Planner::SolveMpcFromCachedReference(const JointState &state) {
+  if (astar_path_.size() < 2) {
     if (verbose_ >= 1) {
-      std::cout << "Invalid reference trajectory with len = " << 
-          final_path.size() << std::endl;
+      std::cout << "Invalid cached reference trajectory with len = "
+                << astar_path_.size() << std::endl;
     }
-    Eigen::Vector2d pid_acc = this->PidCalc(state);
     auto mpc_stages = MpcStages();
+    Eigen::Vector2d pid_acc = this->PidCalc(state);
     mpc_stages[0].uk.acc = pid_acc(0);
     mpc_stages[0].uk.dr = pid_acc(1);
     return {mpc_stages, true};
-  } 
-  else {
-    double phi_0 = atan2(final_path[1].y - final_path[0].y,
-                         final_path[1].x - final_path[0].x);
+  }
 
-    double yaw_error = state.robot.yaw - phi_0;
-    Unwrap(yaw_error);
-    
-    if (abs(yaw_error) > M_PI / 2) {
-      revised_state.robot.yaw -= M_PI;
-      Unwrap(revised_state.robot.yaw);
-      revised_state.robot.v = -revised_state.robot.v;
-      move_forward_ = false;
-    } else {
-      move_forward_ = true;
-    }
+  auto final_path = astar_path_;
+  auto revised_state = state;
 
-    while (final_path.size() < static_cast<size_t>(GetMpcHorizonSteps())) {
-      final_path.push_back(final_path.back());
-    }
+  double phi_0 = atan2(final_path[1].y - final_path[0].y,
+                       final_path[1].x - final_path[0].x);
+
+  double yaw_error = state.robot.yaw - phi_0;
+  Unwrap(yaw_error);
+
+  if (abs(yaw_error) > M_PI / 2) {
+    revised_state.robot.yaw -= M_PI;
+    Unwrap(revised_state.robot.yaw);
+    revised_state.robot.v = -revised_state.robot.v;
+    move_forward_ = false;
+  } else {
+    move_forward_ = true;
+  }
+
+  while (final_path.size() < static_cast<size_t>(GetMpcHorizonSteps())) {
+    final_path.push_back(final_path.back());
   }
   
   if (verbose_ > 1) std::cout << "DEBUG: geo plann done!" << std::endl;
@@ -260,7 +309,20 @@ bool Planner::CheckNavGoal(Eigen::Vector2d &sub_goal,
                            const Eigen::Vector2d &pos,
                            const std::vector<Eigen::Vector2d> &vertices) {
   float distance = (sub_goal - pos).norm();
-  if (distance < 0.1) return false;
+  if (distance < 0.1) {
+    Eigen::Vector2d dir = nav_goal - pos;
+    if (dir.norm() < 1e-3) {
+      return false;
+    }
+    // RL sometimes outputs very close sub-goals; push it forward so
+    // planning does not skip this cycle.
+    sub_goal = pos + 0.2 * dir.normalized();
+    distance = (sub_goal - pos).norm();
+    if (verbose_ >= 1) {
+      std::cout << "Sub goal too close, adjusted to " << sub_goal.transpose()
+                << std::endl;
+    }
+  }
 
   try {
     (void)MapCoord2ImgIdx(sub_goal);
@@ -504,12 +566,14 @@ robot_plann::MPCOutputForPython Planner::RunSlover(
   PybindInputDataChange(input, ob_state);
   Eigen::Vector2d sub_goal = {input.sub_goal.x, input.sub_goal.y};
 
-  auto start_stamp = std::chrono::high_resolution_clock::now();
-  auto mpc_return = this->PlannExec(ob_state, sub_goal);
-  auto end_stamp = std::chrono::high_resolution_clock::now();
-  double time_cost =
+    auto start_stamp = std::chrono::high_resolution_clock::now();
+    const bool ref_ok = this->UpdateReferenceOnly(ob_state, sub_goal);
+    auto mpc_return = ref_ok ? this->SolveMpcFromCachedReference(ob_state)
+                 : MpcReturn{MpcStages(), false};
+    auto end_stamp = std::chrono::high_resolution_clock::now();
+    double time_cost =
       std::chrono::duration<double, std::milli>(end_stamp - start_stamp)
-          .count();
+        .count();
 
   std::vector<robot_plann::Point> astar_path = this->GetAStarPath();
   for (int i = 0; i < astar_path.size(); ++i) {

@@ -8,15 +8,18 @@ import sys
 from typing import Dict, List, Optional, Tuple
 
 import rclpy
-from interfaces.msg import ObstacleState, WallState, PolyState, Point as PolyPoint
+from interfaces.msg import ObstacleState, WallState, PolyState, HumanState, Point as PolyPoint
 from interfaces.msg import JointState as InterfaceJointState
 from interfaces.srv import OcpLocalPlann
-from geometry_msgs.msg import PoseStamped, TwistStamped
+from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import OccupancyGrid, Odometry
 from rcl_interfaces.msg import SetParametersResult
+from rclpy.duration import Duration
 from rclpy.node import Node
+from rclpy.time import Time
 from sensor_msgs.msg import LaserScan
 from std_msgs.msg import String
+from tf2_ros import Buffer, TransformException, TransformListener
 
 
 class RlOcpPolicyBridge(Node):
@@ -36,15 +39,23 @@ class RlOcpPolicyBridge(Node):
         self.declare_parameter("v_pref", 0.8)
         self.declare_parameter("obstacle_radius", 0.2)
         self.declare_parameter("obstacle_sample_step", 16)
+        self.declare_parameter("use_map_static_obstacles", True)
+        self.declare_parameter("map_static_obstacle_radius", 0.18)
+        self.declare_parameter("map_static_sample_step_m", 0.35)
+        self.declare_parameter("map_static_obstacle_limit", 80)
+        self.declare_parameter("enforce_scene_entities", True)
+        self.declare_parameter("human_fallback_enabled", True)
+        self.declare_parameter("human_fallback_limit", 20)
+        self.declare_parameter("human_fallback_radius", 0.25)
+        self.declare_parameter("auto_relax_constraints", False)
         self.declare_parameter("timer_period", 0.1)
+        self.declare_parameter("policy_hz", 10.0)
+        self.declare_parameter("service_hz", 10.0)
         self.declare_parameter("policy_period", 0.2)
         self.declare_parameter("mpc_period", 0.05)
-        self.declare_parameter("sync_mpc_to_policy", True)
         self.declare_parameter("control_dt", 0.25)
         self.declare_parameter("mpc_horizon_steps", 10)
         self.declare_parameter("mpc_stability_warn_threshold", 0.35)
-        self.declare_parameter("max_linear_speed", 1.0)
-        self.declare_parameter("max_angular_speed", 3.0)
 
         self.declare_parameter("planner_half_width", 5.8)
         self.declare_parameter("planner_half_height", 9.8)
@@ -70,7 +81,7 @@ class RlOcpPolicyBridge(Node):
         self.declare_parameter("scan_topic", "/scan")
         self.declare_parameter("goal_topic", "/goal_pose")
         self.declare_parameter("map_topic", "/map")
-        self.declare_parameter("cmd_topic", "/diff_cont/cmd_vel")
+        self.declare_parameter("map_frame", "map")
         self.declare_parameter("planner_service", "/ocp_plann")
 
         self.policy_env_name = self.get_parameter("policy_env_name").get_parameter_value().string_value
@@ -86,17 +97,25 @@ class RlOcpPolicyBridge(Node):
         self.v_pref = self.get_parameter("v_pref").get_parameter_value().double_value
         self.obstacle_radius = self.get_parameter("obstacle_radius").get_parameter_value().double_value
         self.obstacle_sample_step = self.get_parameter("obstacle_sample_step").get_parameter_value().integer_value
-        self.policy_period = max(0.001, self.get_parameter("policy_period").get_parameter_value().double_value)
-        self.mpc_period = max(0.001, self.get_parameter("mpc_period").get_parameter_value().double_value)
-        self.sync_mpc_to_policy = self.get_parameter("sync_mpc_to_policy").get_parameter_value().bool_value
+        self.use_map_static_obstacles = self.get_parameter("use_map_static_obstacles").get_parameter_value().bool_value
+        self.map_static_obstacle_radius = self.get_parameter("map_static_obstacle_radius").get_parameter_value().double_value
+        self.map_static_sample_step_m = self.get_parameter("map_static_sample_step_m").get_parameter_value().double_value
+        self.map_static_obstacle_limit = self.get_parameter("map_static_obstacle_limit").get_parameter_value().integer_value
+        self.enforce_scene_entities = self.get_parameter("enforce_scene_entities").get_parameter_value().bool_value
+        self.human_fallback_enabled = self.get_parameter("human_fallback_enabled").get_parameter_value().bool_value
+        self.human_fallback_limit = self.get_parameter("human_fallback_limit").get_parameter_value().integer_value
+        self.human_fallback_radius = self.get_parameter("human_fallback_radius").get_parameter_value().double_value
+        self.auto_relax_constraints = self.get_parameter("auto_relax_constraints").get_parameter_value().bool_value
+        self.policy_hz = max(0.001, self.get_parameter("policy_hz").get_parameter_value().double_value)
+        self.service_hz = max(0.001, self.get_parameter("service_hz").get_parameter_value().double_value)
+        self.policy_period = 1.0 / self.policy_hz
+        self.mpc_period = 1.0 / self.service_hz
         self.control_dt = self.get_parameter("control_dt").get_parameter_value().double_value
         self.mpc_horizon_steps = max(1, self.get_parameter("mpc_horizon_steps").get_parameter_value().integer_value)
         self.mpc_stability_warn_threshold = max(
             0.0,
             self.get_parameter("mpc_stability_warn_threshold").get_parameter_value().double_value,
         )
-        self.max_linear_speed = self.get_parameter("max_linear_speed").get_parameter_value().double_value
-        self.max_angular_speed = self.get_parameter("max_angular_speed").get_parameter_value().double_value
         self.planner_half_width = self.get_parameter("planner_half_width").get_parameter_value().double_value
         self.planner_half_height = self.get_parameter("planner_half_height").get_parameter_value().double_value
         self.planner_hard_half_width = self.get_parameter("planner_hard_half_width").get_parameter_value().double_value
@@ -123,7 +142,7 @@ class RlOcpPolicyBridge(Node):
         self.scan_topic = self.get_parameter("scan_topic").get_parameter_value().string_value
         self.goal_topic = self.get_parameter("goal_topic").get_parameter_value().string_value
         self.map_topic = self.get_parameter("map_topic").get_parameter_value().string_value
-        self.cmd_topic = self.get_parameter("cmd_topic").get_parameter_value().string_value
+        self.map_frame = self.get_parameter("map_frame").get_parameter_value().string_value
         self.planner_service = self.get_parameter("planner_service").get_parameter_value().string_value
 
         self.current_pose: Optional[Tuple[float, float, float]] = None
@@ -131,6 +150,14 @@ class RlOcpPolicyBridge(Node):
         self.current_goal: Optional[Tuple[float, float]] = None
         self.latest_scan: Optional[LaserScan] = None
         self.map_bounds: Optional[Tuple[float, float, float, float]] = None
+        self.map_resolution: Optional[float] = None
+        self.map_width: int = 0
+        self.map_height: int = 0
+        self.map_origin_x: float = 0.0
+        self.map_origin_y: float = 0.0
+        self.map_data: Optional[List[int]] = None
+        self.map_occupancy_threshold: int = 50
+        self.pose_frame: str = ""
 
         # Keep Python-side request geometry aligned with hard-coded C++ planner map limits.
         self.planner_x_limit = 5.5
@@ -152,6 +179,8 @@ class RlOcpPolicyBridge(Node):
         self.goal_reached = False
         self.prev_predicted_traj: Optional[List[Tuple[float, float]]] = None
         self.last_stability_delta_rms = 0.0
+        self.tf_buffer = Buffer()
+        self.tf_listener = TransformListener(self.tf_buffer, self)
 
         self._start_policy_worker()
 
@@ -160,7 +189,6 @@ class RlOcpPolicyBridge(Node):
         self.create_subscription(PoseStamped, self.goal_topic, self._goal_callback, 10)
         self.create_subscription(OccupancyGrid, self.map_topic, self._map_callback, 10)
 
-        self.cmd_pub = self.create_publisher(TwistStamped, self.cmd_topic, 10)
         self.debug_joint_state_pub = self.create_publisher(InterfaceJointState, self.debug_joint_state_topic, 10)
         self.policy_debug_status_pub = self.create_publisher(String, self.policy_debug_status_topic, 10)
         self.action_debug_pub = self.create_publisher(String, self.action_debug_topic, 10)
@@ -177,9 +205,11 @@ class RlOcpPolicyBridge(Node):
         self.get_logger().info(f"Model: {self.model_path}")
         self.get_logger().info(f"Service: {self.planner_service}")
         self.get_logger().info(
-            f"Loop rates: policy={1.0 / self.policy_period:.2f} Hz, mpc={1.0 / self.mpc_period:.2f} Hz"
+            f"Loop rates: RL={1.0 / self.policy_period:.2f} Hz, service={1.0 / self.mpc_period:.2f} Hz"
         )
-        self.get_logger().info(f"Sync MPC requests to policy updates: {self.sync_mpc_to_policy}")
+        self.get_logger().info("Pipeline mode: cascaded (fixed)")
+        self.get_logger().info("Sync MPC requests to policy updates: True")
+        self.get_logger().info(f"Auto relax constraints: {self.auto_relax_constraints}")
         self.get_logger().info(f"Action visualization: {self.visualize_actions} ({self.action_marker_topic})")
         self.get_logger().info(
             f"JointState debug topic: {self.publish_debug_joint_state} ({self.debug_joint_state_topic})"
@@ -189,8 +219,15 @@ class RlOcpPolicyBridge(Node):
         )
 
     def _on_parameters_changed(self, params):
+        update_loop_hz = False
         update_effective_bounds = False
         for p in params:
+            if p.name == "policy_hz":
+                self.policy_hz = max(0.001, float(p.value))
+                update_loop_hz = True
+            elif p.name == "service_hz":
+                self.service_hz = max(0.001, float(p.value))
+                update_loop_hz = True
             if p.name == "use_demo_poly_obstacle":
                 self.use_demo_poly_obstacle = bool(p.value)
                 self.runtime_use_poly = self.use_demo_poly_obstacle
@@ -205,6 +242,24 @@ class RlOcpPolicyBridge(Node):
                 self.publish_policy_debug_status = bool(p.value)
             elif p.name == "visualize_planner_scene":
                 self.visualize_planner_scene = bool(p.value)
+            elif p.name == "use_map_static_obstacles":
+                self.use_map_static_obstacles = bool(p.value)
+            elif p.name == "map_static_obstacle_radius":
+                self.map_static_obstacle_radius = float(p.value)
+            elif p.name == "map_static_sample_step_m":
+                self.map_static_sample_step_m = float(p.value)
+            elif p.name == "map_static_obstacle_limit":
+                self.map_static_obstacle_limit = int(p.value)
+            elif p.name == "enforce_scene_entities":
+                self.enforce_scene_entities = bool(p.value)
+            elif p.name == "human_fallback_enabled":
+                self.human_fallback_enabled = bool(p.value)
+            elif p.name == "human_fallback_limit":
+                self.human_fallback_limit = int(p.value)
+            elif p.name == "human_fallback_radius":
+                self.human_fallback_radius = float(p.value)
+            elif p.name == "auto_relax_constraints":
+                self.auto_relax_constraints = bool(p.value)
             elif p.name == "action_dim":
                 self.action_dim = max(2, int(p.value))
             elif p.name == "action_range":
@@ -229,6 +284,10 @@ class RlOcpPolicyBridge(Node):
         if update_effective_bounds:
             self.effective_half_width = min(self.planner_half_width, self.planner_hard_half_width)
             self.effective_half_height = min(self.planner_half_height, self.planner_hard_half_height)
+
+        if update_loop_hz:
+            self.policy_period = 1.0 / self.policy_hz
+            self.mpc_period = 1.0 / self.service_hz
 
         return SetParametersResult(successful=True)
 
@@ -308,6 +367,7 @@ class RlOcpPolicyBridge(Node):
         q = msg.pose.pose.orientation
         yaw = self._yaw_from_quaternion(q.x, q.y, q.z, q.w)
         self.current_pose = (px, py, yaw)
+        self.pose_frame = msg.header.frame_id if msg.header.frame_id else self.pose_frame
 
         v = msg.twist.twist.linear.x
         w = msg.twist.twist.angular.z
@@ -320,11 +380,92 @@ class RlOcpPolicyBridge(Node):
         self.current_goal = (msg.pose.position.x, msg.pose.position.y)
 
     def _map_callback(self, msg: OccupancyGrid) -> None:
+        if msg.header.frame_id:
+            self.map_frame = msg.header.frame_id
         origin_x = msg.info.origin.position.x
         origin_y = msg.info.origin.position.y
         width_m = msg.info.width * msg.info.resolution
         height_m = msg.info.height * msg.info.resolution
         self.map_bounds = (origin_x, origin_x + width_m, origin_y, origin_y + height_m)
+        self.map_resolution = float(msg.info.resolution)
+        self.map_width = int(msg.info.width)
+        self.map_height = int(msg.info.height)
+        self.map_origin_x = float(origin_x)
+        self.map_origin_y = float(origin_y)
+        self.map_data = list(msg.data)
+
+    def _transform_point_2d(
+        self,
+        x: float,
+        y: float,
+        source_frame: str,
+        target_frame: str,
+    ) -> Optional[Tuple[float, float]]:
+        if not source_frame or not target_frame:
+            return None
+        if source_frame == target_frame:
+            return float(x), float(y)
+
+        try:
+            tf_msg = self.tf_buffer.lookup_transform(
+                target_frame,
+                source_frame,
+                Time(),
+                timeout=Duration(seconds=0.05),
+            )
+        except TransformException:
+            return None
+
+        t = tf_msg.transform.translation
+        r = tf_msg.transform.rotation
+        yaw = self._yaw_from_quaternion(r.x, r.y, r.z, r.w)
+
+        tx = float(t.x)
+        ty = float(t.y)
+        cx = math.cos(yaw)
+        sx = math.sin(yaw)
+        x_out = tx + (cx * float(x)) - (sx * float(y))
+        y_out = ty + (sx * float(x)) + (cx * float(y))
+        return x_out, y_out
+
+    def _point_to_map_frame(self, x: float, y: float) -> Optional[Tuple[float, float]]:
+        source_frame = self.pose_frame if self.pose_frame else self.map_frame
+        return self._transform_point_2d(x, y, source_frame, self.map_frame)
+
+    def _current_pose_in_map_frame(self) -> Optional[Tuple[float, float]]:
+        if self.current_pose is None:
+            return None
+        px, py, _ = self.current_pose
+        return self._point_to_map_frame(px, py)
+
+    def _is_occupied_from_map(self, world_x: float, world_y: float, clearance: float) -> bool:
+        if (
+            self.map_data is None
+            or self.map_resolution is None
+            or self.map_width <= 0
+            or self.map_height <= 0
+        ):
+            return False
+
+        mx = int((world_x - self.map_origin_x) / self.map_resolution)
+        my = int((world_y - self.map_origin_y) / self.map_resolution)
+        if mx < 0 or mx >= self.map_width or my < 0 or my >= self.map_height:
+            return True
+
+        inflate_cells = int(math.ceil(max(0.0, clearance) / self.map_resolution))
+        for dy in range(-inflate_cells, inflate_cells + 1):
+            for dx in range(-inflate_cells, inflate_cells + 1):
+                if dx * dx + dy * dy > inflate_cells * inflate_cells:
+                    continue
+                cx = mx + dx
+                cy = my + dy
+                if cx < 0 or cx >= self.map_width or cy < 0 or cy >= self.map_height:
+                    return True
+                idx = cy * self.map_width + cx
+                occ = self.map_data[idx]
+                if occ >= self.map_occupancy_threshold:
+                    return True
+        return False
 
     def _build_wall_tuples(self) -> List[Tuple[float, float, float, float]]:
         if self.map_bounds is None:
@@ -343,8 +484,8 @@ class RlOcpPolicyBridge(Node):
             (xmin, ymax, xmax, ymax),
         ]
 
-    def _build_wall_msgs(self) -> List[WallState]:
-        if not self.use_wall_constraints:
+    def _build_wall_msgs(self, force: bool = False) -> List[WallState]:
+        if (not force) and (not self.runtime_use_walls):
             return []
 
         # Intersect optional map bounds with planner limits to avoid ClipWall errors.
@@ -384,9 +525,9 @@ class RlOcpPolicyBridge(Node):
 
         return walls
 
-    def _build_poly_msgs(self) -> List[PolyState]:
+    def _build_poly_msgs(self, force: bool = False) -> List[PolyState]:
         """Optional demo polygon obstacle for debugging planner constraints."""
-        if not self.use_demo_poly_obstacle:
+        if (not force) and (not self.runtime_use_poly):
             return []
 
         # Build one small square near a corner, avoiding the robot/goal corridor.
@@ -418,12 +559,16 @@ class RlOcpPolicyBridge(Node):
 
         return [poly]
 
-    def _scan_to_obstacle_tuples(self) -> List[Tuple[float, float, float]]:
+    def _scan_only_obstacle_tuples(self) -> List[Tuple[float, float, float]]:
         obstacles = []
         if self.latest_scan is None or self.current_pose is None:
             return obstacles
 
         px, py, yaw = self.current_pose
+        pose_map = self._current_pose_in_map_frame()
+        if pose_map is None:
+            return obstacles
+        px_map, py_map = pose_map
         x_lim = min(self.effective_half_width, self.planner_x_limit)
         y_lim = min(self.effective_half_height, self.planner_y_limit)
         min_safe_range = self.robot_radius + 0.12
@@ -445,11 +590,75 @@ class RlOcpPolicyBridge(Node):
             ang = yaw + angle_min + i * angle_inc
             ox = px + r * math.cos(ang)
             oy = py + r * math.sin(ang)
-            if abs(ox) >= x_lim or abs(oy) >= y_lim:
+
+            map_xy = self._point_to_map_frame(ox, oy)
+            if map_xy is None:
+                continue
+            ox, oy = map_xy
+
+            if abs(ox - px_map) >= x_lim or abs(oy - py_map) >= y_lim:
                 continue
             obstacles.append((ox, oy, self.obstacle_radius))
 
         return obstacles
+
+    def _scan_to_obstacle_tuples(self) -> List[Tuple[float, float, float]]:
+        obstacles = self._scan_only_obstacle_tuples()
+        obstacles.extend(self._map_to_obstacle_tuples())
+
+        return obstacles
+
+    def _map_to_obstacle_tuples(self) -> List[Tuple[float, float, float]]:
+        if not self.use_map_static_obstacles:
+            return []
+        if self.current_pose is None:
+            return []
+        if (
+            self.map_data is None
+            or self.map_resolution is None
+            or self.map_width <= 0
+            or self.map_height <= 0
+        ):
+            return []
+
+        pose_map = self._current_pose_in_map_frame()
+        if pose_map is None:
+            return []
+        px, py = pose_map
+        x_lim = min(self.effective_half_width, self.planner_x_limit)
+        y_lim = min(self.effective_half_height, self.planner_y_limit)
+        cell_step = max(1, int(round(max(0.05, self.map_static_sample_step_m) / self.map_resolution)))
+        rx = int((px - self.map_origin_x) / self.map_resolution)
+        ry = int((py - self.map_origin_y) / self.map_resolution)
+        wx = int(x_lim / self.map_resolution)
+        wy = int(y_lim / self.map_resolution)
+
+        x0 = max(0, rx - wx)
+        x1 = min(self.map_width - 1, rx + wx)
+        y0 = max(0, ry - wy)
+        y1 = min(self.map_height - 1, ry + wy)
+
+        static_obs: List[Tuple[float, float, float]] = []
+        for my in range(y0, y1 + 1, cell_step):
+            for mx in range(x0, x1 + 1, cell_step):
+                idx = my * self.map_width + mx
+                occ = self.map_data[idx]
+                if occ < self.map_occupancy_threshold:
+                    continue
+                ox = self.map_origin_x + (mx + 0.5) * self.map_resolution
+                oy = self.map_origin_y + (my + 0.5) * self.map_resolution
+                if abs(ox - px) >= x_lim or abs(oy - py) >= y_lim:
+                    continue
+                # avoid flooding with cells under robot footprint
+                if math.hypot(ox - px, oy - py) < (self.robot_radius + 0.05):
+                    continue
+                static_obs.append((ox, oy, max(0.05, self.map_static_obstacle_radius)))
+
+        if len(static_obs) > max(1, self.map_static_obstacle_limit):
+            static_obs.sort(key=lambda p: math.hypot(p[0] - px, p[1] - py))
+            static_obs = static_obs[: max(1, self.map_static_obstacle_limit)]
+
+        return static_obs
 
     @staticmethod
     def _rotate_to_world(px: float, py: float, yaw: float, lx: float, ly: float) -> Tuple[float, float]:
@@ -486,12 +695,20 @@ class RlOcpPolicyBridge(Node):
         if abs(local_x) > self.planner_half_width or abs(local_y) > self.planner_half_height:
             return True
 
+        map_xy = self._point_to_map_frame(world_x, world_y)
+        if map_xy is None:
+            return False
+        map_x, map_y = map_xy
+
         if self.map_bounds is not None:
             xmin, xmax, ymin, ymax = self.map_bounds
-            if world_x < xmin or world_x > xmax or world_y < ymin or world_y > ymax:
+            if map_x < xmin or map_x > xmax or map_y < ymin or map_y > ymax:
                 return True
 
         inflate = self.robot_radius + self.action_mask_clearance
+        if self._is_occupied_from_map(map_x, map_y, inflate):
+            return True
+
         for ox, oy, radius in obstacles:
             if math.hypot(world_x - ox, world_y - oy) < (inflate + radius):
                 return True
@@ -502,7 +719,9 @@ class RlOcpPolicyBridge(Node):
         if self.current_pose is None:
             return
         candidates = self._generate_action_candidates()
-        obstacles = self._scan_to_obstacle_tuples()
+        dynamic_obstacles = self._scan_only_obstacle_tuples()
+        static_obstacles = self._map_to_obstacle_tuples()
+        obstacles = dynamic_obstacles + static_obstacles
 
         valid_points: List[Tuple[float, float]] = []
         masked_points: List[Tuple[float, float]] = []
@@ -528,6 +747,8 @@ class RlOcpPolicyBridge(Node):
                 "expected_count": int(self.action_dim) * int(self.action_dim),
                 "valid_count": len(valid_points),
                 "masked_count": len(masked_points),
+                "dynamic_count": len(dynamic_obstacles),
+                "static_count": len(static_obstacles),
                 "walls_enabled": bool(self.runtime_use_walls),
                 "poly_enabled": bool(self.runtime_use_poly),
                 "planner_fail_streak": int(self.consecutive_planner_failures),
@@ -559,52 +780,39 @@ class RlOcpPolicyBridge(Node):
 
     def _scan_to_obstacle_msgs(self) -> List[ObstacleState]:
         obstacles = []
-        if self.latest_scan is None or self.current_pose is None:
-            return obstacles
-
-        px, py, yaw = self.current_pose
-        x_lim = min(self.effective_half_width, self.planner_x_limit)
-        y_lim = min(self.effective_half_height, self.planner_y_limit)
-        min_safe_range = self.robot_radius + 0.12
-        ranges = self.latest_scan.ranges
-        angle_min = self.latest_scan.angle_min
-        angle_inc = self.latest_scan.angle_increment
-        r_min = self.latest_scan.range_min
-        r_max = self.latest_scan.range_max
-
-        for i in range(0, len(ranges), max(1, self.obstacle_sample_step)):
-            r = ranges[i]
-            if not math.isfinite(r):
-                continue
-            if r < r_min or r > r_max:
-                continue
-            if r < min_safe_range:
-                continue
-
-            ang = yaw + angle_min + i * angle_inc
-            obs_x = px + r * math.cos(ang)
-            obs_y = py + r * math.sin(ang)
-            if abs(obs_x - px) > x_lim or abs(obs_y - py) > y_lim:
-                continue
-            if abs(obs_x) >= x_lim or abs(obs_y) >= y_lim:
-                continue
+        for obs_x, obs_y, radius in self._scan_to_obstacle_tuples():
             obstacle = ObstacleState()
             obstacle.px = float(obs_x)
             obstacle.py = float(obs_y)
-            obstacle.radius = float(self.obstacle_radius)
+            obstacle.radius = float(radius)
             obstacles.append(obstacle)
-
         return obstacles
 
-    def _publish_stop(self) -> None:
-        if not rclpy.ok():
-            return
-        msg = TwistStamped()
-        msg.header.stamp = self.get_clock().now().to_msg()
-        msg.header.frame_id = "base_link"
-        msg.twist.linear.x = 0.0
-        msg.twist.angular.z = 0.0
-        self.cmd_pub.publish(msg)
+    def _build_human_fallback_msgs(self, obstacle_msgs: List[ObstacleState]) -> List[HumanState]:
+        if not self.human_fallback_enabled:
+            return []
+        if self.current_pose is None:
+            return []
+
+        px, py, _ = self.current_pose
+        limit = max(0, int(self.human_fallback_limit))
+        if limit == 0:
+            return []
+
+        obs_sorted = sorted(
+            obstacle_msgs,
+            key=lambda o: math.hypot(float(o.px) - px, float(o.py) - py),
+        )
+        humans: List[HumanState] = []
+        for o in obs_sorted[:limit]:
+            h = HumanState()
+            h.px = float(o.px)
+            h.py = float(o.py)
+            h.vx = 0.0
+            h.vy = 0.0
+            h.radius = float(max(0.05, self.human_fallback_radius))
+            humans.append(h)
+        return humans
 
     def _wheel_speeds_from_twist(self) -> Optional[Tuple[float, float]]:
         if self.current_twist is None:
@@ -636,7 +844,7 @@ class RlOcpPolicyBridge(Node):
             "gx": gx,
             "gy": gy,
             "obstacles": self._scan_to_obstacle_tuples(),
-            "walls": self._build_wall_tuples(),
+            "walls": self._build_wall_tuples() if self.runtime_use_walls else [],
         }
         return self._query_policy_worker(worker_req)
 
@@ -667,8 +875,15 @@ class RlOcpPolicyBridge(Node):
         req.ob.robot_state.radius = float(self.axle_half_width)
 
         req.ob.obstacle_states = self._scan_to_obstacle_msgs()
-        req.ob.walls = self._build_wall_msgs() if self.runtime_use_walls else []
-        req.ob.poly_states = self._build_poly_msgs() if self.runtime_use_poly else []
+        if self.enforce_scene_entities:
+            # Respect runtime toggles even when scene entities are enabled.
+            req.ob.walls = self._build_wall_msgs()
+            req.ob.poly_states = self._build_poly_msgs()
+            req.ob.human_states = self._build_human_fallback_msgs(req.ob.obstacle_states)
+        else:
+            req.ob.walls = self._build_wall_msgs() if self.runtime_use_walls else []
+            req.ob.poly_states = self._build_poly_msgs() if self.runtime_use_poly else []
+            req.ob.human_states = []
         req.ob.header.stamp = self.get_clock().now().to_msg()
         req.ob.header.frame_id = "map"
 
@@ -821,7 +1036,6 @@ class RlOcpPolicyBridge(Node):
             res = future.result()
         except Exception as exc:
             self.get_logger().error(f"Planner service call failed: {exc}")
-            self._publish_stop()
             return
 
         if res.success:
@@ -841,14 +1055,25 @@ class RlOcpPolicyBridge(Node):
         else:
             self.success_streak = 0
             self.consecutive_planner_failures += 1
-            if self.consecutive_planner_failures >= 6 and self.runtime_use_poly:
-                self.runtime_use_poly = False
-                self.get_logger().warn("Temporarily disabled demo polygon constraints due to repeated planner failures")
-                self.consecutive_planner_failures = 0
-            elif self.consecutive_planner_failures >= 10 and self.runtime_use_walls:
-                self.runtime_use_walls = False
-                self.get_logger().warn("Temporarily disabled wall constraints due to repeated planner failures")
-                self.consecutive_planner_failures = 0
+            if self.consecutive_planner_failures % 5 == 1:
+                self.get_logger().warn(
+                    "Planner reported failure (count=%d, walls=%s, poly=%s, auto_relax=%s)"
+                    % (
+                        int(self.consecutive_planner_failures),
+                        str(bool(self.runtime_use_walls)),
+                        str(bool(self.runtime_use_poly)),
+                        str(bool(self.auto_relax_constraints)),
+                    )
+                )
+            if self.auto_relax_constraints:
+                if self.consecutive_planner_failures >= 6 and self.runtime_use_poly:
+                    self.runtime_use_poly = False
+                    self.get_logger().warn("Temporarily disabled demo polygon constraints due to repeated planner failures")
+                    self.consecutive_planner_failures = 0
+                elif self.consecutive_planner_failures >= 10 and self.runtime_use_walls:
+                    self.runtime_use_walls = False
+                    self.get_logger().warn("Temporarily disabled wall constraints due to repeated planner failures")
+                    self.consecutive_planner_failures = 0
 
         if self.last_request_for_viz is not None and self.last_pose_for_viz is not None and self.last_wheels_for_viz is not None:
             predicted_traj, mpc_debug = self._predict_mpc_trajectory(
@@ -871,7 +1096,10 @@ class RlOcpPolicyBridge(Node):
                 }
             )
 
-            if mpc_debug["horizon_coverage"] < 0.99:
+            # In the async reference-only architecture, planner can intentionally
+            # return an empty control sequence. Warn only when a non-empty sequence
+            # is returned but still shorter than expected.
+            if int(mpc_debug["received_control_steps"]) > 0 and mpc_debug["horizon_coverage"] < 0.99:
                 self.get_logger().warn(
                     f"MPC returned {int(mpc_debug['received_control_steps'])}/{int(mpc_debug['expected_horizon_steps'])} control steps"
                 )
@@ -882,31 +1110,6 @@ class RlOcpPolicyBridge(Node):
                 )
 
             self._publish_planner_scene_debug(self.last_request_for_viz, predicted_traj, mpc_debug)
-
-        if self.last_wheel_speed is None:
-            wheel_speeds = self._wheel_speeds_from_twist()
-            if wheel_speeds is None:
-                self._publish_stop()
-                return
-            v_left, v_right = wheel_speeds
-        else:
-            v_left, v_right = self.last_wheel_speed
-
-        v_left_cmd = v_left + res.al * self.control_dt
-        v_right_cmd = v_right + res.ar * self.control_dt
-
-        linear = 0.5 * (v_left_cmd + v_right_cmd)
-        angular = (v_right_cmd - v_left_cmd) / (2.0 * self.axle_half_width)
-
-        linear = self._clamp(linear, -self.max_linear_speed, self.max_linear_speed)
-        angular = self._clamp(angular, -self.max_angular_speed, self.max_angular_speed)
-
-        msg = TwistStamped()
-        msg.header.stamp = self.get_clock().now().to_msg()
-        msg.header.frame_id = "base_link"
-        msg.twist.linear.x = float(linear)
-        msg.twist.angular.z = float(angular)
-        self.cmd_pub.publish(msg)
 
     def _policy_loop(self) -> None:
         if self.worker is None:
@@ -946,7 +1149,13 @@ class RlOcpPolicyBridge(Node):
         gx, gy = self.current_goal
         if math.hypot(gx - px, gy - py) < self.goal_tolerance:
             self.goal_reached = True
-            self._publish_stop()
+            # In cascaded mode, keep sending state updates so the C++ planner can
+            # apply planner.goal_stop_distance and hold cmd_vel at zero near goal.
+            if self.pending_future is None:
+                try:
+                    self._send_planner_request((px, py))
+                except Exception as exc:
+                    self.get_logger().error(f"Planner goal-stop update failed: {exc}")
             return
 
         self.goal_reached = False
@@ -956,7 +1165,7 @@ class RlOcpPolicyBridge(Node):
         if self.latest_sub_goal is None:
             return
 
-        if self.sync_mpc_to_policy and self.last_requested_sub_goal_seq >= self.latest_sub_goal_seq:
+        if self.last_requested_sub_goal_seq >= self.latest_sub_goal_seq:
             return
 
         try:
@@ -964,7 +1173,6 @@ class RlOcpPolicyBridge(Node):
             self.last_requested_sub_goal_seq = self.latest_sub_goal_seq
         except Exception as exc:
             self.get_logger().error(f"Planner loop failed: {exc}")
-            self._publish_stop()
 
 
 def main(args=None):
@@ -981,7 +1189,6 @@ def main(args=None):
                 node.worker.wait(timeout=2.0)
             except Exception:
                 pass
-        node._publish_stop()
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()

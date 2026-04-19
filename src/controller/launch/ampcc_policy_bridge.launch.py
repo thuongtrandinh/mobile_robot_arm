@@ -27,6 +27,12 @@ def generate_launch_description():
     planner_scene_debug_topic = LaunchConfiguration("planner_scene_debug_topic")
     planner_scene_marker_topic = LaunchConfiguration("planner_scene_marker_topic")
     planner_scene_frame = LaunchConfiguration("planner_scene_frame")
+    visualize_local_costmap = LaunchConfiguration("visualize_local_costmap")
+    local_costmap_topic = LaunchConfiguration("local_costmap_topic")
+    local_costmap_sample_step = LaunchConfiguration("local_costmap_sample_step")
+    local_costmap_max_cells = LaunchConfiguration("local_costmap_max_cells")
+    local_costmap_min_cost = LaunchConfiguration("local_costmap_min_cost")
+    astar_local_map_topic = LaunchConfiguration("astar_local_map_topic")
 
     use_sim_time_arg = DeclareLaunchArgument(
         "use_sim_time",
@@ -162,6 +168,42 @@ def generate_launch_description():
         description="Frame id for planner scene markers",
     )
 
+    visualize_local_costmap_arg = DeclareLaunchArgument(
+        "visualize_local_costmap",
+        default_value="true",
+        description="Render local OccupancyGrid costmap as Marker cubes",
+    )
+
+    local_costmap_topic_arg = DeclareLaunchArgument(
+        "local_costmap_topic",
+        default_value="/a_star/local_costmap",
+        description="Local costmap OccupancyGrid topic consumed by RViz visualizer",
+    )
+
+    astar_local_map_topic_arg = DeclareLaunchArgument(
+        "astar_local_map_topic",
+        default_value="/map",
+        description="OccupancyGrid topic used as A* local-map overlay in RViz visualizer",
+    )
+
+    local_costmap_sample_step_arg = DeclareLaunchArgument(
+        "local_costmap_sample_step",
+        default_value="2",
+        description="Sub-sampling step (cells) for local costmap marker generation",
+    )
+
+    local_costmap_max_cells_arg = DeclareLaunchArgument(
+        "local_costmap_max_cells",
+        default_value="12000",
+        description="Maximum number of costmap cells rendered as markers",
+    )
+
+    local_costmap_min_cost_arg = DeclareLaunchArgument(
+        "local_costmap_min_cost",
+        default_value="1",
+        description="Minimum cost value [0..100] to render in costmap markers",
+    )
+
     ampcc_node = Node(
         package="controller",
         executable="ampcc_node",
@@ -193,6 +235,7 @@ def generate_launch_description():
                 "planner_service": "/ocp_plann",
                 "planner_half_width": 5.8,
                 "planner_half_height": 9.8,
+                "auto_relax_constraints": True,
                 "use_wall_constraints": use_wall_constraints,
                 "use_demo_poly_obstacle": use_demo_poly_obstacle,
                 "visualize_actions": visualize_actions,
@@ -222,10 +265,24 @@ def generate_launch_description():
                 "use_sim_time": use_sim_time,
                 "visualize_actions": visualize_actions,
                 "visualize_planner_scene": True,
+                "visualize_local_costmap": visualize_local_costmap,
+                "visualize_scan_obstacles": True,
+                "visualize_joint_state_geometry": True,
+                "visualize_astar_path": True,
+                "visualize_astar_local_map": True,
                 "action_marker_topic": action_marker_topic,
                 "action_marker_frame": action_marker_frame,
                 "planner_scene_marker_topic": planner_scene_marker_topic,
                 "planner_scene_frame": planner_scene_frame,
+                "map_topic": "/map",
+                "scan_topic": "/scan",
+                "joint_state_topic": debug_joint_state_topic,
+                "astar_path_topic": "/a_star_path",
+                "astar_local_map_topic": astar_local_map_topic,
+                "local_costmap_topic": local_costmap_topic,
+                "local_costmap_sample_step": local_costmap_sample_step,
+                "local_costmap_max_cells": local_costmap_max_cells,
+                "local_costmap_min_cost": local_costmap_min_cost,
                 "action_debug_topic": action_debug_topic,
                 "planner_scene_debug_topic": planner_scene_debug_topic,
             }
@@ -256,6 +313,12 @@ def generate_launch_description():
         planner_scene_debug_topic_arg,
         planner_scene_marker_topic_arg,
         planner_scene_frame_arg,
+        visualize_local_costmap_arg,
+        local_costmap_topic_arg,
+        local_costmap_sample_step_arg,
+        local_costmap_max_cells_arg,
+        local_costmap_min_cost_arg,
+        astar_local_map_topic_arg,
         ampcc_node,
         rl_bridge_node,
         rviz_visualizer_node,

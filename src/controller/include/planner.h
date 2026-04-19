@@ -20,6 +20,7 @@
 
 #ifdef ROS_BUILD
 #include <nav_msgs/msg/path.hpp>
+#include <nav_msgs/msg/occupancy_grid.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #endif
 
@@ -68,7 +69,8 @@ class Planner {
     has_map_ = true;
   }
 
-  MpcReturn PlannExec(const JointState &state, Eigen::Vector2d &sub_goal);
+  bool UpdateReferenceOnly(const JointState &state, Eigen::Vector2d &sub_goal);
+  MpcReturn SolveMpcFromCachedReference(const JointState &state);
 
   robot_plann::MPCOutputForPython RunSlover(const robot_plann::MPCInputForPython& input);
 
@@ -79,6 +81,9 @@ class Planner {
   inline nav_msgs::msg::Path GetAStarSmoothPath() const {
     return *a_start_smooth_path_;
   }
+
+  nav_msgs::msg::OccupancyGrid GetLocalCostMap(
+      const std::string &frame_id = "map") const;
 #endif
 
   inline std::vector<Point> GetAStarPath() const {

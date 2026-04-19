@@ -6,8 +6,8 @@ opt_planner:
     mpc.dt: 0.25
     mpc.max_linear_vel: 0.5
     mpc.max_angular_vel: 0.5
-    mpc.max_linear_acc: 0.1
-    mpc.max_angular_acc: 0.1
+    mpc.max_linear_acc: 1.0
+    mpc.max_angular_acc: 1.0
     # Half distance between wheels used in v/w <-> wheel constraints
     mpc.wheel_half_track: 0.3
     mpc.local_obst_num: 8
@@ -24,19 +24,46 @@ opt_planner:
     mpc.weights.smooth_acc: 0.05
     mpc.weights.smooth_yaw_acc: 0.05
 
+    # Direct frequency tuning [Hz]
+    planner.mpc_exec_hz: 20.0
+    planner.cmd_publish_hz: 20.0
+    # Legacy period params (fallback if *_hz <= 0)
+    planner.mpc_exec_period: 0.05
+    planner.cmd_publish_period: 0.05
+    # Integration step for wheel acceleration to cmd_vel conversion in planner timer
+    planner.mpc_control_dt: 0.05
+    # Force zero cmd_vel when distance(robot, goal) <= this threshold [m]
+    planner.goal_stop_distance: 0.1
+    planner.cmd_topic: /diff_cont/cmd_vel
+    planner.cmd_max_linear_speed: 1.0
+    planner.cmd_max_angular_speed: 3.0
+
 rl_ocp_policy_bridge:
   ros__parameters:
-    # Legacy single-loop period (kept only for backward compatibility)
+    # Direct frequency tuning [Hz]
+    policy_hz: 10.0
+    service_hz: 10.0
+    # Legacy params (fallback/compatibility)
     timer_period: 0.1
-    # RL policy loop frequency [Hz] = 1 / policy_period
-    policy_period: 0.2
-    # MPC service request loop frequency [Hz] = 1 / mpc_period
-    mpc_period: 0.2
-    # When true, planner service is called only after a new RL sub-goal is produced
-    sync_mpc_to_policy: true
+    policy_period: 0.1
+    mpc_period: 0.1
+    # Treat goal as reached only when very close, to avoid premature stop.
+    goal_tolerance: 0.08
     # Integration step used to convert planner acceleration to cmd_vel
     control_dt: 0.25
     # Expected MPC horizon control steps for trajectory visualization
     mpc_horizon_steps: 10
     # Warn as unstable when consecutive MPC predicted trajectories differ too much [m]
     mpc_stability_warn_threshold: 0.35
+    # Keep wall/poly constraints always active unless explicitly enabled
+    auto_relax_constraints: false
+    # Include occupied cells from /map as static obstacles for RL mask/planner debug
+    use_map_static_obstacles: false
+    map_static_obstacle_radius: 0.18
+    map_static_sample_step_m: 0.35
+    map_static_obstacle_limit: 80
+    # Always populate JointState with walls/poly/obstacles/humans fallback
+    enforce_scene_entities: false
+    human_fallback_enabled: true
+    human_fallback_limit: 20
+    human_fallback_radius: 0.25
