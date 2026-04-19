@@ -46,8 +46,8 @@ class OdomCalculator(Node):
         d_r = (r_pos - self.last_right_pos) * self.radius
         
         d_c = (d_r + d_l) / 2.0
-        # Đảm bảo hướng quay khớp với thực tế robot quay trái là dương
-        d_th = (d_l - d_r) / self.separation
+        # ROS 2 chuẩn: rẽ trái (d_r > d_l) → d_th > 0 (dương)
+        d_th = (d_r - d_l) / self.separation
 
         self.x += d_c * math.cos(self.th + d_th/2.0)
         self.y += d_c * math.sin(self.th + d_th/2.0)
