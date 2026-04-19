@@ -43,18 +43,18 @@ def generate_launch_description():
         output='screen'
     )
 
-    # 4. MICRO-ROS AGENT
-    micro_ros_agent_node = Node(
-        package='micro_ros_agent',
-        executable='micro_ros_agent',
-        arguments=['serial', '--dev', '/dev/uart', '-b', '115200'], 
-        output='screen'
-    )
+    # # 4. MICRO-ROS AGENT
+    # micro_ros_agent_node = Node(
+    #     package='micro_ros_agent',
+    #     executable='micro_ros_agent',
+    #     arguments=['serial', '--dev', '/dev/uart', '-b', '115200'], 
+    #     output='screen'
+    # )
 
     # 5. SENSORS (Lidar & D435i Camera)
     lidar_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(os.path.join(lidar_pkg, 'launch', 'a2m8.launch.py')),
-        launch_arguments={'baud_rate': '256000', 'serial_port': '/dev/rplidar', 'frame_id': 'laser'}.items()
+        launch_arguments={'serial_baudrate': '256000', 'serial_port': '/dev/rplidar', 'frame_id': 'laser'}.items()
     )
 
     # --- SỬA LẠI KHỞI TẠO D435i Ở ĐÂY ---
@@ -72,7 +72,7 @@ def generate_launch_description():
             'align_depth.enable': 'true',           # Căn chỉnh khung hình Depth khớp với RGB
             'rgb_camera.color_profile': '640,480,30',
             'depth_module.depth_profile': '640,480,30',
-            'initial_reset': 'true',                # Tự động reset phần cứng khi chạy launch
+            'initial_reset': 'false',               # Avoid forced reset to reduce HID/motion startup errors on this platform.
             'output': 'screen',
         }.items()
     )

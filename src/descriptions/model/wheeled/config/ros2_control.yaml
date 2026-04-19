@@ -22,7 +22,7 @@ diff_cont:
     publish_odom: true            # Still publish /diff_cont/odom topic
     odom_frame_id: "odom"
     base_frame_id: "base_footprint"
-    enable_odom_tf: false          # CRITICAL: FALSE - Let EKF publish odom→base_footprint TF after sensor fusion!
+    enable_odom_tf: true           # In simulation, publish odom->base TF so RViz can stabilize /scan in world frames.
 
     # CRITICAL: Accept stamped cmd_vel
     cmd_vel_timeout: 0.5
