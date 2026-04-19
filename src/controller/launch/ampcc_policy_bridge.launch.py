@@ -14,24 +14,17 @@ def generate_launch_description():
     config = LaunchConfiguration("config")
     model_path = LaunchConfiguration("model_path")
     policy_env_name = LaunchConfiguration("policy_env_name")
-    use_wall_constraints = LaunchConfiguration("use_wall_constraints")
-    use_demo_poly_obstacle = LaunchConfiguration("use_demo_poly_obstacle")
     visualize_actions = LaunchConfiguration("visualize_actions")
     action_marker_topic = LaunchConfiguration("action_marker_topic")
     action_marker_frame = LaunchConfiguration("action_marker_frame")
-    action_debug_topic = LaunchConfiguration("action_debug_topic")
     publish_debug_joint_state = LaunchConfiguration("publish_debug_joint_state")
     debug_joint_state_topic = LaunchConfiguration("debug_joint_state_topic")
     publish_policy_debug_status = LaunchConfiguration("publish_policy_debug_status")
     policy_debug_status_topic = LaunchConfiguration("policy_debug_status_topic")
-    planner_scene_debug_topic = LaunchConfiguration("planner_scene_debug_topic")
     planner_scene_marker_topic = LaunchConfiguration("planner_scene_marker_topic")
     planner_scene_frame = LaunchConfiguration("planner_scene_frame")
     visualize_local_costmap = LaunchConfiguration("visualize_local_costmap")
     local_costmap_topic = LaunchConfiguration("local_costmap_topic")
-    local_costmap_sample_step = LaunchConfiguration("local_costmap_sample_step")
-    local_costmap_max_cells = LaunchConfiguration("local_costmap_max_cells")
-    local_costmap_min_cost = LaunchConfiguration("local_costmap_min_cost")
     astar_local_map_topic = LaunchConfiguration("astar_local_map_topic")
 
     use_sim_time_arg = DeclareLaunchArgument(
@@ -90,18 +83,6 @@ def generate_launch_description():
         description="Conda env name used by policy worker",
     )
 
-    use_demo_poly_obstacle_arg = DeclareLaunchArgument(
-        "use_demo_poly_obstacle",
-        default_value="false",
-        description="Enable demo polygon constraint in planner request",
-    )
-
-    use_wall_constraints_arg = DeclareLaunchArgument(
-        "use_wall_constraints",
-        default_value="false",
-        description="Enable wall constraints generated from map bounds",
-    )
-
     visualize_actions_arg = DeclareLaunchArgument(
         "visualize_actions",
         default_value="true",
@@ -118,12 +99,6 @@ def generate_launch_description():
         "action_marker_frame",
         default_value="odom",
         description="Frame id used for action visualization markers",
-    )
-
-    action_debug_topic_arg = DeclareLaunchArgument(
-        "action_debug_topic",
-        default_value="/debug/policy_actions_scene",
-        description="Debug JSON topic consumed by RViz action visualizer",
     )
 
     publish_debug_joint_state_arg = DeclareLaunchArgument(
@@ -148,12 +123,6 @@ def generate_launch_description():
         "policy_debug_status_topic",
         default_value="/debug/policy_status",
         description="Topic for policy status JSON debug messages",
-    )
-
-    planner_scene_debug_topic_arg = DeclareLaunchArgument(
-        "planner_scene_debug_topic",
-        default_value="/debug/planner_scene",
-        description="Debug JSON topic consumed by planner scene RViz visualizer",
     )
 
     planner_scene_marker_topic_arg = DeclareLaunchArgument(
@@ -184,24 +153,6 @@ def generate_launch_description():
         "astar_local_map_topic",
         default_value="/map",
         description="OccupancyGrid topic used as A* local-map overlay in RViz visualizer",
-    )
-
-    local_costmap_sample_step_arg = DeclareLaunchArgument(
-        "local_costmap_sample_step",
-        default_value="2",
-        description="Sub-sampling step (cells) for local costmap marker generation",
-    )
-
-    local_costmap_max_cells_arg = DeclareLaunchArgument(
-        "local_costmap_max_cells",
-        default_value="12000",
-        description="Maximum number of costmap cells rendered as markers",
-    )
-
-    local_costmap_min_cost_arg = DeclareLaunchArgument(
-        "local_costmap_min_cost",
-        default_value="1",
-        description="Minimum cost value [0..100] to render in costmap markers",
     )
 
     ampcc_node = Node(
@@ -236,17 +187,13 @@ def generate_launch_description():
                 "planner_half_width": 5.8,
                 "planner_half_height": 9.8,
                 "auto_relax_constraints": True,
-                "use_wall_constraints": use_wall_constraints,
-                "use_demo_poly_obstacle": use_demo_poly_obstacle,
                 "visualize_actions": visualize_actions,
                 "action_marker_topic": action_marker_topic,
                 "action_marker_frame": action_marker_frame,
-                "action_debug_topic": action_debug_topic,
                 "publish_debug_joint_state": publish_debug_joint_state,
                 "debug_joint_state_topic": debug_joint_state_topic,
                 "publish_policy_debug_status": publish_policy_debug_status,
                 "policy_debug_status_topic": policy_debug_status_topic,
-                "planner_scene_debug_topic": planner_scene_debug_topic,
                 "planner_scene_marker_topic": planner_scene_marker_topic,
                 "planner_scene_frame": planner_scene_frame,
             }
@@ -280,11 +227,6 @@ def generate_launch_description():
                 "astar_path_topic": "/a_star_path",
                 "astar_local_map_topic": astar_local_map_topic,
                 "local_costmap_topic": local_costmap_topic,
-                "local_costmap_sample_step": local_costmap_sample_step,
-                "local_costmap_max_cells": local_costmap_max_cells,
-                "local_costmap_min_cost": local_costmap_min_cost,
-                "action_debug_topic": action_debug_topic,
-                "planner_scene_debug_topic": planner_scene_debug_topic,
             }
         ],
         respawn=respawn,
@@ -300,24 +242,17 @@ def generate_launch_description():
         config_arg,
         model_path_arg,
         policy_env_name_arg,
-        use_demo_poly_obstacle_arg,
-        use_wall_constraints_arg,
         visualize_actions_arg,
         action_marker_topic_arg,
         action_marker_frame_arg,
-        action_debug_topic_arg,
         publish_debug_joint_state_arg,
         debug_joint_state_topic_arg,
         publish_policy_debug_status_arg,
         policy_debug_status_topic_arg,
-        planner_scene_debug_topic_arg,
         planner_scene_marker_topic_arg,
         planner_scene_frame_arg,
         visualize_local_costmap_arg,
         local_costmap_topic_arg,
-        local_costmap_sample_step_arg,
-        local_costmap_max_cells_arg,
-        local_costmap_min_cost_arg,
         astar_local_map_topic_arg,
         ampcc_node,
         rl_bridge_node,

@@ -1,4 +1,5 @@
 #!/usr/bin/python3
+import importlib
 import json
 import math
 import os
@@ -7,6 +8,7 @@ import subprocess
 import sys
 from typing import Dict, List, Optional, Tuple
 
+import numpy as np
 import rclpy
 from interfaces.msg import ObstacleState, WallState, PolyState, HumanState, Point as PolyPoint
 from interfaces.msg import JointState as InterfaceJointState
@@ -61,8 +63,10 @@ class RlOcpPolicyBridge(Node):
         self.declare_parameter("planner_half_height", 9.8)
         self.declare_parameter("planner_hard_half_width", 5.99)
         self.declare_parameter("planner_hard_half_height", 9.99)
-        self.declare_parameter("use_wall_constraints", True)
-        self.declare_parameter("use_demo_poly_obstacle", True)
+        self.declare_parameter("map_geometry_obstacle_threshold", 90)
+        self.declare_parameter("map_geometry_poly_epsilon_ratio", 0.02)
+        self.declare_parameter("map_geometry_wall_linearity_ratio", 20.0)
+        self.declare_parameter("map_geometry_wall_linearity_span", 0.50)
         self.declare_parameter("visualize_actions", True)
         self.declare_parameter("action_marker_topic", "/policy/action_markers")
         self.declare_parameter("action_marker_frame", "odom")
@@ -122,8 +126,18 @@ class RlOcpPolicyBridge(Node):
         self.planner_hard_half_height = self.get_parameter("planner_hard_half_height").get_parameter_value().double_value
         self.effective_half_width = min(self.planner_half_width, self.planner_hard_half_width)
         self.effective_half_height = min(self.planner_half_height, self.planner_hard_half_height)
-        self.use_wall_constraints = self.get_parameter("use_wall_constraints").get_parameter_value().bool_value
-        self.use_demo_poly_obstacle = self.get_parameter("use_demo_poly_obstacle").get_parameter_value().bool_value
+        self.map_geometry_obstacle_threshold = int(
+            self.get_parameter("map_geometry_obstacle_threshold").get_parameter_value().integer_value
+        )
+        self.map_geometry_poly_epsilon_ratio = float(
+            self.get_parameter("map_geometry_poly_epsilon_ratio").get_parameter_value().double_value
+        )
+        self.map_geometry_wall_linearity_ratio = float(
+            self.get_parameter("map_geometry_wall_linearity_ratio").get_parameter_value().double_value
+        )
+        self.map_geometry_wall_linearity_span = float(
+            self.get_parameter("map_geometry_wall_linearity_span").get_parameter_value().double_value
+        )
         self.visualize_actions = self.get_parameter("visualize_actions").get_parameter_value().bool_value
         self.action_marker_topic = self.get_parameter("action_marker_topic").get_parameter_value().string_value
         self.action_marker_frame = self.get_parameter("action_marker_frame").get_parameter_value().string_value
@@ -158,6 +172,8 @@ class RlOcpPolicyBridge(Node):
         self.map_data: Optional[List[int]] = None
         self.map_occupancy_threshold: int = 50
         self.pose_frame: str = ""
+        self.map_geometry_polygons: List[List[Tuple[float, float]]] = []
+        self.map_geometry_walls: List[Tuple[float, float, float, float]] = []
 
         # Keep Python-side request geometry aligned with hard-coded C++ planner map limits.
         self.planner_x_limit = 5.5
@@ -173,14 +189,17 @@ class RlOcpPolicyBridge(Node):
         self.last_pose_for_viz: Optional[Tuple[float, float, float]] = None
         self.last_wheels_for_viz: Optional[Tuple[float, float]] = None
         self.consecutive_planner_failures = 0
-        self.runtime_use_walls = self.use_wall_constraints
-        self.runtime_use_poly = self.use_demo_poly_obstacle
         self.success_streak = 0
         self.goal_reached = False
         self.prev_predicted_traj: Optional[List[Tuple[float, float]]] = None
         self.last_stability_delta_rms = 0.0
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
+        self.cv2 = None
+        try:
+            self.cv2 = importlib.import_module("cv2")
+        except Exception as exc:
+            raise RuntimeError("OpenCV (cv2) is required for map geometry extraction: %s" % str(exc))
 
         self._start_policy_worker()
 
@@ -228,13 +247,7 @@ class RlOcpPolicyBridge(Node):
             elif p.name == "service_hz":
                 self.service_hz = max(0.001, float(p.value))
                 update_loop_hz = True
-            if p.name == "use_demo_poly_obstacle":
-                self.use_demo_poly_obstacle = bool(p.value)
-                self.runtime_use_poly = self.use_demo_poly_obstacle
-            elif p.name == "use_wall_constraints":
-                self.use_wall_constraints = bool(p.value)
-                self.runtime_use_walls = self.use_wall_constraints
-            elif p.name == "visualize_actions":
+            if p.name == "visualize_actions":
                 self.visualize_actions = bool(p.value)
             elif p.name == "publish_debug_joint_state":
                 self.publish_debug_joint_state = bool(p.value)
@@ -394,6 +407,115 @@ class RlOcpPolicyBridge(Node):
         self.map_origin_y = float(origin_y)
         self.map_data = list(msg.data)
 
+        if msg.info.width == 0 or msg.info.height == 0:
+            self.map_geometry_polygons = []
+            self.map_geometry_walls = []
+            return
+
+        grid = np.array(msg.data, dtype=np.int16).reshape((msg.info.height, msg.info.width))
+        obstacle_img = np.zeros_like(grid, dtype=np.uint8)
+        obstacle_img[grid > self.map_geometry_obstacle_threshold] = 255
+        img_for_cv = np.flipud(obstacle_img)
+
+        contours, _ = self.cv2.findContours(
+            img_for_cv,
+            self.cv2.RETR_EXTERNAL,
+            self.cv2.CHAIN_APPROX_SIMPLE,
+        )
+
+        polygons: List[List[Tuple[float, float]]] = []
+        walls: List[Tuple[float, float, float, float]] = []
+        for contour in contours:
+            peri = self.cv2.arcLength(contour, True)
+            eps = self.map_geometry_poly_epsilon_ratio * peri
+            approx = self.cv2.approxPolyDP(contour, eps, True)
+            if len(approx) < 2:
+                continue
+
+            poly_pts: List[Tuple[float, float]] = []
+            for vertex in approx:
+                u = int(vertex[0][0])
+                v = int(vertex[0][1])
+                x_m, y_m = self._pixel_to_meter(u, v)
+                poly_pts.append((x_m, y_m))
+
+            if self._is_wall_like_geometry(poly_pts):
+                wall = self._wall_segment_from_points(poly_pts)
+                if wall is not None:
+                    walls.append(wall)
+            elif len(poly_pts) >= 3:
+                polygons.append(poly_pts)
+
+        self.map_geometry_polygons = polygons
+        self.map_geometry_walls = walls
+
+    def _pixel_to_meter(self, u: int, v: int) -> Tuple[float, float]:
+        row_occ = self.map_height - 1 - v
+        x_world = self.map_origin_x + (float(u) + 0.5) * self.map_resolution
+        y_world = self.map_origin_y + (float(row_occ) + 0.5) * self.map_resolution
+        return x_world, y_world
+
+    def _is_wall_like_geometry(self, points: List[Tuple[float, float]]) -> bool:
+        if len(points) < 2:
+            return False
+
+        arr = np.array(points, dtype=np.float64)
+        diffs = arr[:, None, :] - arr[None, :, :]
+        dists = np.linalg.norm(diffs, axis=2)
+        span = float(np.max(dists)) if dists.size > 0 else 0.0
+        if span < self.map_geometry_wall_linearity_span:
+            return False
+
+        if arr.shape[0] < 3:
+            return True
+
+        centered = arr - np.mean(arr, axis=0)
+        cov = np.cov(centered, rowvar=False)
+        if cov.shape != (2, 2):
+            return False
+
+        eigvals = np.linalg.eigvalsh(cov)
+        eigvals = np.sort(np.abs(eigvals))
+        small = float(eigvals[0])
+        large = float(eigvals[1])
+        linearity = large / (small + 1e-9)
+        return linearity >= self.map_geometry_wall_linearity_ratio
+
+    @staticmethod
+    def _wall_segment_from_points(
+        points: List[Tuple[float, float]],
+    ) -> Optional[Tuple[float, float, float, float]]:
+        if len(points) < 2:
+            return None
+        arr = np.array(points, dtype=np.float64)
+        diffs = arr[:, None, :] - arr[None, :, :]
+        dists = np.linalg.norm(diffs, axis=2)
+        max_idx = np.unravel_index(np.argmax(dists), dists.shape)
+        p1 = arr[max_idx[0]]
+        p2 = arr[max_idx[1]]
+        return (float(p1[0]), float(p1[1]), float(p2[0]), float(p2[1]))
+
+    def _get_map_geometry_msgs(self) -> Tuple[List[PolyState], List[WallState]]:
+        poly_states: List[PolyState] = []
+        for poly_pts in self.map_geometry_polygons:
+            if len(poly_pts) < 3:
+                continue
+            poly_msg = PolyState()
+            poly_msg.is_clockwise = True
+            poly_msg.vertices = [PolyPoint(x=float(x), y=float(y)) for x, y in poly_pts]
+            poly_states.append(poly_msg)
+
+        walls: List[WallState] = []
+        for sx, sy, ex, ey in self.map_geometry_walls:
+            wall = WallState()
+            wall.sx = float(sx)
+            wall.sy = float(sy)
+            wall.ex = float(ex)
+            wall.ey = float(ey)
+            walls.append(wall)
+
+        return poly_states, walls
+
     def _transform_point_2d(
         self,
         x: float,
@@ -466,98 +588,6 @@ class RlOcpPolicyBridge(Node):
                 if occ >= self.map_occupancy_threshold:
                     return True
         return False
-
-    def _build_wall_tuples(self) -> List[Tuple[float, float, float, float]]:
-        if self.map_bounds is None:
-            if self.current_pose is None:
-                xmin, xmax, ymin, ymax = -10.0, 10.0, -10.0, 10.0
-            else:
-                px, py, _ = self.current_pose
-                xmin, xmax, ymin, ymax = px - 10.0, px + 10.0, py - 10.0, py + 10.0
-        else:
-            xmin, xmax, ymin, ymax = self.map_bounds
-
-        return [
-            (xmin, ymin, xmin, ymax),
-            (xmax, ymin, xmax, ymax),
-            (xmin, ymin, xmax, ymin),
-            (xmin, ymax, xmax, ymax),
-        ]
-
-    def _build_wall_msgs(self, force: bool = False) -> List[WallState]:
-        if (not force) and (not self.runtime_use_walls):
-            return []
-
-        # Intersect optional map bounds with planner limits to avoid ClipWall errors.
-        x_lim = min(self.effective_half_width, self.planner_x_limit)
-        y_lim = min(self.effective_half_height, self.planner_y_limit)
-
-        xmin, xmax = -x_lim, x_lim
-        ymin, ymax = -y_lim, y_lim
-        if self.map_bounds is not None:
-            map_xmin, map_xmax, map_ymin, map_ymax = self.map_bounds
-            xmin = max(xmin, map_xmin)
-            xmax = min(xmax, map_xmax)
-            ymin = max(ymin, map_ymin)
-            ymax = min(ymax, map_ymax)
-
-        # Fallback to planner box if map intersection is degenerate.
-        if xmin >= xmax or ymin >= ymax:
-            xmin, xmax = -x_lim, x_lim
-            ymin, ymax = -y_lim, y_lim
-
-        eps = 1e-3
-        # MPC expects exactly 2 vertical walls with specific orientation:
-        # left wall: top -> bottom, right wall: bottom -> top.
-        wall_segments = [
-            (xmin, ymax, xmin, ymin),
-            (xmax, ymin, xmax, ymax),
-        ]
-
-        walls = []
-        for sx, sy, ex, ey in wall_segments:
-            wall = WallState()
-            wall.sx = self._clamp(float(sx), -x_lim + eps, x_lim - eps)
-            wall.sy = self._clamp(float(sy), -y_lim + eps, y_lim - eps)
-            wall.ex = self._clamp(float(ex), -x_lim + eps, x_lim - eps)
-            wall.ey = self._clamp(float(ey), -y_lim + eps, y_lim - eps)
-            walls.append(wall)
-
-        return walls
-
-    def _build_poly_msgs(self, force: bool = False) -> List[PolyState]:
-        """Optional demo polygon obstacle for debugging planner constraints."""
-        if (not force) and (not self.runtime_use_poly):
-            return []
-
-        # Build one small square near a corner, avoiding the robot/goal corridor.
-        x_lim = min(self.effective_half_width, self.planner_x_limit)
-        y_lim = min(self.effective_half_height, self.planner_y_limit)
-        margin = 0.9
-        size = 0.8
-
-        cx = x_lim - margin
-        cy = y_lim - margin
-        if self.current_pose is not None:
-            px, py, _ = self.current_pose
-            if math.hypot(cx - px, cy - py) < 1.5:
-                cy = -y_lim + margin
-
-        if self.current_goal is not None:
-            gx, gy = self.current_goal
-            if math.hypot(cx - gx, cy - gy) < 1.5:
-                cx = -x_lim + margin
-
-        poly = PolyState()
-        poly.is_clockwise = True
-        poly.vertices = [
-            PolyPoint(x=cx - size, y=cy - size),
-            PolyPoint(x=cx + size, y=cy - size),
-            PolyPoint(x=cx + size, y=cy + size),
-            PolyPoint(x=cx - size, y=cy + size),
-        ]
-
-        return [poly]
 
     def _scan_only_obstacle_tuples(self) -> List[Tuple[float, float, float]]:
         obstacles = []
@@ -749,8 +779,8 @@ class RlOcpPolicyBridge(Node):
                 "masked_count": len(masked_points),
                 "dynamic_count": len(dynamic_obstacles),
                 "static_count": len(static_obstacles),
-                "walls_enabled": bool(self.runtime_use_walls),
-                "poly_enabled": bool(self.runtime_use_poly),
+                "map_walls_count": len(self.map_geometry_walls),
+                "map_polygons_count": len(self.map_geometry_polygons),
                 "planner_fail_streak": int(self.consecutive_planner_failures),
                 "policy_hz": float(1.0 / self.policy_period),
                 "mpc_hz": float(1.0 / self.mpc_period),
@@ -844,7 +874,7 @@ class RlOcpPolicyBridge(Node):
             "gx": gx,
             "gy": gy,
             "obstacles": self._scan_to_obstacle_tuples(),
-            "walls": self._build_wall_tuples() if self.runtime_use_walls else [],
+            "walls": list(self.map_geometry_walls),
         }
         return self._query_policy_worker(worker_req)
 
@@ -875,15 +905,10 @@ class RlOcpPolicyBridge(Node):
         req.ob.robot_state.radius = float(self.axle_half_width)
 
         req.ob.obstacle_states = self._scan_to_obstacle_msgs()
-        if self.enforce_scene_entities:
-            # Respect runtime toggles even when scene entities are enabled.
-            req.ob.walls = self._build_wall_msgs()
-            req.ob.poly_states = self._build_poly_msgs()
-            req.ob.human_states = self._build_human_fallback_msgs(req.ob.obstacle_states)
-        else:
-            req.ob.walls = self._build_wall_msgs() if self.runtime_use_walls else []
-            req.ob.poly_states = self._build_poly_msgs() if self.runtime_use_poly else []
-            req.ob.human_states = []
+        poly_states, walls = self._get_map_geometry_msgs()
+        req.ob.walls = walls
+        req.ob.poly_states = poly_states
+        req.ob.human_states = self._build_human_fallback_msgs(req.ob.obstacle_states) if self.enforce_scene_entities else []
         req.ob.header.stamp = self.get_clock().now().to_msg()
         req.ob.header.frame_id = "map"
 
@@ -1041,39 +1066,18 @@ class RlOcpPolicyBridge(Node):
         if res.success:
             self.consecutive_planner_failures = 0
             self.success_streak += 1
-
-            # If we had to relax constraints, try restoring them after stable success.
-            if self.success_streak >= 20:
-                if self.use_wall_constraints and not self.runtime_use_walls:
-                    self.runtime_use_walls = True
-                    self.get_logger().info("Re-enabled wall constraints after stable planner success")
-                    self.success_streak = 0
-                elif self.use_demo_poly_obstacle and not self.runtime_use_poly:
-                    self.runtime_use_poly = True
-                    self.get_logger().info("Re-enabled demo polygon after stable planner success")
-                    self.success_streak = 0
         else:
             self.success_streak = 0
             self.consecutive_planner_failures += 1
             if self.consecutive_planner_failures % 5 == 1:
                 self.get_logger().warn(
-                    "Planner reported failure (count=%d, walls=%s, poly=%s, auto_relax=%s)"
+                    "Planner reported failure (count=%d, map_walls=%d, map_polygons=%d)"
                     % (
                         int(self.consecutive_planner_failures),
-                        str(bool(self.runtime_use_walls)),
-                        str(bool(self.runtime_use_poly)),
-                        str(bool(self.auto_relax_constraints)),
+                        int(len(self.map_geometry_walls)),
+                        int(len(self.map_geometry_polygons)),
                     )
                 )
-            if self.auto_relax_constraints:
-                if self.consecutive_planner_failures >= 6 and self.runtime_use_poly:
-                    self.runtime_use_poly = False
-                    self.get_logger().warn("Temporarily disabled demo polygon constraints due to repeated planner failures")
-                    self.consecutive_planner_failures = 0
-                elif self.consecutive_planner_failures >= 10 and self.runtime_use_walls:
-                    self.runtime_use_walls = False
-                    self.get_logger().warn("Temporarily disabled wall constraints due to repeated planner failures")
-                    self.consecutive_planner_failures = 0
 
         if self.last_request_for_viz is not None and self.last_pose_for_viz is not None and self.last_wheels_for_viz is not None:
             predicted_traj, mpc_debug = self._predict_mpc_trajectory(
