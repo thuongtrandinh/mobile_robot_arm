@@ -12,6 +12,8 @@
   */
 #include "mpc.h"
 
+#include <limits>
+
 namespace robot_plann {
 
 MpcReturn Mpc::RunMpc(const JointState &state, 
@@ -251,6 +253,62 @@ int Mpc::SolveMpc(const Eigen::MatrixXd &A, const Eigen::MatrixXd &b,
   const double wheel_half_track = params_->wheel_half_track;
   const double max_linear_vel = params_->max_linear_vel;
   const double max_linear_acc = params_->max_linear_acc;
+  const int solver_max_iter = std::max(20, params_->solver_max_iter);
+  const double solver_max_cpu_time = std::max(1e-3, params_->solver_max_cpu_time);
+  const double polygon_clearance =
+      std::max(0.0, static_cast<double>(kInflationRadius) + params_->polygon_clearance_margin);
+  const bool use_two_wall_constraints = (walls.size() == 2);
+  bool apply_wall_constraints = false;
+  if (use_two_wall_constraints) {
+    const auto &w0 = walls.at(0);
+    const auto &w1 = walls.at(1);
+
+    const double d0x = w0.second.x - w0.first.x;
+    const double d0y = w0.second.y - w0.first.y;
+    const double d1x = w1.second.x - w1.first.x;
+    const double d1y = w1.second.y - w1.first.y;
+    const double n0 = std::hypot(d0x, d0y);
+    const double n1 = std::hypot(d1x, d1y);
+
+    if (n0 > 1e-6 && n1 > 1e-6) {
+      const double cross = std::abs((d0x / n0) * (d1y / n1) - (d0y / n0) * (d1x / n1));
+      const bool near_parallel = cross <= 0.30;  // ~17 deg
+
+      const double rx = init_guess.front().xk.X;
+      const double ry = init_guess.front().xk.Y;
+      const auto point_line_dist = [](double px, double py, const Wall &w) {
+        const double dx = w.second.x - w.first.x;
+        const double dy = w.second.y - w.first.y;
+        const double den = std::hypot(dx, dy);
+        if (den <= 1e-6) {
+          return std::numeric_limits<double>::infinity();
+        }
+        return std::abs(dy * px - dx * py + w.second.x * w.first.y - w.second.y * w.first.x) /
+               den;
+      };
+
+      const double d0 = point_line_dist(rx, ry, w0);
+      const double d1 = point_line_dist(rx, ry, w1);
+      const double near_dist = std::min(d0, d1);
+      apply_wall_constraints =
+          near_parallel &&
+          (near_dist <= std::max(0.0, params_->wall_constraint_activation_distance));
+
+      static bool warned_skip_wall = false;
+      if (!apply_wall_constraints && !warned_skip_wall) {
+        warned_skip_wall = true;
+        std::cout << "MPC wall constraints skipped: near_parallel=" << near_parallel
+                  << " near_dist=" << near_dist
+                  << " activation=" << params_->wall_constraint_activation_distance << std::endl;
+      }
+    }
+  }
+  static bool warned_wall_count = false;
+  if (!walls.empty() && !use_two_wall_constraints && !warned_wall_count) {
+    warned_wall_count = true;
+    std::cout << "MPC wall constraints disabled: expected 2 walls but got "
+              << walls.size() << std::endl;
+  }
 
   // define variables
   const int ext_state_num = var_idx.state_var_num + var_idx.obst_dual_num;
@@ -308,10 +366,7 @@ int Mpc::SolveMpc(const Eigen::MatrixXd &A, const Eigen::MatrixXd &b,
   for (int k = 0; k < np; k++) {
     // left walls right_up to left_down
     // right walls left_down to right_up
-    if (!walls.empty()) {
-      if (walls.size() != 2) {
-        return 1;
-      }
+    if (apply_wall_constraints) {
       for (int l = 0; l < 2; ++l) {
         const Wall &wall = walls.at(l);
         const double sx = wall.first.x;
@@ -380,8 +435,7 @@ int Mpc::SolveMpc(const Eigen::MatrixXd &A, const Eigen::MatrixXd &b,
       opti.subject_to((pow(norm_vec(0), 2) + pow(norm_vec(1), 2)) == 1.0);  // dual_norm(A'*lambda_k) == 1
       opti.subject_to(
         mtimes((mtimes(AOb, pk) - bOb).T(), lk) + U(2, k) >= 
-        // kInflationRadius + 0.11);  // (A*p_k - b)'*lambda_k > -s_k
-        kInflationRadius + 0.1);  // (A*p_k - b)'*lambda_k > -s_k
+        polygon_clearance);  // (A*p_k - b)'*lambda_k > -s_k
       
       for (int i = 0; i < var_idx.obst_dual_num; i++) {
         opti.subject_to(lk(i) >= 0.0);  // lambda_k >= 0
@@ -402,10 +456,10 @@ int Mpc::SolveMpc(const Eigen::MatrixXd &A, const Eigen::MatrixXd &b,
   ipopt_opts["print_level"] = 0;
   ipopt_opts["linear_solver"] = "mumps";
   // ipopt_opts["hessian_approximation"] = "limited-memory";
-  ipopt_opts["max_iter"] = 120;
+  ipopt_opts["max_iter"] = solver_max_iter;
   ipopt_opts["tol"] = 5e-4;
   ipopt_opts["warm_start_init_point"] = "yes";
-  ipopt_opts["max_cpu_time"] = 0.03;
+  ipopt_opts["max_cpu_time"] = solver_max_cpu_time;
 
 
   casadi::Dict nlp_opts;

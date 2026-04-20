@@ -4,8 +4,8 @@ opt_planner:
     mpc.horizon_steps: 10
     # MPC discretization timestep [s] -> MPC frequency = 1 / dt
     mpc.dt: 0.25
-    mpc.max_linear_vel: 0.5
-    mpc.max_angular_vel: 0.5
+    mpc.max_linear_vel: 0.4
+    mpc.max_angular_vel: 0.4
     mpc.max_linear_acc: 1.0
     mpc.max_angular_acc: 1.0
     # Half distance between wheels used in v/w <-> wheel constraints
@@ -35,8 +35,8 @@ opt_planner:
     # Force zero cmd_vel when distance(robot, goal) <= this threshold [m]
     planner.goal_stop_distance: 0.1
     planner.cmd_topic: /diff_cont/cmd_vel
-    planner.cmd_max_linear_speed: 1.0
-    planner.cmd_max_angular_speed: 3.0
+    planner.cmd_max_linear_speed: 0.4
+    planner.cmd_max_angular_speed: 0.4
 
 rl_ocp_policy_bridge:
   ros__parameters:

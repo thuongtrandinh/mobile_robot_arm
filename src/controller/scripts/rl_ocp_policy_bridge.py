@@ -18,6 +18,7 @@ from nav_msgs.msg import OccupancyGrid, Odometry
 from rcl_interfaces.msg import SetParametersResult
 from rclpy.duration import Duration
 from rclpy.node import Node
+from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from rclpy.time import Time
 from sensor_msgs.msg import LaserScan
 from std_msgs.msg import String
@@ -67,6 +68,13 @@ class RlOcpPolicyBridge(Node):
         self.declare_parameter("map_geometry_poly_epsilon_ratio", 0.02)
         self.declare_parameter("map_geometry_wall_linearity_ratio", 20.0)
         self.declare_parameter("map_geometry_wall_linearity_span", 0.50)
+        self.declare_parameter("map_geometry_boundary_span_threshold", 2.5)
+        self.declare_parameter("map_geometry_wall_min_segment_length", 0.35)
+        self.declare_parameter("map_geometry_wall_merge_angle_deg", 12.0)
+        self.declare_parameter("map_geometry_boundary_edge_margin_px", 8)
+        self.declare_parameter("map_geometry_boundary_area_ratio", 0.25)
+        self.declare_parameter("map_geometry_debug_log", True)
+        self.declare_parameter("map_geometry_debug_period_sec", 2.0)
         self.declare_parameter("visualize_actions", True)
         self.declare_parameter("action_marker_topic", "/policy/action_markers")
         self.declare_parameter("action_marker_frame", "odom")
@@ -138,6 +146,26 @@ class RlOcpPolicyBridge(Node):
         self.map_geometry_wall_linearity_span = float(
             self.get_parameter("map_geometry_wall_linearity_span").get_parameter_value().double_value
         )
+        self.map_geometry_boundary_span_threshold = float(
+            self.get_parameter("map_geometry_boundary_span_threshold").get_parameter_value().double_value
+        )
+        self.map_geometry_wall_min_segment_length = float(
+            self.get_parameter("map_geometry_wall_min_segment_length").get_parameter_value().double_value
+        )
+        self.map_geometry_wall_merge_angle_deg = float(
+            self.get_parameter("map_geometry_wall_merge_angle_deg").get_parameter_value().double_value
+        )
+        self.map_geometry_boundary_edge_margin_px = int(
+            self.get_parameter("map_geometry_boundary_edge_margin_px").get_parameter_value().integer_value
+        )
+        self.map_geometry_boundary_area_ratio = float(
+            self.get_parameter("map_geometry_boundary_area_ratio").get_parameter_value().double_value
+        )
+        self.map_geometry_debug_log = self.get_parameter("map_geometry_debug_log").get_parameter_value().bool_value
+        self.map_geometry_debug_period_sec = max(
+            0.1,
+            self.get_parameter("map_geometry_debug_period_sec").get_parameter_value().double_value,
+        )
         self.visualize_actions = self.get_parameter("visualize_actions").get_parameter_value().bool_value
         self.action_marker_topic = self.get_parameter("action_marker_topic").get_parameter_value().string_value
         self.action_marker_frame = self.get_parameter("action_marker_frame").get_parameter_value().string_value
@@ -162,6 +190,7 @@ class RlOcpPolicyBridge(Node):
         self.current_pose: Optional[Tuple[float, float, float]] = None
         self.current_twist: Optional[Tuple[float, float]] = None
         self.current_goal: Optional[Tuple[float, float]] = None
+        self.current_goal_frame: str = ""
         self.latest_scan: Optional[LaserScan] = None
         self.map_bounds: Optional[Tuple[float, float, float, float]] = None
         self.map_resolution: Optional[float] = None
@@ -172,8 +201,13 @@ class RlOcpPolicyBridge(Node):
         self.map_data: Optional[List[int]] = None
         self.map_occupancy_threshold: int = 50
         self.pose_frame: str = ""
+        self._has_received_map = False
         self.map_geometry_polygons: List[List[Tuple[float, float]]] = []
         self.map_geometry_walls: List[Tuple[float, float, float, float]] = []
+        self.last_sent_map_polygons_count = 0
+        self.last_sent_map_walls_count = 0
+        self._last_map_geometry_log_ns = 0
+        self._last_sent_geometry_log_ns = 0
 
         # Keep Python-side request geometry aligned with hard-coded C++ planner map limits.
         self.planner_x_limit = 5.5
@@ -193,6 +227,8 @@ class RlOcpPolicyBridge(Node):
         self.goal_reached = False
         self.prev_predicted_traj: Optional[List[Tuple[float, float]]] = None
         self.last_stability_delta_rms = 0.0
+        self.last_mask_applied = False
+        self.last_mask_snap_distance = 0.0
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
         self.cv2 = None
@@ -206,7 +242,13 @@ class RlOcpPolicyBridge(Node):
         self.create_subscription(Odometry, self.odom_topic, self._odom_callback, 10)
         self.create_subscription(LaserScan, self.scan_topic, self._scan_callback, 10)
         self.create_subscription(PoseStamped, self.goal_topic, self._goal_callback, 10)
-        self.create_subscription(OccupancyGrid, self.map_topic, self._map_callback, 10)
+        map_qos = QoSProfile(
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+        )
+        self.create_subscription(OccupancyGrid, self.map_topic, self._map_callback, map_qos)
 
         self.debug_joint_state_pub = self.create_publisher(InterfaceJointState, self.debug_joint_state_topic, 10)
         self.policy_debug_status_pub = self.create_publisher(String, self.policy_debug_status_topic, 10)
@@ -293,6 +335,24 @@ class RlOcpPolicyBridge(Node):
                 self.mpc_horizon_steps = max(1, int(p.value))
             elif p.name == "mpc_stability_warn_threshold":
                 self.mpc_stability_warn_threshold = max(0.0, float(p.value))
+            elif p.name == "map_geometry_obstacle_threshold":
+                self.map_geometry_obstacle_threshold = int(p.value)
+            elif p.name == "map_geometry_poly_epsilon_ratio":
+                self.map_geometry_poly_epsilon_ratio = float(p.value)
+            elif p.name == "map_geometry_wall_linearity_ratio":
+                self.map_geometry_wall_linearity_ratio = float(p.value)
+            elif p.name == "map_geometry_wall_linearity_span":
+                self.map_geometry_wall_linearity_span = float(p.value)
+            elif p.name == "map_geometry_boundary_span_threshold":
+                self.map_geometry_boundary_span_threshold = max(0.1, float(p.value))
+            elif p.name == "map_geometry_wall_min_segment_length":
+                self.map_geometry_wall_min_segment_length = max(0.01, float(p.value))
+            elif p.name == "map_geometry_wall_merge_angle_deg":
+                self.map_geometry_wall_merge_angle_deg = max(0.1, float(p.value))
+            elif p.name == "map_geometry_boundary_edge_margin_px":
+                self.map_geometry_boundary_edge_margin_px = max(0, int(p.value))
+            elif p.name == "map_geometry_boundary_area_ratio":
+                self.map_geometry_boundary_area_ratio = max(0.01, min(1.0, float(p.value)))
 
         if update_effective_bounds:
             self.effective_half_width = min(self.planner_half_width, self.planner_hard_half_width)
@@ -391,6 +451,7 @@ class RlOcpPolicyBridge(Node):
 
     def _goal_callback(self, msg: PoseStamped) -> None:
         self.current_goal = (msg.pose.position.x, msg.pose.position.y)
+        self.current_goal_frame = msg.header.frame_id if msg.header.frame_id else self.current_goal_frame
 
     def _map_callback(self, msg: OccupancyGrid) -> None:
         if msg.header.frame_id:
@@ -406,6 +467,20 @@ class RlOcpPolicyBridge(Node):
         self.map_origin_x = float(origin_x)
         self.map_origin_y = float(origin_y)
         self.map_data = list(msg.data)
+
+        if not self._has_received_map:
+            self._has_received_map = True
+            self.get_logger().info(
+                "Received map: frame=%s size=%dx%d res=%.3f origin=(%.2f, %.2f)"
+                % (
+                    str(self.map_frame),
+                    int(self.map_width),
+                    int(self.map_height),
+                    float(self.map_resolution),
+                    float(self.map_origin_x),
+                    float(self.map_origin_y),
+                )
+            )
 
         if msg.info.width == 0 or msg.info.height == 0:
             self.map_geometry_polygons = []
@@ -425,6 +500,10 @@ class RlOcpPolicyBridge(Node):
 
         polygons: List[List[Tuple[float, float]]] = []
         walls: List[Tuple[float, float, float, float]] = []
+        boundary_contours = 0
+        boundary_walls = 0
+        inner_large_polygons = 0
+        map_area_px = max(1.0, float(self.map_width * self.map_height))
         for contour in contours:
             peri = self.cv2.arcLength(contour, True)
             eps = self.map_geometry_poly_epsilon_ratio * peri
@@ -439,15 +518,66 @@ class RlOcpPolicyBridge(Node):
                 x_m, y_m = self._pixel_to_meter(u, v)
                 poly_pts.append((x_m, y_m))
 
+            arr = np.array(poly_pts, dtype=np.float64)
+            diffs = arr[:, None, :] - arr[None, :, :]
+            dists = np.linalg.norm(diffs, axis=2)
+            span = float(np.max(dists)) if dists.size > 0 else 0.0
+            contour_area = float(self.cv2.contourArea(contour))
+            area_ratio = contour_area / map_area_px
+
             if self._is_wall_like_geometry(poly_pts):
                 wall = self._wall_segment_from_points(poly_pts)
                 if wall is not None:
                     walls.append(wall)
-            elif len(poly_pts) >= 3:
+                continue
+
+            if span > self.map_geometry_boundary_span_threshold:
+                if self._is_map_boundary_contour(contour, area_ratio):
+                    # Boundary contour should define corridor walls; force a stable 4-edge representation.
+                    boundary_contours += 1
+                    loop_walls = self._rectangle_walls_from_contour(contour)
+                    if not loop_walls:
+                        loop_walls = self._simplify_wall_loop(poly_pts)
+                    boundary_walls += len(loop_walls)
+                    walls.extend(loop_walls)
+                elif len(poly_pts) >= 3:
+                    # Large non-boundary contours are interior structures; keep as polygons.
+                    inner_large_polygons += 1
+                    polygons.append(poly_pts)
+                continue
+
+            if len(poly_pts) >= 3:
                 polygons.append(poly_pts)
 
         self.map_geometry_polygons = polygons
         self.map_geometry_walls = walls
+
+        if self.map_geometry_debug_log:
+            obstacle_cells = int(np.count_nonzero(obstacle_img))
+            self._throttled_log(
+                "_last_map_geometry_log_ns",
+                self.map_geometry_debug_period_sec,
+                "[map_geometry/raw] obstacle_cells=%d contours=%d walls=%d polygons=%d"
+                % (
+                    obstacle_cells,
+                    int(len(contours)),
+                    int(len(walls)),
+                    int(len(polygons)),
+                ),
+            )
+            if boundary_contours > 0 or inner_large_polygons > 0:
+                self._throttled_log(
+                    "_last_map_geometry_log_ns",
+                    self.map_geometry_debug_period_sec,
+                    "[map_geometry/classify] boundary_contours=%d boundary_walls=%d inner_large_polygons=%d edge_margin_px=%d area_ratio=%.2f"
+                    % (
+                        int(boundary_contours),
+                        int(boundary_walls),
+                        int(inner_large_polygons),
+                        int(self.map_geometry_boundary_edge_margin_px),
+                        float(self.map_geometry_boundary_area_ratio),
+                    ),
+                )
 
     def _pixel_to_meter(self, u: int, v: int) -> Tuple[float, float]:
         row_occ = self.map_height - 1 - v
@@ -495,11 +625,165 @@ class RlOcpPolicyBridge(Node):
         p2 = arr[max_idx[1]]
         return (float(p1[0]), float(p1[1]), float(p2[0]), float(p2[1]))
 
+    @staticmethod
+    def _segment_length(sx: float, sy: float, ex: float, ey: float) -> float:
+        return math.hypot(float(ex) - float(sx), float(ey) - float(sy))
+
+    def _is_map_boundary_contour(self, contour, area_ratio: float) -> bool:
+        if contour is None or len(contour) == 0:
+            return False
+
+        margin = max(0, int(self.map_geometry_boundary_edge_margin_px))
+        x, y, w, h = self.cv2.boundingRect(contour)
+        near_left = x <= margin
+        near_top = y <= margin
+        near_right = (x + w) >= (self.map_width - 1 - margin)
+        near_bottom = (y + h) >= (self.map_height - 1 - margin)
+        touch_count = int(near_left) + int(near_top) + int(near_right) + int(near_bottom)
+
+        if touch_count >= 2:
+            return True
+        if area_ratio >= float(self.map_geometry_boundary_area_ratio):
+            return True
+        return False
+
+    def _rectangle_walls_from_contour(self, contour) -> List[Tuple[float, float, float, float]]:
+        if contour is None or len(contour) < 2:
+            return []
+
+        rect = self.cv2.minAreaRect(contour)
+        box = self.cv2.boxPoints(rect)
+        if box is None or len(box) != 4:
+            return []
+
+        pts: List[Tuple[float, float]] = []
+        for p in box:
+            u = int(round(float(p[0])))
+            v = int(round(float(p[1])))
+            x_m, y_m = self._pixel_to_meter(u, v)
+            pts.append((float(x_m), float(y_m)))
+
+        walls: List[Tuple[float, float, float, float]] = []
+        min_len = max(0.01, float(self.map_geometry_wall_min_segment_length))
+        for i in range(4):
+            sx, sy = pts[i]
+            ex, ey = pts[(i + 1) % 4]
+            if self._segment_length(sx, sy, ex, ey) < min_len:
+                continue
+            walls.append((sx, sy, ex, ey))
+        return walls
+
+    def _simplify_wall_loop(
+        self,
+        points: List[Tuple[float, float]],
+    ) -> List[Tuple[float, float, float, float]]:
+        if len(points) < 2:
+            return []
+
+        min_len = max(0.01, float(self.map_geometry_wall_min_segment_length))
+        merge_angle_deg = max(0.1, float(self.map_geometry_wall_merge_angle_deg))
+        angle_thr = math.radians(merge_angle_deg)
+
+        loop: List[Tuple[float, float]] = []
+        for x, y in points:
+            if not loop:
+                loop.append((float(x), float(y)))
+                continue
+            px, py = loop[-1]
+            if self._segment_length(px, py, x, y) < 1e-3:
+                continue
+            loop.append((float(x), float(y)))
+
+        if len(loop) < 2:
+            return []
+
+        changed = True
+        max_iter = max(8, len(loop) * 2)
+        iter_count = 0
+        while changed and len(loop) > 3 and iter_count < max_iter:
+            changed = False
+            iter_count += 1
+            n = len(loop)
+            next_loop: List[Tuple[float, float]] = []
+
+            for i in range(n):
+                prev_pt = loop[(i - 1) % n]
+                cur_pt = loop[i]
+                next_pt = loop[(i + 1) % n]
+
+                v1x = cur_pt[0] - prev_pt[0]
+                v1y = cur_pt[1] - prev_pt[1]
+                v2x = next_pt[0] - cur_pt[0]
+                v2y = next_pt[1] - cur_pt[1]
+                l1 = math.hypot(v1x, v1y)
+                l2 = math.hypot(v2x, v2y)
+
+                if l1 < 1e-6 or l2 < 1e-6:
+                    changed = True
+                    continue
+
+                dot = (v1x * v2x + v1y * v2y) / (l1 * l2)
+                dot = max(-1.0, min(1.0, dot))
+                turn = math.acos(dot)
+
+                # Remove middle points on nearly straight runs to prevent over-segmentation.
+                if turn <= angle_thr and dot > 0.0:
+                    changed = True
+                    continue
+
+                next_loop.append(cur_pt)
+
+            if len(next_loop) >= 3:
+                loop = next_loop
+            else:
+                break
+
+        walls: List[Tuple[float, float, float, float]] = []
+        n = len(loop)
+        if n < 2:
+            return walls
+
+        for i in range(n):
+            sx, sy = loop[i]
+            ex, ey = loop[(i + 1) % n]
+            if self._segment_length(sx, sy, ex, ey) < min_len:
+                continue
+            walls.append((float(sx), float(sy), float(ex), float(ey)))
+
+        return walls
+
     def _get_map_geometry_msgs(self) -> Tuple[List[PolyState], List[WallState]]:
+        pose_map = self._current_pose_in_map_frame()
+        if pose_map is None:
+            if self.map_geometry_debug_log:
+                self._throttled_log(
+                    "_last_sent_geometry_log_ns",
+                    self.map_geometry_debug_period_sec,
+                    "[map_geometry/local] skip send: pose_in_map unavailable (pose_frame=%s map_frame=%s)"
+                    % (str(self.pose_frame), str(self.map_frame)),
+                )
+            self.last_sent_map_polygons_count = 0
+            self.last_sent_map_walls_count = 0
+            return [], []
+
+        px_map, py_map = pose_map
+        x_lim = min(self.effective_half_width, self.planner_x_limit)
+        y_lim = min(self.effective_half_height, self.planner_y_limit)
+        footprint_keepout = self.robot_radius + 0.15
+
         poly_states: List[PolyState] = []
         for poly_pts in self.map_geometry_polygons:
             if len(poly_pts) < 3:
                 continue
+
+            centroid_x = float(sum(pt[0] for pt in poly_pts) / len(poly_pts))
+            centroid_y = float(sum(pt[1] for pt in poly_pts) / len(poly_pts))
+            dist = math.hypot(centroid_x - px_map, centroid_y - py_map)
+            if dist < footprint_keepout:
+                continue
+            if abs(centroid_x - px_map) > x_lim or abs(centroid_y - py_map) > y_lim:
+                continue
+
             poly_msg = PolyState()
             poly_msg.is_clockwise = True
             poly_msg.vertices = [PolyPoint(x=float(x), y=float(y)) for x, y in poly_pts]
@@ -507,6 +791,14 @@ class RlOcpPolicyBridge(Node):
 
         walls: List[WallState] = []
         for sx, sy, ex, ey in self.map_geometry_walls:
+            mid_x = 0.5 * (float(sx) + float(ex))
+            mid_y = 0.5 * (float(sy) + float(ey))
+            dist = math.hypot(mid_x - px_map, mid_y - py_map)
+            if dist < footprint_keepout:
+                continue
+            if abs(mid_x - px_map) > x_lim or abs(mid_y - py_map) > y_lim:
+                continue
+
             wall = WallState()
             wall.sx = float(sx)
             wall.sy = float(sy)
@@ -514,7 +806,34 @@ class RlOcpPolicyBridge(Node):
             wall.ey = float(ey)
             walls.append(wall)
 
+        self.last_sent_map_polygons_count = int(len(poly_states))
+        self.last_sent_map_walls_count = int(len(walls))
+        if self.map_geometry_debug_log:
+            self._throttled_log(
+                "_last_sent_geometry_log_ns",
+                self.map_geometry_debug_period_sec,
+                "[map_geometry/local] robot=(%.2f, %.2f) limits=(%.2f, %.2f) kept_walls=%d/%d kept_polygons=%d/%d"
+                % (
+                    float(px_map),
+                    float(py_map),
+                    float(x_lim),
+                    float(y_lim),
+                    int(self.last_sent_map_walls_count),
+                    int(len(self.map_geometry_walls)),
+                    int(self.last_sent_map_polygons_count),
+                    int(len(self.map_geometry_polygons)),
+                ),
+            )
+
         return poly_states, walls
+
+    def _throttled_log(self, stamp_attr: str, period_sec: float, message: str) -> None:
+        now_ns = int(self.get_clock().now().nanoseconds)
+        last_ns = int(getattr(self, stamp_attr, 0))
+        if now_ns - last_ns < int(max(0.1, period_sec) * 1e9):
+            return
+        setattr(self, stamp_attr, now_ns)
+        self.get_logger().info(message)
 
     def _transform_point_2d(
         self,
@@ -559,6 +878,46 @@ class RlOcpPolicyBridge(Node):
             return None
         px, py, _ = self.current_pose
         return self._point_to_map_frame(px, py)
+
+    def _current_pose_with_yaw_in_map_frame(self) -> Optional[Tuple[float, float, float]]:
+        if self.current_pose is None:
+            return None
+
+        px, py, yaw = self.current_pose
+        source_frame = self.pose_frame if self.pose_frame else self.map_frame
+        map_xy = self._transform_point_2d(px, py, source_frame, self.map_frame)
+        if map_xy is None:
+            return None
+
+        if source_frame == self.map_frame:
+            return float(map_xy[0]), float(map_xy[1]), float(yaw)
+
+        try:
+            tf_msg = self.tf_buffer.lookup_transform(
+                self.map_frame,
+                source_frame,
+                Time(),
+                timeout=Duration(seconds=0.05),
+            )
+        except TransformException:
+            return None
+
+        r = tf_msg.transform.rotation
+        tf_yaw = self._yaw_from_quaternion(r.x, r.y, r.z, r.w)
+        yaw_map = float(yaw + tf_yaw)
+        while yaw_map > math.pi:
+            yaw_map -= 2.0 * math.pi
+        while yaw_map < -math.pi:
+            yaw_map += 2.0 * math.pi
+
+        return float(map_xy[0]), float(map_xy[1]), yaw_map
+
+    def _current_goal_in_map_frame(self) -> Optional[Tuple[float, float]]:
+        if self.current_goal is None:
+            return None
+        gx, gy = self.current_goal
+        source_frame = self.current_goal_frame if self.current_goal_frame else self.map_frame
+        return self._transform_point_2d(gx, gy, source_frame, self.map_frame)
 
     def _is_occupied_from_map(self, world_x: float, world_y: float, clearance: float) -> bool:
         if (
@@ -740,10 +1099,51 @@ class RlOcpPolicyBridge(Node):
             return True
 
         for ox, oy, radius in obstacles:
-            if math.hypot(world_x - ox, world_y - oy) < (inflate + radius):
+            # Obstacles are represented in map frame; compare in map frame.
+            if math.hypot(map_x - ox, map_y - oy) < (inflate + radius):
                 return True
 
         return False
+
+    def _apply_action_mask_to_sub_goal(
+        self,
+        sub_goal_map: Tuple[float, float],
+    ) -> Tuple[Tuple[float, float], bool, float]:
+        """Project sub-goal onto the nearest valid discrete action in map frame."""
+        candidates = self._generate_action_candidates()
+        if not candidates:
+            return sub_goal_map, False, 0.0
+
+        dynamic_obstacles = self._scan_only_obstacle_tuples()
+        static_obstacles = self._map_to_obstacle_tuples()
+        obstacles = dynamic_obstacles + static_obstacles
+
+        best_valid: Optional[Tuple[float, float]] = None
+        best_dist = float("inf")
+
+        for lx, ly, wx, wy in candidates:
+            if self._is_action_masked(lx, ly, wx, wy, obstacles):
+                continue
+            map_xy = self._point_to_map_frame(wx, wy)
+            if map_xy is None:
+                continue
+            cx, cy = map_xy
+            dist = math.hypot(float(sub_goal_map[0]) - cx, float(sub_goal_map[1]) - cy)
+            if dist < best_dist:
+                best_dist = dist
+                best_valid = (float(cx), float(cy))
+
+        if best_valid is None:
+            robot_map = self._current_pose_in_map_frame()
+            if robot_map is not None:
+                fallback = (float(robot_map[0]), float(robot_map[1]))
+                snap_dist = math.hypot(float(sub_goal_map[0]) - fallback[0], float(sub_goal_map[1]) - fallback[1])
+                return fallback, True, float(snap_dist)
+            return sub_goal_map, True, 0.0
+
+        snap_dist = math.hypot(float(sub_goal_map[0]) - best_valid[0], float(sub_goal_map[1]) - best_valid[1])
+        applied = bool(snap_dist > 1e-3)
+        return best_valid, applied, float(snap_dist)
 
     def _publish_action_visualization(self, selected_sub_goal: Optional[Tuple[float, float]]) -> None:
         if self.current_pose is None:
@@ -765,7 +1165,10 @@ class RlOcpPolicyBridge(Node):
                 valid_points.append((float(wx), float(wy)))
 
             if selected_sub_goal is not None:
-                dist = math.hypot(selected_sub_goal[0] - wx, selected_sub_goal[1] - wy)
+                cand_map = self._point_to_map_frame(wx, wy)
+                if cand_map is None:
+                    continue
+                dist = math.hypot(selected_sub_goal[0] - cand_map[0], selected_sub_goal[1] - cand_map[1])
                 if dist < best_dist:
                     best_dist = dist
                     closest_selected = (wx, wy)
@@ -781,6 +1184,8 @@ class RlOcpPolicyBridge(Node):
                 "static_count": len(static_obstacles),
                 "map_walls_count": len(self.map_geometry_walls),
                 "map_polygons_count": len(self.map_geometry_polygons),
+                "map_local_walls_count": int(self.last_sent_map_walls_count),
+                "map_local_polygons_count": int(self.last_sent_map_polygons_count),
                 "planner_fail_streak": int(self.consecutive_planner_failures),
                 "policy_hz": float(1.0 / self.policy_period),
                 "mpc_hz": float(1.0 / self.mpc_period),
@@ -788,6 +1193,8 @@ class RlOcpPolicyBridge(Node):
                 "cached_sub_goal": list(self.latest_sub_goal) if self.latest_sub_goal is not None else None,
                 "cached_sub_goal_seq": int(self.latest_sub_goal_seq),
                 "goal_reached": bool(self.goal_reached),
+                "mask_applied": bool(self.last_mask_applied),
+                "mask_snap_distance": float(self.last_mask_snap_distance),
             }
             msg = String()
             msg.data = json.dumps(status)
@@ -857,8 +1264,13 @@ class RlOcpPolicyBridge(Node):
         if self.current_pose is None or self.current_twist is None or self.current_goal is None:
             return None
 
-        px, py, yaw = self.current_pose
-        gx, gy = self.current_goal
+        pose_map = self._current_pose_with_yaw_in_map_frame()
+        goal_map = self._current_goal_in_map_frame()
+        if pose_map is None or goal_map is None:
+            return None
+
+        px, py, yaw = pose_map
+        gx, gy = goal_map
 
         wheel_speeds = self._wheel_speeds_from_twist()
         if wheel_speeds is None:
@@ -886,8 +1298,19 @@ class RlOcpPolicyBridge(Node):
             self.get_logger().warn(f"Service {self.planner_service} not available")
             return
 
-        px, py, yaw = self.current_pose
-        gx, gy = self.current_goal
+        pose_map = self._current_pose_with_yaw_in_map_frame()
+        goal_map = self._current_goal_in_map_frame()
+        if pose_map is None or goal_map is None:
+            self._throttled_log(
+                "_last_request_wait_tf_log_ns",
+                2.0,
+                "[planner_request] waiting TF for pose/goal -> map (pose_frame=%s goal_frame=%s map_frame=%s)"
+                % (str(self.pose_frame), str(self.current_goal_frame), str(self.map_frame)),
+            )
+            return
+
+        px, py, yaw = pose_map
+        gx, gy = goal_map
         wheel_speeds = self._wheel_speeds_from_twist()
         if wheel_speeds is None:
             return
@@ -1120,10 +1543,35 @@ class RlOcpPolicyBridge(Node):
             return
 
         if self.current_pose is None or self.current_goal is None:
+            self._throttled_log(
+                "_last_policy_wait_log_ns",
+                2.0,
+                "[policy_loop] waiting pose/goal (pose=%s goal=%s)"
+                % (str(self.current_pose is not None), str(self.current_goal is not None)),
+            )
             return
 
-        px, py, _ = self.current_pose
-        gx, gy = self.current_goal
+        if self.map_data is None:
+            self._throttled_log(
+                "_last_policy_wait_map_log_ns",
+                2.0,
+                "[policy_loop] waiting map data on topic %s (OpenCV extraction not started yet)"
+                % str(self.map_topic),
+            )
+            return
+
+        pose_map = self._current_pose_in_map_frame()
+        goal_map = self._current_goal_in_map_frame()
+        if pose_map is None or goal_map is None:
+            self._throttled_log(
+                "_last_policy_wait_tf_log_ns",
+                2.0,
+                "[policy_loop] waiting TF for pose/goal -> map",
+            )
+            return
+
+        px, py = pose_map
+        gx, gy = goal_map
         if math.hypot(gx - px, gy - py) < self.goal_tolerance:
             self.goal_reached = True
             self.latest_sub_goal = None
@@ -1139,18 +1587,46 @@ class RlOcpPolicyBridge(Node):
             if sub_goal is None:
                 self._publish_action_visualization(None)
                 return
-            self.latest_sub_goal = sub_goal
+            masked_sub_goal, mask_applied, snap_dist = self._apply_action_mask_to_sub_goal(sub_goal)
+            self.last_mask_applied = bool(mask_applied)
+            self.last_mask_snap_distance = float(snap_dist)
+            self.latest_sub_goal = masked_sub_goal
             self.latest_sub_goal_seq += 1
-            self._publish_action_visualization(sub_goal)
+            self._publish_action_visualization(masked_sub_goal)
         except Exception as exc:
             self.get_logger().error(f"Policy loop failed: {exc}")
 
     def _planner_loop(self) -> None:
         if self.current_pose is None or self.current_goal is None:
+            self._throttled_log(
+                "_last_planner_wait_log_ns",
+                2.0,
+                "[planner_loop] waiting pose/goal (pose=%s goal=%s)"
+                % (str(self.current_pose is not None), str(self.current_goal is not None)),
+            )
             return
 
-        px, py, _ = self.current_pose
-        gx, gy = self.current_goal
+        if self.map_data is None:
+            self._throttled_log(
+                "_last_planner_wait_map_log_ns",
+                2.0,
+                "[planner_loop] waiting map data on topic %s"
+                % str(self.map_topic),
+            )
+            return
+
+        pose_map_with_yaw = self._current_pose_with_yaw_in_map_frame()
+        goal_map = self._current_goal_in_map_frame()
+        if pose_map_with_yaw is None or goal_map is None:
+            self._throttled_log(
+                "_last_planner_wait_tf_log_ns",
+                2.0,
+                "[planner_loop] waiting TF for pose/goal -> map",
+            )
+            return
+
+        px, py, _ = pose_map_with_yaw
+        gx, gy = goal_map
         if math.hypot(gx - px, gy - py) < self.goal_tolerance:
             self.goal_reached = True
             # In cascaded mode, keep sending state updates so the C++ planner can
@@ -1167,6 +1643,11 @@ class RlOcpPolicyBridge(Node):
             return
 
         if self.latest_sub_goal is None:
+            self._throttled_log(
+                "_last_planner_wait_subgoal_log_ns",
+                2.0,
+                "[planner_loop] waiting latest_sub_goal from policy worker",
+            )
             return
 
         if self.last_requested_sub_goal_seq >= self.latest_sub_goal_seq:

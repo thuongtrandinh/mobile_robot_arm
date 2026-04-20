@@ -215,6 +215,18 @@ MpcReturn Planner::SolveMpcFromCachedReference(const JointState &state) {
 
   auto mpc_return = ocp_planner_->RunMpc(revised_state, final_path);
 
+  if (!mpc_return.success) {
+    // Keep robot moving toward goal when NLP is temporarily infeasible.
+    auto fallback_stages = MpcStages();
+    Eigen::Vector2d pid_acc = this->PidCalc(revised_state);
+    fallback_stages[0].uk.acc = pid_acc(0);
+    fallback_stages[0].uk.dr = pid_acc(1);
+    if (!move_forward_) {
+      fallback_stages[0].uk.acc = -fallback_stages[0].uk.acc;
+    }
+    return {fallback_stages, true};
+  }
+
   // std::cout << "===" << std::endl;
   if (visual_flag_) {
     for (int i = 0; i < final_path.size(); i++) {
@@ -272,7 +284,7 @@ bool Planner::CheckAround(Eigen::Vector2d &pos) {
     while (++pixel.x < cost_map_.cols) {
       if (255 - cost_map_.at<u_char>(pixel.y, pixel.x) <= 250) {
         pos = ImgIdx2MapCoord(pixel);
-        if (verbose_ >=1) std::cout << "Escape from x right!" << std::endl;
+        if (verbose_ >= 3) std::cout << "Escape from x right!" << std::endl;
         return true;
       }
     }
@@ -280,7 +292,7 @@ bool Planner::CheckAround(Eigen::Vector2d &pos) {
     while (--pixel.y > 0) {
       if (255 - cost_map_.at<u_char>(pixel.y, pixel.x) <= 250) {
         pos = ImgIdx2MapCoord(pixel);
-        if (verbose_ >=1) std::cout << "Escape from y up!" << std::endl;
+        if (verbose_ >= 3) std::cout << "Escape from y up!" << std::endl;
         return true;
       }      
     }
@@ -288,7 +300,7 @@ bool Planner::CheckAround(Eigen::Vector2d &pos) {
     while (--pixel.x > 0) {
       if (255 - cost_map_.at<u_char>(pixel.y, pixel.x) <= 250) {
         pos = ImgIdx2MapCoord(pixel);
-        if (verbose_ >=1) std::cout << "Escape from x left!" << std::endl;
+        if (verbose_ >= 3) std::cout << "Escape from x left!" << std::endl;
         return true;
       }      
     }
@@ -296,7 +308,7 @@ bool Planner::CheckAround(Eigen::Vector2d &pos) {
     while (++pixel.y < cost_map_.rows) {
       if (255 - cost_map_.at<u_char>(pixel.y, pixel.x) <= 250) {
         pos = ImgIdx2MapCoord(pixel);
-        if (verbose_ >=1) std::cout << "Escape from y down!" << std::endl;
+        if (verbose_ >= 3) std::cout << "Escape from y down!" << std::endl;
         return true;
       }      
     }
@@ -433,13 +445,28 @@ void Planner::UpdateCostMap(const JointState &state) {
   cost_map_ = map_.clone();
   std::size_t skipped_invalid_points = 0;
 
+  // Clip walls against the local sliding window to keep both endpoints valid.
+  const double half_w = (cost_map_.cols / 2.0) * kMapResol;
+  const double half_h = (cost_map_.rows / 2.0) * kMapResol;
+  const double x_min = window_center_x_ - half_w + 0.02;
+  const double x_max = window_center_x_ + half_w - 0.02;
+  const double y_min = window_center_y_ - half_h + 0.02;
+  const double y_max = window_center_y_ + half_h - 0.02;
+
   for (const auto &wall : state.walls) {
-    try {
-      cv::Point p1 = MapCoord2ImgIdx({wall.first.x, wall.first.y});
-      cv::Point p2 = MapCoord2ImgIdx({wall.second.x, wall.second.y});
-      cv::line(cost_map_, p1, p2, cv::Scalar(0), 1);
-    } catch (const std::string &) {
-      skipped_invalid_points++;
+    double x1 = wall.first.x;
+    double y1 = wall.first.y;
+    double x2 = wall.second.x;
+    double y2 = wall.second.y;
+
+    if (ClipLine(x1, y1, x2, y2, x_min, x_max, y_min, y_max)) {
+      try {
+        cv::Point p1 = MapCoord2ImgIdx({x1, y1});
+        cv::Point p2 = MapCoord2ImgIdx({x2, y2});
+        cv::line(cost_map_, p1, p2, cv::Scalar(0), 1);
+      } catch (const std::string &) {
+        skipped_invalid_points++;
+      }
     }
   }
 
@@ -466,7 +493,7 @@ void Planner::UpdateCostMap(const JointState &state) {
     }
   }
 
-  if (verbose_ >= 1 && skipped_invalid_points > 0) {
+  if (verbose_ >= 2 && skipped_invalid_points > 0) {
     std::cout << "Skip " << skipped_invalid_points
               << " invalid map points in UpdateCostMap" << std::endl;
   }
@@ -665,58 +692,76 @@ void Planner::PybindInputDataChange(const robot_plann::MPCInputForPython& input,
 
   ob_state.walls.clear();
   for (const auto &input_wall : input.ob.walls) {
-    Wall wall = ClipWall(input_wall.sx, input_wall.sy, input_wall.ex, input_wall.ey, -5.5, 5.5);
-
+    Wall wall;
+    wall.first.x = input_wall.sx;
+    wall.first.y = input_wall.sy;
+    wall.second.x = input_wall.ex;
+    wall.second.y = input_wall.ey;
     ob_state.walls.push_back(wall);
   }
 
 }
 
-Wall Planner::ClipWall(double x1, double y1, double x2, double y2, double x_min, double x_max) {
-    Wall ans;
-    bool swap_flag = false;
-    if (x1 > x2) {
-      std::swap(x1, x2);
-      std::swap(y1, y2);
-      swap_flag = true;
+// Cohen-Sutherland line clipping against an axis-aligned box.
+bool Planner::ClipLine(double &x1, double &y1, double &x2, double &y2,
+                       double x_min, double x_max, double y_min,
+                       double y_max) {
+  auto compute_outcode = [&](double x, double y) {
+    int code = 0;
+    if (x < x_min) code |= 1;       // LEFT
+    else if (x > x_max) code |= 2;  // RIGHT
+    if (y < y_min) code |= 4;       // BOTTOM
+    else if (y > y_max) code |= 8;  // TOP
+    return code;
+  };
+
+  int outcode1 = compute_outcode(x1, y1);
+  int outcode2 = compute_outcode(x2, y2);
+
+  while (true) {
+    if (!(outcode1 | outcode2)) {
+      return true;
+    }
+    if (outcode1 & outcode2) {
+      return false;
     }
 
-    if (x2 < x_min || x1 > x_max) {
-        std::cerr << "===error wall===" << std::endl;
-        return ans;
-    }
+    const int outcode_out = outcode1 ? outcode1 : outcode2;
+    double x = 0.0;
+    double y = 0.0;
 
-    double slope = 0;
-    if (x1 != x2) {
-        slope = (y2 - y1) / (x2 - x1);
+    if (outcode_out & 8) {
+      const double dy = y2 - y1;
+      if (std::abs(dy) < 1e-12) return false;
+      x = x1 + (x2 - x1) * (y_max - y1) / dy;
+      y = y_max;
+    } else if (outcode_out & 4) {
+      const double dy = y2 - y1;
+      if (std::abs(dy) < 1e-12) return false;
+      x = x1 + (x2 - x1) * (y_min - y1) / dy;
+      y = y_min;
+    } else if (outcode_out & 2) {
+      const double dx = x2 - x1;
+      if (std::abs(dx) < 1e-12) return false;
+      y = y1 + (y2 - y1) * (x_max - x1) / dx;
+      x = x_max;
     } else {
-      if (x1 < x_min || x1 > x_max) {
-        std::cerr << "===error wall===" << std::endl;
-        return ans;
-      } else {
-        ans.first.x = swap_flag ? x2 : x1;
-        ans.first.y = swap_flag ? y2 : y1;
-        ans.second.x = swap_flag ? x1 : x2;
-        ans.second.y = swap_flag ? y1 : y2;
-        return ans;
-      }
+      const double dx = x2 - x1;
+      if (std::abs(dx) < 1e-12) return false;
+      y = y1 + (y2 - y1) * (x_min - x1) / dx;
+      x = x_min;
     }
 
-    if (x1 < x_min) {
-        y1 = y1 + slope * (x_min - x1);
-        x1 = x_min;
+    if (outcode_out == outcode1) {
+      x1 = x;
+      y1 = y;
+      outcode1 = compute_outcode(x1, y1);
+    } else {
+      x2 = x;
+      y2 = y;
+      outcode2 = compute_outcode(x2, y2);
     }
-
-    if (x2 > x_max) {
-        y2 = y1 + slope * (x_max - x1);
-        x2 = x_max;
-    }
-
-    ans.first.x = swap_flag ? x2 : x1;
-    ans.first.y = swap_flag ? y2 : y1;
-    ans.second.x = swap_flag ? x1 : x2;
-    ans.second.y = swap_flag ? y1 : y2;
-    return ans;
+  }
 }
 
 }  // namespace robot_plann

@@ -135,6 +135,10 @@ struct MpcParams {
   double max_angular_acc;
   double wheel_half_track;
   int local_obst_num;
+  int solver_max_iter = 250;
+  double solver_max_cpu_time = 0.09;
+  double polygon_clearance_margin = 0.03;
+  double wall_constraint_activation_distance = 2.0;
   CostWeights weights;
 
   typedef std::shared_ptr<MpcParams> Ptr;

@@ -52,7 +52,7 @@ class AmpccRvizVisualizer(Node):
         self.declare_parameter("poly_epsilon_ratio", 0.02)
         self.declare_parameter("cluster_distance", 0.12)
         self.declare_parameter("dynamic_marker_z", 0.05)
-        self.declare_parameter("use_opencv", False)
+        self.declare_parameter("use_opencv", True)
         self.declare_parameter("min_cluster_points", 3)
         self.declare_parameter("max_cluster_points", 60)
         self.declare_parameter("max_cluster_span", 0.80)

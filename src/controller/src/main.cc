@@ -1,5 +1,6 @@
 #include <Eigen/Dense>
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <fstream>
@@ -49,6 +50,10 @@ double _latest_cmd_linear = 0.0;
 double _latest_cmd_angular = 0.0;
 std::mutex _planner_mutex;
 std::mutex _cmd_mutex;
+uint64_t _mpc_fail_count = 0;
+uint64_t _ref_missing_count = 0;
+uint64_t _goal_stop_count = 0;
+std::atomic<bool> _shutting_down{false};
 
 namespace {
 double ClampValue(double value, double low, double high) {
@@ -72,6 +77,12 @@ robot_plann::MpcParams::Ptr BuildMpcParamsFromNode(const rclcpp::Node::SharedPtr
       node->declare_parameter<double>("mpc.max_angular_acc", robot_plann::kMaxAngularAcc);
   params->wheel_half_track = node->declare_parameter<double>("mpc.wheel_half_track", 0.3);
   params->local_obst_num = node->declare_parameter<int>("mpc.local_obst_num", 8);
+  params->solver_max_iter = node->declare_parameter<int>("mpc.solver.max_iter", 250);
+  params->solver_max_cpu_time = node->declare_parameter<double>("mpc.solver.max_cpu_time", 0.09);
+  params->polygon_clearance_margin =
+      node->declare_parameter<double>("mpc.polygon_clearance_margin", 0.03);
+    params->wall_constraint_activation_distance =
+      node->declare_parameter<double>("mpc.wall_constraint_activation_distance", 2.0);
 
   params->weights.slack = node->declare_parameter<double>("mpc.weights.slack", 99999.0);
   params->weights.pose_x = node->declare_parameter<double>("mpc.weights.pose_x", 5.0);
@@ -116,13 +127,25 @@ robot_plann::MpcParams::Ptr BuildMpcParamsFromNode(const rclcpp::Node::SharedPtr
   if (params->local_obst_num < 0) {
     params->local_obst_num = 0;
   }
+  if (params->solver_max_iter < 20) {
+    params->solver_max_iter = 20;
+  }
+  if (params->solver_max_cpu_time <= 0.0) {
+    params->solver_max_cpu_time = 0.09;
+  }
+  if (params->polygon_clearance_margin < 0.0) {
+    params->polygon_clearance_margin = 0.0;
+  }
+  if (params->wall_constraint_activation_distance < 0.0) {
+    params->wall_constraint_activation_distance = 0.0;
+  }
 
   return params;
 }
 }  // namespace
 
 void MpcExecTimerCallback() {
-  if (!rclcpp::ok()) {
+  if (!rclcpp::ok() || _shutting_down.load()) {
     return;
   }
 
@@ -139,6 +162,11 @@ void MpcExecTimerCallback() {
   }
 
   if (!has_state) {
+    RCLCPP_WARN_THROTTLE(
+        _node->get_logger(),
+        *(_node->get_clock()),
+        2000,
+        "MPC timer waiting for latest planner state");
     return;
   }
 
@@ -146,6 +174,7 @@ void MpcExecTimerCallback() {
   const double dy_goal = state_snapshot.robot.gy - state_snapshot.robot.py;
   const double goal_distance = std::hypot(dx_goal, dy_goal);
   if (goal_distance <= _goal_stop_distance) {
+    ++_goal_stop_count;
     {
       std::lock_guard<std::mutex> lock(_planner_mutex);
       _latest_state.robot.v = 0.0;
@@ -156,22 +185,53 @@ void MpcExecTimerCallback() {
       _latest_cmd_linear = 0.0;
       _latest_cmd_angular = 0.0;
     }
+    RCLCPP_INFO_THROTTLE(
+        _node->get_logger(),
+        *(_node->get_clock()),
+        2000,
+        "Goal-stop active: dist=%.3f <= %.3f (count=%lu)",
+        goal_distance,
+        _goal_stop_distance,
+        static_cast<unsigned long>(_goal_stop_count));
     return;
   }
 
   if (!has_ref) {
+    ++_ref_missing_count;
     std::lock_guard<std::mutex> cmd_lock(_cmd_mutex);
     _latest_cmd_linear = 0.0;
     _latest_cmd_angular = 0.0;
+    RCLCPP_WARN_THROTTLE(
+        _node->get_logger(),
+        *(_node->get_clock()),
+        2000,
+        "No cached reference yet, hold zero cmd (count=%lu)",
+        static_cast<unsigned long>(_ref_missing_count));
     return;
   }
 
   MpcReturn mpc_return;
+  std::size_t cached_ref_len = 0;
   {
     std::lock_guard<std::mutex> lock(_planner_mutex);
+    cached_ref_len = _planner->GetAStarPath().size();
     mpc_return = _planner->SolveMpcFromCachedReference(state_snapshot);
   }
   if (!mpc_return.success) {
+    ++_mpc_fail_count;
+    RCLCPP_WARN_THROTTLE(
+        _node->get_logger(),
+        *(_node->get_clock()),
+        1000,
+        "MPC solve failed: cached_ref_len=%zu robot=(%.3f, %.3f, yaw=%.3f, v=%.3f, w=%.3f) goal_dist=%.3f fail_count=%lu",
+        cached_ref_len,
+        state_snapshot.robot.px,
+        state_snapshot.robot.py,
+        state_snapshot.robot.yaw,
+        state_snapshot.robot.v,
+        state_snapshot.robot.yaw_rate,
+        goal_distance,
+        static_cast<unsigned long>(_mpc_fail_count));
     return;
   }
 
@@ -194,6 +254,17 @@ void MpcExecTimerCallback() {
   linear = ClampValue(linear, -_cmd_max_linear_speed, _cmd_max_linear_speed);
   angular = ClampValue(angular, -_cmd_max_angular_speed, _cmd_max_angular_speed);
 
+  if (std::abs(linear) < 1e-4 && std::abs(angular) < 1e-4) {
+    RCLCPP_INFO_THROTTLE(
+        _node->get_logger(),
+        *(_node->get_clock()),
+        1000,
+        "MPC success but zero cmd: acc=%.4f dr=%.4f ref_len=%zu",
+        mpc_return.stages[0].uk.acc,
+        mpc_return.stages[0].uk.dr,
+        cached_ref_len);
+  }
+
   {
     std::lock_guard<std::mutex> lock(_planner_mutex);
     _latest_state.robot.v = linear;
@@ -207,7 +278,7 @@ void MpcExecTimerCallback() {
 }
 
 void CmdPublishTimerCallback() {
-  if (!rclcpp::ok()) {
+  if (!rclcpp::ok() || _shutting_down.load()) {
     return;
   }
 
@@ -224,13 +295,20 @@ void CmdPublishTimerCallback() {
   msg.header.frame_id = "base_link";
   msg.twist.linear.x = linear;
   msg.twist.angular.z = angular;
-  cmd_pub->publish(msg);
+  if (cmd_pub) {
+    cmd_pub->publish(msg);
+  }
 }
 
 
 void PlannSrvCallback(
     const std::shared_ptr<interfaces::srv::OcpLocalPlann::Request> req,
     std::shared_ptr<interfaces::srv::OcpLocalPlann::Response> res) {
+  if (_shutting_down.load()) {
+    res->success = false;
+    return;
+  }
+
   robot_plann::JointState ob_state;
   const auto &robot_state = req->ob.robot_state;
   ob_state.robot.px = robot_state.pose.x;
@@ -274,13 +352,24 @@ void PlannSrvCallback(
   }
 
   ob_state.walls.clear();
+  const std::size_t input_walls = req->ob.walls.size();
   for (const auto &input_wall : req->ob.walls) {
-    Wall wall = Planner::ClipWall(input_wall.sx,
-                                  input_wall.sy,
-                                  input_wall.ex,
-                                  input_wall.ey, -5.5, 5.5);
+    Wall wall;
+    wall.first.x = input_wall.sx;
+    wall.first.y = input_wall.sy;
+    wall.second.x = input_wall.ex;
+    wall.second.y = input_wall.ey;
     ob_state.walls.push_back(wall);
   }
+  RCLCPP_INFO_THROTTLE(
+      robot_plann::_node->get_logger(),
+      *(robot_plann::_node->get_clock()),
+      2000,
+      "Planner request scene: obst=%zu walls_in=%zu walls_kept=%zu poly_in=%zu",
+      ob_state.obst.size(),
+      input_walls,
+      ob_state.walls.size(),
+      req->ob.poly_states.size());
 
   Eigen::Vector2d sub_goal = {req->sub_goal.x, req->sub_goal.y};
 
@@ -307,13 +396,13 @@ void PlannSrvCallback(
 
   nav_msgs::msg::Path refline_line = _planner->GetAStarSmoothPath();
   refline_line.header.stamp = _node->now();
-  if (!refline_line.poses.empty()) {
+  if (astar_path_pub && !refline_line.poses.empty()) {
     astar_path_pub->publish(refline_line);
   }
 
   nav_msgs::msg::OccupancyGrid local_costmap = _planner->GetLocalCostMap("map");
   local_costmap.header.stamp = _node->now();
-  if (local_costmap.info.width > 0 && local_costmap.info.height > 0) {
+  if (local_costmap_pub && local_costmap.info.width > 0 && local_costmap.info.height > 0) {
     local_costmap_pub->publish(local_costmap);
   }
 }
@@ -324,6 +413,7 @@ void TestRun() {}
 
 int main(int argc, char **argv) {
   rclcpp::init(argc, argv);
+  robot_plann::_shutting_down.store(false);
   robot_plann::_node = std::make_shared<rclcpp::Node>("opt_planner");
   auto mpc_params = robot_plann::BuildMpcParamsFromNode(robot_plann::_node);
 
@@ -419,8 +509,7 @@ int main(int argc, char **argv) {
         executor.add_node(robot_plann::_node);
         executor.spin();
 
-        executor.cancel();
-        executor.remove_node(robot_plann::_node);
+        robot_plann::_shutting_down.store(true);
 
         if (robot_plann::mpc_solve_timer) {
           robot_plann::mpc_solve_timer->cancel();
@@ -433,6 +522,10 @@ int main(int argc, char **argv) {
 
         robot_plann::cmd_pub.reset();
         robot_plann::astar_path_pub.reset();
+        robot_plann::local_costmap_pub.reset();
+
+        executor.cancel();
+        executor.remove_node(robot_plann::_node);
         robot_plann::mpc_callback_group.reset();
         robot_plann::cmd_callback_group.reset();
         robot_plann::_planner.reset();

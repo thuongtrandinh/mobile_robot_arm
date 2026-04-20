@@ -102,8 +102,9 @@ class Planner {
     return mpc_params_->wheel_half_track;
   }
 
-  static Wall ClipWall(double x1, double y1, double x2, double y2, 
-                      double x_min = -5, double x_max = 5);
+  static bool ClipLine(double &x1, double &y1, double &x2, double &y2,
+                       double x_min, double x_max, double y_min,
+                       double y_max);
 
   
  private:
