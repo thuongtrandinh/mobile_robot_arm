@@ -65,14 +65,19 @@ def generate_launch_description():
             "map_frame_id": "map",
             "odom_topic": "/odometry/filtered",
             
-            # Chỉ EKF xử lý IMU, RTAB-Map chỉ nhận ảnh và scan
+            # --- 1. BẬT LẠI CAMERA (RGB-D) Để KHỚI TẠO Vị TRÍ NHANH ---
+            "subscribe_rgb": "true",
+            "subscribe_depth": "true",
             "rgb_topic": "/camera/color/image_raw",
             "depth_topic": "/camera/aligned_depth_to_color/image_raw",
             "camera_info_topic": "/camera/color/camera_info",
             
+            # --- 2. VẮMN BẬT LIDAR Để BÁM TƯỜNG TốI Ư U ---
             "subscribe_scan": "true",
             "scan_topic": "/scan",
             "approx_sync": "true",
+            
+            # --- 3. TẮT VISUAL ODOMETRY VÀ ICP ODOMETRY ---
             "visual_odometry": "false",
             "icp_odometry": "false",
             "publish_tf_odom": "false",
