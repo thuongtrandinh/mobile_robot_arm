@@ -10,3 +10,4 @@ __pycache__/
 HALO_1/log/
 HALO_1/install/
 .venv/
+*.db
