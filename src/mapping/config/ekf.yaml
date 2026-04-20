@@ -1,8 +1,8 @@
 ekf_filter_node:
   ros__parameters:
     use_sim_time: false
-    frequency: 50.0
-    sensor_timeout: 0.2
+    frequency: 100.0
+    sensor_timeout: 0.02
     two_d_mode: true
     publish_tf: true
     predict_to_current_time: false
@@ -22,12 +22,12 @@ ekf_filter_node:
     odom0_differential: false              
     odom0_queue_size: 20
 
-    # --- 2. IMU (Lấy góc Yaw và Vận tốc góc Z) ---
+    # --- 2. IMU (Chỉ lấy Vận tốc góc Z, BỎ LẤY YAW) ---
     imu0: /camera/imu
     imu0_config: [false, false, false,
-                  false, false, true,  # Yaw (Lấy để giữ hướng)
+                  false, false, false,  # Yaw (BỊ TẮT để tránh độ trễ tích phân)
                   false, false, false,
-                  false, false, true,  # Vận tốc góc Z (Quan trọng nhất để chống xoay ảo)
+                  false, false, true,  # Vận tốc góc Z (Dữ liệu thô, phản hồi tức thời)
                   false, false, false]
     imu0_differential: false
     imu0_relative: false  # Dùng góc Yaw TUYỆT ĐỐI để bám sát hướng thực tế
