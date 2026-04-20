@@ -72,8 +72,7 @@ def generate_launch_description():
             'align_depth.enable': 'true',           # Căn chỉnh khung hình Depth khớp với RGB
             'rgb_camera.color_profile': '640,480,30',
             'depth_module.depth_profile': '640,480,30',
-            'initial_reset': 'false',               # Avoid forced reset to reduce HID/motion startup errors on this platform.
-            'output': 'screen',
+            'initial_reset': 'false'                # Reset camera ngay khi khởi động để tránh lỗi ban đầu,               
         }.items()
     )
 

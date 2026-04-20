@@ -1,70 +1,67 @@
-# D435i Hand Sign Detector Configuration (Optimized for VGA 640x480)
+# D435i Multi-Object Detector Configuration (Dynamic & Static Obstacle Avoidance)
+# Optimized for VGA 640x480 @ 30 FPS, RTX A4000 GPU
 
-# ===== YOLO DETECTION PARAMETERS =====
+# ===== YOLO DETECTION PARAMETERS (MULTI-CLASS COCO) =====
 yolo:
-  # Person detection (LOWERED for grayscale robustness - critical fix for 100+ FPS systems)
-  person_conf_thresh: 0.65       
-  
-  # Hand gesture detection
-  handsign_conf_thresh: 0.45     # CỰC KỲ QUAN TRỌNG: Hạ xuống 0.45 để không miss tay nhỏ ở độ phân giải VGA
+  # Object detection confidence threshold (COCO classes: person, vehicle, animal, furniture, etc.)
+  object_conf_thresh: 0.50       # Lower threshold for detecting all obstacle types
   
   # Non-Maximum Suppression
-  iou_thresh: 0.50               # IOU threshold for NMS
+  iou_thresh: 0.50               # IOU threshold for NMS (detect overlapping objects)
+  
+  # Depth-Aware NMS (3D space filtering)
+  depth_nms_threshold: 0.5        # Objects >0.5m apart in Z axis = keep both (not occlusion)
+  
+  # Class filtering (COCO index)
+  # Dynamic: 0=person, 2=car, 3=motorcycle, 5=bus, 7=truck, 17=cat, 18=dog, 19=horse
+  # Static: 40=backpack, 41=handbag, 42=suitcase, 56=chair, 57=couch, 58=potted_plant, 59=bed, 60=dining_table, 62=toilet, 84=book, 86=vase, 87=scissors, 88=teddy, 89=hair_dryer, 90=toothbrush
+  dynamic_classes: [0, 2, 3, 5, 7, 17, 18, 19]          # Person, vehicles, animals
+  static_classes: [40, 41, 42, 56, 57, 58, 59, 60, 84, 86, 87]  # Furniture, containers, etc.
 
-# ===== TRACKING PARAMETERS =====
+# ===== TRACKING PARAMETERS (SHORT-TERM MEMORY) =====
 tracking:
-  # Gesture recognition timing (reduced due to buffer filtering)
-  gesture_hold_time: 1.0          # Reduced from 1.2 (voting buffer compensates)
-  tracking_timeout: 10.0          # Max time (s) person can be lost before re-tracking
+  # Timeout & buffer (optimized for rapid object transitions)
+  tracking_timeout: 2.0           # Clear EKF memory after 2s without detection
+  track_buffer: 60                # Keep track ID for 60 frames (~2s @ 30Hz)
+  max_age_before_predict: 15      # Predict trajectory only for 0.5s if object disappears
   
-  # [THÊM MỚI] ID Switch Detection threshold (3D distance in meters)
-  # If target re-appears but moved > 1.5m from EKF prediction, reject as ID Switch (likely different person)
-  id_switch_threshold_m: 1.5      # 1.5 meters = reasonable max jump distance for 10s occlusion
+  # BoT-SORT matching thresholds
+  track_thresh: 0.40              # Confidence threshold for new track initialization
+  track_low_thresh: 0.10          # BYTE algorithm low threshold (patient tracking)
+  match_thresh: 0.7               # Spatial matching threshold
   
-  # BoT-SORT tracking parameters
-  track_thresh: 0.40              # CRITICAL: Lower threshold for patient tracking
-  track_buffer: 150               # Keep track ID for 150 frames
-  match_thresh: 0.8               # Strict location matching
-  max_age_before_predict: 60      # Use EKF prediction for 60 frames if YOLO temporarily misses
-  
-  # Gesture buffer (VOTING MECHANISM - 9/15 consensus for rock-solid detection)
-  gesture_buffer_size: 15         # Keep last 15 frames (~0.5s @ 30 FPS)
-  gesture_confirmation_ratio: 0.60  # Need 9/15 frames agreement (60%) for confirmation
-                                   # Eliminates single-frame noise, "detect then disappear" issue
-  
-  # ROI scanning optimization (EXPANDED FOR CONTINUOUS HAND DETECTION)
-  roi_margin_x_ratio: 0.35        # Nới rộng ngang 35% cho ảnh WVGA
-  roi_margin_y_top_ratio: 0.30    # Nới lên trên 30% để đảm bảo bắt trọn tay giơ cao START
-  roi_body_height_ratio: 0.80     # Scan 80% of body height (more generous, less noise from legs)
+  # Appearance features (disabled for multi-object processing speed)
+  use_appearance: false           # Re-ID disabled to save GPU memory for many objects
+  appearance_weight: 0.0
 
-# ===== DEPTH FILTERING (Hand-person spatial validation) =====
+# ===== DEPTH FILTERING (3D VALIDATION) =====
 depth_filter:
-  # Hand-person spatial relationship
-  max_hand_person_depth_diff: 0.85  # Hand within 85cm of person (depth consistency check)
-                                     # Increased from 0.6 to 0.85 for START gesture (extended arm far forward)
-                                     # BoT-SORT Two-Stage Matching provides person validation
-
-# ===== HISTOGRAM EQUALIZATION (Grayscale enhancement) =====
-image_processing:
-  enable_histogram_equalization: false  # Apply CLAHE to enhance grayscale contrast
-  clahe_clip_limit: 2.0                # Contrast limiting (2.0-4.0 recommended)
-  clahe_tile_size: 8                   # Tile size for local contrast enhancement
-
-# ===== VELOCITY FILTERING =====
-velocity_filter:
-  alpha: 0.3                      # Smoothing factor (0.1-0.5 recommended)
+  # Valid depth range for obstacle detection
+  min_depth_m: 0.3                # Ignore objects closer than 30cm (sensor noise)
+  max_depth_m: 8.0                # Ignore objects farther than 8m (low confidence)
   
-# ===== PUBLISHING =====
+# ===== HISTOGRAM EQUALIZATION (OPTIONAL ENHANCEMENT) =====
+image_processing:
+  enable_histogram_equalization: false  # Disabled by default (not needed with depth validation)
+  clahe_clip_limit: 2.0                # Contrast limiting if enabled
+  clahe_tile_size: 8                   # Tile size for local contrast
+
+# ===== VELOCITY FILTERING (SMOOTH MOTION ESTIMATES) =====
+velocity_filter:
+  alpha: 0.3                      # EMA smoothing factor for velocity
+
+# ===== PUBLISHING & METRICS =====
 publishing:
   publish_rate: 30                # Hz
-  enable_visualization: false     # Show opencv window (requires display)
+  enable_visualization: false     # Disable for production (use Best Effort QoS)
   enable_performance_metrics: true  # Log FPS and latency
 
 # ===== D435i CAMERA INTRINSICS (VGA - 640x480) =====
+# Values extracted from /camera/color/camera_info (aligned depth uses color intrinsics)
 camera:
   width: 640
   height: 480
-  fx: 386.0
-  fy: 386.0
-  cx: 320.0
-  cy: 240.0
+  fx: 609.268    # Focal length X (K[0])
+  fy: 609.338    # Focal length Y (K[4])
+  cx: 323.599    # Principal point X (K[2])
+  cy: 246.130    # Principal point Y (K[5])
