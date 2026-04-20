@@ -1,9 +1,0 @@
-#!/usr/bin/env python3
-"""
-Entry point wrapper for state_machine_node
-"""
-
-from state_machine.state_machine_node import main
-
-if __name__ == '__main__':
-    main()
