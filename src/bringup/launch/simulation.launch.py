@@ -4,19 +4,20 @@ from ament_index_python.packages import get_package_share_directory
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
-from launch.conditions import IfCondition, UnlessCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration, PythonExpression
+from launch.substitutions import LaunchConfiguration
 
 
 def generate_launch_description():
     use_sim_time = LaunchConfiguration("use_sim_time")
     launch_rviz = LaunchConfiguration("launch_rviz")
     world = LaunchConfiguration("world")
-    run_mapping = LaunchConfiguration("run_mapping")
-    run_localization = LaunchConfiguration("run_localization")
-    use_rtabmap_localization = LaunchConfiguration("use_rtabmap_localization")
-    run_mpc = LaunchConfiguration("run_mpc")
+    localization_cfg = LaunchConfiguration("localization_cfg")
+    localization_database_path = LaunchConfiguration("localization_database_path")
+    localization_namespace = LaunchConfiguration("localization_namespace")
+    localization_map_name = LaunchConfiguration("localization_map_name")
+    localization_map_yaml = LaunchConfiguration("localization_map_yaml")
+    localization_use_map_server = LaunchConfiguration("localization_use_map_server")
 
     use_sim_time_arg = DeclareLaunchArgument(
         "use_sim_time",
@@ -35,28 +36,39 @@ def generate_launch_description():
         default_value="room_20x20.world",
         description="Gazebo world used when use_sim_time=true",
     )
-    run_mapping_arg = DeclareLaunchArgument(
-        "run_mapping",
-        default_value="false",
-        description="Run mapping pipeline",
-        choices=["true", "false"],
+    localization_cfg_arg = DeclareLaunchArgument(
+        "localization_cfg",
+        default_value=os.path.join(
+            get_package_share_directory("localization"),
+            "config",
+            "rtabmap_localization.yaml",
+        ),
+        description="RTAB-Map localization config file",
     )
-    run_localization_arg = DeclareLaunchArgument(
-        "run_localization",
-        default_value="false",
-        description="Run localization pipeline",
-        choices=["true", "false"],
+    localization_database_path_arg = DeclareLaunchArgument(
+        "localization_database_path",
+        default_value="~/.ros/rtabmap_map.db",
+        description="RTAB-Map database path used in localization mode",
     )
-    use_rtabmap_localization_arg = DeclareLaunchArgument(
-        "use_rtabmap_localization",
+    localization_namespace_arg = DeclareLaunchArgument(
+        "localization_namespace",
+        default_value="rtabmap",
+        description="Namespace for RTAB-Map nodes",
+    )
+    localization_map_name_arg = DeclareLaunchArgument(
+        "localization_map_name",
+        default_value="room_20x20",
+        description="Map folder name under mapping/maps",
+    )
+    localization_map_yaml_arg = DeclareLaunchArgument(
+        "localization_map_yaml",
+        default_value="room_20x20_map.yaml",
+        description="Map yaml filename in the selected map folder",
+    )
+    localization_use_map_server_arg = DeclareLaunchArgument(
+        "localization_use_map_server",
         default_value="true",
-        description="true: use RTAB-Map localization, false: use AMCL localization",
-        choices=["true", "false"],
-    )
-    run_mpc_arg = DeclareLaunchArgument(
-        "run_mpc",
-        default_value="false",
-        description="Run MPC controller node",
+        description="Enable Nav2 map_server when running RTAB-Map localization",
         choices=["true", "false"],
     )
 
@@ -73,67 +85,6 @@ def generate_launch_description():
             "launch_rviz": launch_rviz,
             "world": world,
         }.items(),
-        condition=IfCondition(use_sim_time),
-    )
-
-    zed2_hw = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(
-                get_package_share_directory("zed2"),
-                "launch",
-                "zed2.launch.py",
-            )
-        ),
-        launch_arguments={
-            "use_sim_time": "false",
-            "sim_mode": "false",
-            "publish_svo_clock": "false",
-        }.items(),
-        condition=UnlessCondition(use_sim_time),
-    )
-
-    lidar_hw = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(
-                get_package_share_directory("lidar"),
-                "launch",
-                "a2m8.launch.py",
-            )
-        ),
-        launch_arguments={
-            "use_sim_time": "false",
-        }.items(),
-        condition=UnlessCondition(use_sim_time),
-    )
-
-    mapping = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(
-                get_package_share_directory("mapping"),
-                "launch",
-                "slam.launch.py",
-            )
-        ),
-        launch_arguments={
-            "use_sim_time": use_sim_time,
-        }.items(),
-        condition=IfCondition(run_mapping),
-    )
-
-    localization_amcl = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(
-                get_package_share_directory("localization"),
-                "launch",
-                "global_localization.launch.py",
-            )
-        ),
-        launch_arguments={
-            "use_sim_time": use_sim_time,
-        }.items(),
-        condition=IfCondition(PythonExpression([
-            "'", run_localization, "' == 'true' and '", use_rtabmap_localization, "' == 'false'"
-        ])),
     )
 
     localization_rtabmap = IncludeLaunchDescription(
@@ -146,39 +97,25 @@ def generate_launch_description():
         ),
         launch_arguments={
             "use_sim_time": use_sim_time,
+            "cfg": localization_cfg,
+            "database_path": localization_database_path,
+            "namespace": localization_namespace,
+            "map_name": localization_map_name,
+            "map_yaml": localization_map_yaml,
+            "use_map_server": localization_use_map_server,
         }.items(),
-        condition=IfCondition(PythonExpression([
-            "'", run_localization, "' == 'true' and '", use_rtabmap_localization, "' == 'true'"
-        ])),
-    )
-
-    mpc = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(
-                get_package_share_directory("controller"),
-                "launch",
-                "ampcc_controller.launch.py",
-            )
-        ),
-        launch_arguments={
-            "use_sim_time": use_sim_time,
-        }.items(),
-        condition=IfCondition(run_mpc),
     )
 
     return LaunchDescription([
         use_sim_time_arg,
         launch_rviz_arg,
         world_arg,
-        run_mapping_arg,
-        run_localization_arg,
-        use_rtabmap_localization_arg,
-        run_mpc_arg,
+        localization_cfg_arg,
+        localization_database_path_arg,
+        localization_namespace_arg,
+        localization_map_name_arg,
+        localization_map_yaml_arg,
+        localization_use_map_server_arg,
         gazebo,
-        zed2_hw,
-        lidar_hw,
-        mapping,
-        localization_amcl,
         localization_rtabmap,
-        mpc,
     ])

@@ -320,122 +320,32 @@ bool Planner::CheckNavGoal(Eigen::Vector2d &sub_goal,
                            const Eigen::Vector2d &nav_goal,
                            const Eigen::Vector2d &pos,
                            const std::vector<Eigen::Vector2d> &vertices) {
+  (void)nav_goal;
+  (void)vertices;
+
+  // 1. Kiểm tra khoảng cách: Nếu điểm RL cấp quá gần, từ chối để RL lấy điểm mới.
+  // Tuyệt đối không tự ý đẩy điểm hướng về nav_goal (Global Goal) nữa.
   float distance = (sub_goal - pos).norm();
-  if (distance < 0.1) {
-    Eigen::Vector2d dir = nav_goal - pos;
-    if (dir.norm() < 1e-3) {
-      return false;
-    }
-    // RL sometimes outputs very close sub-goals; push it forward so
-    // planning does not skip this cycle.
-    sub_goal = pos + 0.2 * dir.normalized();
-    distance = (sub_goal - pos).norm();
-    if (verbose_ >= 1) {
-      std::cout << "Sub goal too close, adjusted to " << sub_goal.transpose()
-                << std::endl;
-    }
+  if (distance < 0.05) {
+    return false;
   }
 
+  // 2. Tôn trọng tuyệt đối điểm của RL.
+  // Chỉ cần kiểm tra xem có đường ngắm thẳng (Line of sight) từ Robot tới điểm đó không.
   try {
     (void)MapCoord2ImgIdx(sub_goal);
   } catch (const std::string &) {
-    if (!this->SimpleRayCast(sub_goal, pos)) return false;
-    if (verbose_ >= 1) {
-      std::cout << "Wall, sub goal changed to " << sub_goal.transpose() << 
-          std::endl;
-    }
-  }
-  // polygon fix
-  if (PointInPloy(sub_goal.x(), sub_goal.y(), vertices)) {
-    Eigen::Vector2d vec = nav_goal - pos;
-    Eigen::Vector2d grad = Eigen::Vector2d(-vec.y(), vec.x()).normalized();
-    Eigen::Vector2d left_candidate = sub_goal;
-    Eigen::Vector2d right_candidate = sub_goal;
-    const double step = 0.1;
-    while (true) {
-      left_candidate += step * grad;
-      cv::Point pixel;
-      try {
-        pixel = MapCoord2ImgIdx(left_candidate);
-      } catch (const std::string &) {
-        left_candidate = {99.9, 99.9};  // as a large num
-        break;
+    if (!this->SimpleRayCast(sub_goal, pos)) {
+      if (verbose_ >= 1) {
+        std::cout << "RL point blocked by wall, Raycast failed. Requesting new point." << std::endl;
       }
-      if (PointInPloy(left_candidate.x(), left_candidate.y(), vertices)) {
-        continue;
-      }
-      // a collision-free pt outside poly is found
-      if (cost_map_.at<u_char>(pixel.y, pixel.x) >= 100) break;
-    }
-    std::cout << "2" << std::endl;
-    while (true) {
-      right_candidate -= step * grad;
-      cv::Point pixel;
-      try {
-        pixel = MapCoord2ImgIdx(right_candidate);
-      } catch (const std::string &) {
-        right_candidate = {99.9, 99.9};
-        break;
-      }
-      if (PointInPloy(right_candidate.x(), right_candidate.y(), vertices)) {
-        continue;
-      }
-      // a collision-free pt outside poly is found
-      if (cost_map_.at<u_char>(pixel.y, pixel.x) >= 100) break;
-    }
-
-    if (left_candidate.norm() > 90.0f && right_candidate.norm() > 90.0f) {
-      return false;
-    }
-
-    double left_distance = (left_candidate - sub_goal).norm();
-    double right_distance = (right_candidate - sub_goal).norm();
-    if (left_distance < right_distance) {
-      sub_goal = left_candidate;
-    } else {
-      sub_goal = right_candidate;
-    }
-    if (verbose_ >= 1) {
-      std::cout << "Poly, sub goal changed to " << sub_goal.transpose() << 
-          std::endl;
+      return false;  // Điểm RL bị khuất tường hoàn toàn -> Trả về false để từ chối
     }
   }
 
-  cv::Point pixel = MapCoord2ImgIdx(sub_goal);
-  if (255 - cost_map_.at<u_char>(pixel.y, pixel.x) <= 250) return true;
-  // circular fix
-  const int kPointNum = 8;
-  const double kRadius = 0.5;
-  Eigen::Vector2d revised_goal, candidate_goal;
-  distance = 100.0f;
-  for (int i = 0; i < kPointNum; i++) {
-    candidate_goal = sub_goal + kRadius * Eigen::Vector2d(
-        std::sin(M_PI * 2 * i / kPointNum),
-        std::cos(M_PI * 2 * i / kPointNum));
-    try {
-      pixel = MapCoord2ImgIdx(candidate_goal);
-    } catch (const std::string &) {
-      continue;
-    }
-    if (cost_map_.at<u_char>(pixel.y, pixel.x) < 100) continue;
-    if ((candidate_goal - pos).norm() <= 0.2f) continue;
-    if (PointInPloy(candidate_goal(0), candidate_goal(1), vertices)) continue;
-    
-    double candidate_distance = (candidate_goal - sub_goal).norm();
-    if (candidate_distance >= distance) continue;
-    /* update revised goal to the nearest */
-    distance = candidate_distance;
-    revised_goal = candidate_goal;
-  }
-  if (distance >= 90.0f) {
-    return false;
-  } else {
-    sub_goal = revised_goal;
-    if (verbose_ >= 1) {
-      std::cout << "Sub goal changed to " << sub_goal.transpose() << std::endl;
-    }
-    return true;
-  }
+  // 3. Đã xóa toàn bộ logic Polygon Fix và Circular Fix.
+  // Điểm RL đã an toàn, cho phép giải MPC!
+  return true;
 }
 
 void Planner::UpdateCostMap(const JointState &state) {

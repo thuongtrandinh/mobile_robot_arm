@@ -32,24 +32,17 @@ rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr astar_path_pub;
 rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr local_costmap_pub;
 rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr cmd_pub;
 rclcpp::TimerBase::SharedPtr mpc_solve_timer;
-rclcpp::TimerBase::SharedPtr cmd_publish_timer;
 rclcpp::CallbackGroup::SharedPtr mpc_callback_group;
-rclcpp::CallbackGroup::SharedPtr cmd_callback_group;
 JointState _latest_state;
 bool _has_latest_state = false;
 bool _has_reference = false;
 double _mpc_solve_period = 0.05;
-double _cmd_publish_period = 0.05;
 double _mpc_solve_hz = 20.0;
-double _cmd_publish_hz = 20.0;
 double _mpc_control_dt = 0.05;
 double _cmd_max_linear_speed = 1.0;
 double _cmd_max_angular_speed = 1.0;
 double _goal_stop_distance = 0.1;
-double _latest_cmd_linear = 0.0;
-double _latest_cmd_angular = 0.0;
 std::mutex _planner_mutex;
-std::mutex _cmd_mutex;
 uint64_t _mpc_fail_count = 0;
 uint64_t _ref_missing_count = 0;
 uint64_t _goal_stop_count = 0;
@@ -58,6 +51,19 @@ std::atomic<bool> _shutting_down{false};
 namespace {
 double ClampValue(double value, double low, double high) {
   return std::max(low, std::min(high, value));
+}
+
+void PublishCmdVel(double linear, double angular) {
+  if (!_node || !cmd_pub) {
+    return;
+  }
+
+  geometry_msgs::msg::TwistStamped msg;
+  msg.header.stamp = _node->now();
+  msg.header.frame_id = "base_link";
+  msg.twist.linear.x = linear;
+  msg.twist.angular.z = angular;
+  cmd_pub->publish(msg);
 }
 }
 
@@ -180,11 +186,7 @@ void MpcExecTimerCallback() {
       _latest_state.robot.v = 0.0;
       _latest_state.robot.yaw_rate = 0.0;
     }
-    {
-      std::lock_guard<std::mutex> cmd_lock(_cmd_mutex);
-      _latest_cmd_linear = 0.0;
-      _latest_cmd_angular = 0.0;
-    }
+    PublishCmdVel(0.0, 0.0);
     RCLCPP_INFO_THROTTLE(
         _node->get_logger(),
         *(_node->get_clock()),
@@ -198,9 +200,7 @@ void MpcExecTimerCallback() {
 
   if (!has_ref) {
     ++_ref_missing_count;
-    std::lock_guard<std::mutex> cmd_lock(_cmd_mutex);
-    _latest_cmd_linear = 0.0;
-    _latest_cmd_angular = 0.0;
+    PublishCmdVel(0.0, 0.0);
     RCLCPP_WARN_THROTTLE(
         _node->get_logger(),
         *(_node->get_clock()),
@@ -232,6 +232,7 @@ void MpcExecTimerCallback() {
         state_snapshot.robot.yaw_rate,
         goal_distance,
         static_cast<unsigned long>(_mpc_fail_count));
+      PublishCmdVel(0.0, 0.0);
     return;
   }
 
@@ -270,34 +271,7 @@ void MpcExecTimerCallback() {
     _latest_state.robot.v = linear;
     _latest_state.robot.yaw_rate = angular;
   }
-  {
-    std::lock_guard<std::mutex> cmd_lock(_cmd_mutex);
-    _latest_cmd_linear = linear;
-    _latest_cmd_angular = angular;
-  }
-}
-
-void CmdPublishTimerCallback() {
-  if (!rclcpp::ok() || _shutting_down.load()) {
-    return;
-  }
-
-  double linear = 0.0;
-  double angular = 0.0;
-  {
-    std::lock_guard<std::mutex> cmd_lock(_cmd_mutex);
-    linear = _latest_cmd_linear;
-    angular = _latest_cmd_angular;
-  }
-
-  geometry_msgs::msg::TwistStamped msg;
-  msg.header.stamp = _node->now();
-  msg.header.frame_id = "base_link";
-  msg.twist.linear.x = linear;
-  msg.twist.angular.z = angular;
-  if (cmd_pub) {
-    cmd_pub->publish(msg);
-  }
+  PublishCmdVel(linear, angular);
 }
 
 
@@ -441,16 +415,6 @@ int main(int argc, char **argv) {
       if (robot_plann::_mpc_solve_period <= 0.0) {
         robot_plann::_mpc_solve_period = 0.05;
       }
-      robot_plann::_cmd_publish_period = robot_plann::_node->declare_parameter<double>(
-          "planner.cmd_publish_period", robot_plann::_mpc_solve_period);
-      robot_plann::_cmd_publish_hz = robot_plann::_node->declare_parameter<double>(
-          "planner.cmd_publish_hz", 0.0);
-      if (robot_plann::_cmd_publish_hz > 0.0) {
-        robot_plann::_cmd_publish_period = 1.0 / robot_plann::_cmd_publish_hz;
-      }
-      if (robot_plann::_cmd_publish_period <= 0.0) {
-        robot_plann::_cmd_publish_period = robot_plann::_mpc_solve_period;
-      }
       robot_plann::_mpc_control_dt = robot_plann::_node->declare_parameter<double>(
           "planner.mpc_control_dt", robot_plann::_mpc_solve_period);
       if (robot_plann::_mpc_control_dt <= 0.0) {
@@ -483,22 +447,15 @@ int main(int argc, char **argv) {
 
       robot_plann::mpc_callback_group = robot_plann::_node->create_callback_group(
         rclcpp::CallbackGroupType::MutuallyExclusive);
-      robot_plann::cmd_callback_group = robot_plann::_node->create_callback_group(
-        rclcpp::CallbackGroupType::MutuallyExclusive);
 
       robot_plann::mpc_solve_timer = robot_plann::_node->create_wall_timer(
         std::chrono::duration<double>(robot_plann::_mpc_solve_period),
         robot_plann::MpcExecTimerCallback,
         robot_plann::mpc_callback_group);
-      robot_plann::cmd_publish_timer = robot_plann::_node->create_wall_timer(
-        std::chrono::duration<double>(robot_plann::_cmd_publish_period),
-        robot_plann::CmdPublishTimerCallback,
-        robot_plann::cmd_callback_group);
       RCLCPP_INFO(
         robot_plann::_node->get_logger(),
-        "Async cascaded pipeline: reference via service, MPC solve %.2f Hz, cmd publish %.2f Hz, cmd topic %s",
+        "Zero-latency pipeline: reference via service, MPC solve %.2f Hz, immediate cmd publish, cmd topic %s",
         1.0 / robot_plann::_mpc_solve_period,
-        1.0 / robot_plann::_cmd_publish_period,
         cmd_topic.c_str());
       RCLCPP_INFO(
         robot_plann::_node->get_logger(),
@@ -515,10 +472,6 @@ int main(int argc, char **argv) {
           robot_plann::mpc_solve_timer->cancel();
           robot_plann::mpc_solve_timer.reset();
         }
-        if (robot_plann::cmd_publish_timer) {
-          robot_plann::cmd_publish_timer->cancel();
-          robot_plann::cmd_publish_timer.reset();
-        }
 
         robot_plann::cmd_pub.reset();
         robot_plann::astar_path_pub.reset();
@@ -527,7 +480,6 @@ int main(int argc, char **argv) {
         executor.cancel();
         executor.remove_node(robot_plann::_node);
         robot_plann::mpc_callback_group.reset();
-        robot_plann::cmd_callback_group.reset();
         robot_plann::_planner.reset();
         robot_plann::_node.reset();
 
