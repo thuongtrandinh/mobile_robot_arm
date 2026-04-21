@@ -1,0 +1,128 @@
+#!/usr/bin/env python3
+"""
+Launch file for Multi-Object Obstacle Detection Node (GPU Optimized)
+
+This launches the optimized multi-object tracking node:
+  - Single YOLO model (no dual models)
+  - No Re-ID features (GPU optimized)
+  - Dynamic/Static classification
+  - EKF tracking only for dynamic objects
+  - Short-term memory (2s buffer)
+
+Message Output:
+  /tracking/dynamics (ObstacleArray):
+    - Dynamic objects with EKF trajectory prediction
+    - Includes: id, distance, radius, trajectory (1.5s future)
+    - For motion planning algorithms (MPC, trajectory planning)
+
+  /tracking/statics (StaticObstacleArray):
+    - Static objects without motion prediction
+    - Includes: px, py, pz (3D position)
+    - For simple collision checking
+
+  /tracking/annotated_image (Image):
+    - Visualization with bounding boxes
+    - Best Effort QoS (dropped if lag detected)
+
+Dynamic Classes (with trajectory):
+  person(0), car(2), motorcycle(3), truck(5), bus(6),
+  dog(16), cat(17), horse(18), sheep(19), cow(20),
+  elephant(21), bear(22), zebra(23), airplane(15), bird(14)
+
+Static Classes (position only):
+  chair(56), couch(57), bed(60), toilet(62), sink(67),
+  potted_plant(64), stop_sign(73), etc.
+
+Usage:
+  # Standard launch (CUDA + FP16 enabled)
+  ros2 launch yolo multi_object_tracking.launch.py
+
+  # CPU-only mode
+  ros2 launch yolo multi_object_tracking.launch.py use_cuda:=false
+
+  # Full precision (slower but more accurate)
+  ros2 launch yolo multi_object_tracking.launch.py use_fp16:=false
+
+  # Lower confidence (catches smaller objects)
+  ros2 launch yolo multi_object_tracking.launch.py object_conf:=0.35
+
+  # Larger model (higher accuracy)
+  ros2 launch yolo multi_object_tracking.launch.py model_path:=yolov8s.pt
+"""
+
+from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument
+from launch.substitutions import LaunchConfiguration
+from launch_ros.actions import Node
+from ament_index_python.packages import get_package_share_directory
+import os
+
+
+def generate_launch_description():
+    """Generate launch description for GPU-optimized multi-object tracking"""
+    
+    # ===== LAUNCH ARGUMENTS =====
+    declare_use_cuda = DeclareLaunchArgument(
+        'use_cuda',
+        default_value='true',
+        description='Use CUDA GPU for YOLO inference (much faster)'
+    )
+
+    declare_use_fp16 = DeclareLaunchArgument(
+        'use_fp16',
+        default_value='true',
+        description='Use FP16 half-precision (Tensor Core acceleration on RTX A4000)'
+    )
+
+    declare_model_path = DeclareLaunchArgument(
+        'model_path',
+        default_value='yolov8n.pt',
+        description='YOLO model to use: yolov8n.pt (fast), yolov8s.pt (medium), yolov8m.pt (accurate)'
+    )
+
+    declare_object_conf = DeclareLaunchArgument(
+        'object_conf',
+        default_value='0.50',
+        description='Object confidence threshold (0.30-0.70). Lower = more detections but more false positives'
+    )
+
+    declare_enable_metrics = DeclareLaunchArgument(
+        'enable_metrics',
+        default_value='true',
+        description='Enable FPS/latency logging every 5 seconds'
+    )
+
+    # ===== MULTI-OBJECT TRACKING NODE =====
+    # Optimized for obstacle avoidance with RTX A4000
+    # Single model + no Re-ID = 50% GPU savings while handling 20+ objects
+    tracking_node = Node(
+        package='yolo',
+        executable='multi_object_tracking',
+        name='multi_object_tracking_node',
+        output='screen',
+        parameters=[{
+            # ===== CAMERA TOPICS =====
+            'camera_image_topic': '/camera/color/image_raw',
+            'depth_topic': '/camera/aligned_depth_to_color/image_raw',
+            'camera_info_topic': '/camera/color/camera_info',
+            
+            # ===== YOLO MODEL =====
+            'model_path': LaunchConfiguration('model_path'),
+            'object_conf_thresh': LaunchConfiguration('object_conf'),
+            
+            # ===== HARDWARE OPTIMIZATION =====
+            'use_cuda': LaunchConfiguration('use_cuda'),
+            'use_fp16': LaunchConfiguration('use_fp16'),
+        }],
+        remappings=[],
+    )
+
+    # ===== RETURN LAUNCH DESCRIPTION =====
+    return LaunchDescription([
+        declare_use_cuda,
+        declare_use_fp16,
+        declare_model_path,
+        declare_object_conf,
+        declare_enable_metrics,
+        tracking_node,
+    ])

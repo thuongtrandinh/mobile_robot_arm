@@ -70,9 +70,11 @@ def generate_launch_description():
             'unite_imu_method': '2',                # Nội suy IMU tạo ra topic /camera/imu cho EKF
             'enable_sync': 'true',                  # Đồng bộ thời gian ảnh Color và Depth
             'align_depth.enable': 'true',           # Căn chỉnh khung hình Depth khớp với RGB
-            'rgb_camera.color_profile': '640,480,30',
-            'depth_module.depth_profile': '640,480,30',
-            'initial_reset': 'false'                # Reset camera ngay khi khởi động để tránh lỗi ban đầu,               
+            'rgb_camera.profile': '640,480,30',     # Cấu hình chuẩn 640x480 @ 30FPS
+            'depth_module.profile': '640,480,30',   # Cấu hình chuẩn 640x480 @ 30FPS
+            'rgb_camera.auto_exposure_priority': 'false', 
+            'depth_module.auto_exposure_priority': 'false',
+            'initial_reset': 'true'                # Reset camera ngay khi khởi động để tránh lỗi ban đầu,               
         }.items()
     )
 
