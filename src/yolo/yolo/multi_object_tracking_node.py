@@ -19,7 +19,7 @@ from ultralytics import YOLO
 from cv_bridge import CvBridge
 import message_filters
 
-from sensor_msgs.msg import Image, CameraInfo
+from sensor_msgs.msg import Image, CameraInfo, CompressedImage
 from std_msgs.msg import Header
 from nav_msgs.msg import Path
 from geometry_msgs.msg import PoseStamped
@@ -76,6 +76,14 @@ class MultiObjectTrackingNode(Node):
         qos_sub = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT, history=HistoryPolicy.KEEP_LAST, depth=30)
         
         self._pub_dynamics = self.create_publisher(ObstacleArray, '/tracking/dynamics', qos_profile=qos_pub)
+        
+        # Publisher cho debug - Sử dụng CompressedImage để nhẹ nhất có thể
+        self._pub_debug_img = self.create_publisher(
+            CompressedImage, 
+            '/tracking/debug_image/compressed', 
+            qos_profile=qos_pub
+        )
+        self.get_logger().info('🛠️ Debug mode sẵn sàng (chỉ hoạt động khi có người xem).')
 
         self.img_sub = message_filters.Subscriber(self, Image, '/camera/color/image_raw', qos_profile=qos_sub)
         self.depth_sub = message_filters.Subscriber(self, Image, '/camera/aligned_depth_to_color/image_raw', qos_profile=qos_sub)
@@ -139,6 +147,7 @@ class MultiObjectTrackingNode(Node):
         tracks_np = self._tracker.update(dets_np, features=None)
 
         h, w = frame.shape[:2]
+        self._publish_debug_visual(frame, tracks_np)
         self._publish_data(tracks_np, h, w, ts_now)
         self._cleanup_memory(ts_now)
 
@@ -204,6 +213,38 @@ class MultiObjectTrackingNode(Node):
         for tid in stale_ids:
             for d in [self.ekfs, self.velocity_filters, self.position_history, self.last_frame_ts, self.track_last_seen_time]:
                 d.pop(tid, None)
+
+    def _publish_debug_visual(self, frame, tracks_np):
+        # KIỂM TRA: Nếu không có ai đang xem topic này thì THOÁT NGAY để tiết kiệm CPU
+        if self._pub_debug_img.get_subscription_count() == 0:
+            return
+
+        try:
+            # Resize nhỏ lại để nén và gửi nhanh hơn (giảm 4 lần tải)
+            debug_frame = cv2.resize(frame, (480, 360)) 
+            scale_x = 480 / frame.shape[1]
+            scale_y = 360 / frame.shape[0]
+
+            for track in tracks_np:
+                x1, y1, x2, y2, tid = track[:5]
+                # Vẽ bounding box (đã scale theo ảnh nhỏ)
+                cv2.rectangle(debug_frame, 
+                              (int(x1*scale_x), int(y1*scale_y)), 
+                              (int(x2*scale_x), int(y2*scale_y)), (0, 255, 0), 2)
+                cv2.putText(debug_frame, f"ID:{int(tid)}", 
+                            (int(x1*scale_x), int(y1*scale_y)-10),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+
+            # Nén trực tiếp thành JPEG
+            msg = CompressedImage()
+            msg.header.stamp = self.get_clock().now().to_msg()
+            msg.format = "jpeg"
+            # Quality=50 là đủ nhìn debug mà cực nhẹ
+            msg.data = np.array(cv2.imencode('.jpg', debug_frame, [cv2.IMWRITE_JPEG_QUALITY, 50])[1]).tobytes()
+            
+            self._pub_debug_img.publish(msg)
+        except Exception as e:
+            self.get_logger().error(f"Debug image error: {e}")
 
     def _log_performance(self):
         if self._frame_intervals:
