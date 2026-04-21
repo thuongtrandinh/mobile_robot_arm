@@ -394,6 +394,29 @@ int main(int argc, char **argv) {
   robot_plann::_planner = std::make_unique<robot_plann::Planner>(
       mpc_params, robot_plann::_verbose);
 
+    const std::string reference_mode = robot_plann::_node->declare_parameter<std::string>(
+      "planner.reference_mode", "astar_subgoal");
+    double debug_xref_v_max = robot_plann::_node->declare_parameter<double>(
+      "planner.debug_xref_v_max", 0.6);
+    double debug_xref_v_min = robot_plann::_node->declare_parameter<double>(
+      "planner.debug_xref_v_min", 0.05);
+    double debug_xref_slowdown_distance = robot_plann::_node->declare_parameter<double>(
+      "planner.debug_xref_slowdown_distance", 1.5);
+    double debug_xref_kp_dist = robot_plann::_node->declare_parameter<double>(
+      "planner.debug_xref_kp_dist", 0.8);
+
+    if (debug_xref_v_max < 0.0) debug_xref_v_max = 0.0;
+    if (debug_xref_v_min < 0.0) debug_xref_v_min = 0.0;
+    if (debug_xref_slowdown_distance <= 0.0) debug_xref_slowdown_distance = 1.5;
+    if (debug_xref_kp_dist < 0.0) debug_xref_kp_dist = 0.0;
+
+    robot_plann::_planner->SetReferenceMode(reference_mode);
+    robot_plann::_planner->SetDebugDirectXrefParams(
+      debug_xref_v_max,
+      debug_xref_v_min,
+      debug_xref_slowdown_distance,
+      debug_xref_kp_dist);
+
   RCLCPP_INFO(
       robot_plann::_node->get_logger(),
       "MPC config: horizon=%u dt=%.3f (%.2f Hz) max_v=%.2f max_a=%.2f wheel_half_track=%.3f local_obst_num=%d",
@@ -404,6 +427,14 @@ int main(int argc, char **argv) {
       mpc_params->max_linear_acc,
       mpc_params->wheel_half_track,
       mpc_params->local_obst_num);
+  RCLCPP_INFO(
+      robot_plann::_node->get_logger(),
+      "Planner reference mode: %s (debug_xref: v_max=%.2f v_min=%.2f slowdown=%.2f kp=%.2f)",
+      reference_mode.c_str(),
+      debug_xref_v_max,
+      debug_xref_v_min,
+      debug_xref_slowdown_distance,
+      debug_xref_kp_dist);
 
       robot_plann::_mpc_solve_period = robot_plann::_node->declare_parameter<double>(
         "planner.mpc_exec_period", 0.05);

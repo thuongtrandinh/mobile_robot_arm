@@ -492,7 +492,8 @@ int Mpc::SolveMpc(const Eigen::MatrixXd &A, const Eigen::MatrixXd &b,
       return 0;
     } 
     return 1;
-  } catch (const casadi::CasadiException &) {
+  } catch (const casadi::CasadiException &e) { 
+    std::cerr << "CasADi exception: " << e.what() << std::endl;
     return -1;
   }
 }

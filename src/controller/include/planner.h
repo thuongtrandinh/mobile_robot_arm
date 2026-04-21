@@ -14,6 +14,7 @@
 #define PLANNER_H
 #include <chrono>
 #include <iostream>
+#include <string>
 
 #include "types.h"
 #include "lookahead.h"
@@ -102,6 +103,18 @@ class Planner {
     return mpc_params_->wheel_half_track;
   }
 
+  void SetReferenceMode(const std::string &mode) {
+    use_direct_goal_xref_ = (mode == "direct_goal_xref");
+  }
+
+  void SetDebugDirectXrefParams(double v_max, double v_min,
+                                double slowdown_distance, double kp_dist) {
+    debug_xref_v_max_ = v_max;
+    debug_xref_v_min_ = v_min;
+    debug_xref_slowdown_distance_ = slowdown_distance;
+    debug_xref_kp_dist_ = kp_dist;
+  }
+
   static bool ClipLine(double &x1, double &y1, double &x2, double &y2,
                        double x_min, double x_max, double y_min,
                        double y_max);
@@ -120,6 +133,9 @@ class Planner {
   cv::Point MapCoord2ImgIdx(const Eigen::Vector2d &pt, bool vis = false) const;
   Eigen::Vector2d ImgIdx2MapCoord(const cv::Point &idx, bool vis = false) const;
   Eigen::Vector2d PidCalc(const JointState &state);
+  std::vector<Point> BuildDirectReferenceTrajectory(
+      const JointState &state, const Eigen::Vector2d &goal) const;
+  double ComputeDirectReferenceSpeed(double remaining_distance) const;
   static void PybindInputDataChange(const robot_plann::MPCInputForPython& input,
                                     robot_plann::JointState &ob_state);
 
@@ -143,6 +159,11 @@ class Planner {
   bool move_forward_;
   int verbose_;
   MpcParams::Ptr mpc_params_;
+  bool use_direct_goal_xref_ = false;
+  double debug_xref_v_max_ = 0.6;
+  double debug_xref_v_min_ = 0.05;
+  double debug_xref_slowdown_distance_ = 1.5;
+  double debug_xref_kp_dist_ = 0.8;
 
   static MpcParams::Ptr CreateDefaultMpcParams() {
     auto params = std::make_shared<MpcParams>();

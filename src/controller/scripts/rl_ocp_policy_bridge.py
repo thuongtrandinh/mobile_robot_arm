@@ -26,6 +26,9 @@ from tf2_ros import Buffer, TransformException, TransformListener
 
 
 class RlOcpPolicyBridge(Node):
+    _GOAL_SOURCE_RL = "rl_local_goal"
+    _GOAL_SOURCE_RVIZ = "rviz_global_goal"
+
     def __init__(self):
         super().__init__("rl_ocp_policy_bridge")
 
@@ -54,6 +57,7 @@ class RlOcpPolicyBridge(Node):
         self.declare_parameter("timer_period", 0.1)
         self.declare_parameter("policy_hz", 10.0)
         self.declare_parameter("service_hz", 10.0)
+        self.declare_parameter("goal_source_mode", self._GOAL_SOURCE_RL)
         self.declare_parameter("policy_period", 0.2)
         self.declare_parameter("mpc_period", 0.05)
         self.declare_parameter("control_dt", 0.25)
@@ -120,6 +124,9 @@ class RlOcpPolicyBridge(Node):
         self.auto_relax_constraints = self.get_parameter("auto_relax_constraints").get_parameter_value().bool_value
         self.policy_hz = max(0.001, self.get_parameter("policy_hz").get_parameter_value().double_value)
         self.service_hz = max(0.001, self.get_parameter("service_hz").get_parameter_value().double_value)
+        self.goal_source_mode = self._normalize_goal_source_mode(
+            self.get_parameter("goal_source_mode").get_parameter_value().string_value
+        )
         self.policy_period = 1.0 / self.policy_hz
         self.mpc_period = 1.0 / self.service_hz
         self.control_dt = self.get_parameter("control_dt").get_parameter_value().double_value
@@ -268,7 +275,8 @@ class RlOcpPolicyBridge(Node):
         self.get_logger().info(
             f"Loop rates: RL={1.0 / self.policy_period:.2f} Hz, service={1.0 / self.mpc_period:.2f} Hz"
         )
-        self.get_logger().info("Pipeline mode: cascaded (fixed)")
+        self.get_logger().info(f"Goal source mode: {self.goal_source_mode}")
+        self.get_logger().info("Pipeline mode: cascaded (runtime-selectable goal source)")
         self.get_logger().info("Sync MPC requests to policy updates: True")
         self.get_logger().info(f"Auto relax constraints: {self.auto_relax_constraints}")
         self.get_logger().info(f"Action visualization: {self.visualize_actions} ({self.action_marker_topic})")
@@ -289,6 +297,9 @@ class RlOcpPolicyBridge(Node):
             elif p.name == "service_hz":
                 self.service_hz = max(0.001, float(p.value))
                 update_loop_hz = True
+            elif p.name == "goal_source_mode":
+                self.goal_source_mode = self._normalize_goal_source_mode(str(p.value))
+                self.get_logger().info(f"Updated goal_source_mode: {self.goal_source_mode}")
             if p.name == "visualize_actions":
                 self.visualize_actions = bool(p.value)
             elif p.name == "publish_debug_joint_state":
@@ -363,6 +374,16 @@ class RlOcpPolicyBridge(Node):
             self.mpc_period = 1.0 / self.service_hz
 
         return SetParametersResult(successful=True)
+
+    def _normalize_goal_source_mode(self, mode: str) -> str:
+        mode_norm = str(mode).strip().lower()
+        if mode_norm in (self._GOAL_SOURCE_RL, self._GOAL_SOURCE_RVIZ):
+            return mode_norm
+        self.get_logger().warn(
+            "Unsupported goal_source_mode '%s', fallback to '%s'"
+            % (str(mode), self._GOAL_SOURCE_RL)
+        )
+        return self._GOAL_SOURCE_RL
 
     def _start_policy_worker(self) -> None:
         worker_script = os.path.join(os.path.dirname(__file__), "rl_policy_worker.py")
@@ -1189,6 +1210,7 @@ class RlOcpPolicyBridge(Node):
                 "planner_fail_streak": int(self.consecutive_planner_failures),
                 "policy_hz": float(1.0 / self.policy_period),
                 "mpc_hz": float(1.0 / self.mpc_period),
+                "goal_source_mode": str(self.goal_source_mode),
                 "selected_sub_goal": list(selected_sub_goal) if selected_sub_goal is not None else None,
                 "cached_sub_goal": list(self.latest_sub_goal) if self.latest_sub_goal is not None else None,
                 "cached_sub_goal_seq": int(self.latest_sub_goal_seq),
@@ -1539,7 +1561,7 @@ class RlOcpPolicyBridge(Node):
             self._publish_planner_scene_debug(self.last_request_for_viz, predicted_traj, mpc_debug)
 
     def _policy_loop(self) -> None:
-        if self.worker is None:
+        if self.goal_source_mode == self._GOAL_SOURCE_RL and self.worker is None:
             return
 
         if self.current_pose is None or self.current_goal is None:
@@ -1581,6 +1603,14 @@ class RlOcpPolicyBridge(Node):
             return
 
         self.goal_reached = False
+
+        if self.goal_source_mode == self._GOAL_SOURCE_RVIZ:
+            self.latest_sub_goal = (float(gx), float(gy))
+            self.latest_sub_goal_seq += 1
+            self.last_mask_applied = False
+            self.last_mask_snap_distance = 0.0
+            self._publish_action_visualization(self.latest_sub_goal)
+            return
 
         try:
             sub_goal = self._get_sub_goal_from_policy()
@@ -1640,6 +1670,13 @@ class RlOcpPolicyBridge(Node):
 
         self.goal_reached = False
         if self.pending_future is not None:
+            return
+
+        if self.goal_source_mode == self._GOAL_SOURCE_RVIZ:
+            try:
+                self._send_planner_request((float(gx), float(gy)))
+            except Exception as exc:
+                self.get_logger().error(f"Planner loop failed (rviz_global_goal mode): {exc}")
             return
 
         if self.latest_sub_goal is None:

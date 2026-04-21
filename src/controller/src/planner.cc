@@ -12,6 +12,8 @@
   */
 #include "planner.h"
 
+#include <algorithm>
+
 namespace robot_plann {
 
 cv::Point Planner::MapCoord2ImgIdx(const Eigen::Vector2d &pt, bool vis) const {
@@ -134,28 +136,41 @@ bool Planner::UpdateReferenceOnly(const JointState &state,
   } 
 
 
-  if (!CheckNavGoal(sub_goal, goal_pt, start_pt, state.rect.vertices)) {
-    if (verbose_ >= 1) {
-      std::cout << "Sub goal is unreachable!!!" << std::endl;
+  if (!use_direct_goal_xref_) {
+    if (!CheckNavGoal(sub_goal, goal_pt, start_pt, state.rect.vertices)) {
+      if (verbose_ >= 1) {
+        std::cout << "Sub goal is unreachable!!!" << std::endl;
+      }
+      return false;
     }
-    return false;
   }
   
   if (verbose_ > 1) std::cout << "DEBUG: check done!" << std::endl;
+  std::vector<Point> final_path;
+  if (use_direct_goal_xref_) {
+    final_path = BuildDirectReferenceTrajectory(state, goal_pt);
+  } else {
+    auto astar_path = astar_planner_->SearchPath(
+        cost_map_, start_pt, sub_goal, window_center_x_, window_center_y_);
+    if (astar_path.size() < 2) {
+      if (verbose_ >= 1) {
+        std::cout << "Invalid A* path with len = " << astar_path.size()
+                  << std::endl;
+      }
+      return false;
+    }
 
-  auto astar_path = astar_planner_->SearchPath(
-      cost_map_, start_pt, sub_goal, window_center_x_, window_center_y_);
-  if (astar_path.size() < 2) {
-    if (verbose_ >= 1) { 
-      std::cout << "Invalid A* path with len = " << astar_path.size() << 
-          std::endl;
+    auto smooth_path = path_smoother_->SmoothSharpCorner(cost_map_, astar_path);
+    final_path = vel_planner_->UpdateVelocity(smooth_path, state.robot.v);
+  }
+
+  if (final_path.size() < 2) {
+    if (verbose_ >= 1) {
+      std::cout << "Invalid reference path with len = " << final_path.size()
+                << std::endl;
     }
     return false;
   }
-
-  auto smooth_path = path_smoother_->SmoothSharpCorner(cost_map_, astar_path);
-
-  auto final_path = vel_planner_->UpdateVelocity(smooth_path, state.robot.v);
 
   {
 #ifdef ROS_BUILD
@@ -174,6 +189,66 @@ bool Planner::UpdateReferenceOnly(const JointState &state,
   }
 
   return true;
+}
+
+std::vector<Point> Planner::BuildDirectReferenceTrajectory(
+    const JointState &state, const Eigen::Vector2d &goal) const {
+  std::vector<Point> path;
+  const int horizon = std::max(2, static_cast<int>(GetMpcHorizonSteps()));
+  path.reserve(static_cast<std::size_t>(horizon));
+
+  const double sx = state.robot.px;
+  const double sy = state.robot.py;
+  const double gx = goal.x();
+  const double gy = goal.y();
+  const double dx = gx - sx;
+  const double dy = gy - sy;
+  const double dist = std::hypot(dx, dy);
+
+  if (dist < 1e-6) {
+    Point p{};
+    p.x = sx;
+    p.y = sy;
+    p.v = 0.0;
+    for (int i = 0; i < horizon; ++i) {
+      path.push_back(p);
+    }
+    return path;
+  }
+
+  for (int i = 0; i < horizon; ++i) {
+    const double t = static_cast<double>(i) / static_cast<double>(horizon - 1);
+    Point p{};
+    p.x = sx + t * dx;
+    p.y = sy + t * dy;
+
+    const double remaining = std::max(0.0, (1.0 - t) * dist);
+    p.v = ComputeDirectReferenceSpeed(remaining);
+    path.push_back(p);
+  }
+
+  path.back().x = gx;
+  path.back().y = gy;
+  path.back().v = 0.0;
+  return path;
+}
+
+double Planner::ComputeDirectReferenceSpeed(double remaining_distance) const {
+  const double v_cap = std::max(0.0, std::min(debug_xref_v_max_, mpc_params_->max_linear_vel));
+  const double v_floor = std::max(0.0, std::min(debug_xref_v_min_, v_cap));
+  const double slow_dist = std::max(0.05, debug_xref_slowdown_distance_);
+  const double k = std::max(0.0, debug_xref_kp_dist_);
+
+  const double ratio = std::min(1.0, std::max(0.0, remaining_distance / slow_dist));
+  const double v_ratio = v_floor + (v_cap - v_floor) * ratio;
+  const double v_linear = v_floor + k * remaining_distance;
+
+  double v_ref = std::min(v_ratio, v_linear);
+  v_ref = std::max(v_floor, std::min(v_ref, v_cap));
+  if (remaining_distance < 0.06) {
+    v_ref = 0.0;
+  }
+  return v_ref;
 }
 
 MpcReturn Planner::SolveMpcFromCachedReference(const JointState &state) {
