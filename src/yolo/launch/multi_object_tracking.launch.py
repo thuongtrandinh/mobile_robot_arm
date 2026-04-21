@@ -61,6 +61,10 @@ import os
 def generate_launch_description():
     """Generate launch description for GPU-optimized multi-object tracking"""
     
+    # ===== LOAD CONFIG FILE =====
+    yolo_pkg_share = get_package_share_directory('yolo')
+    config_path = os.path.join(yolo_pkg_share, 'config', 'params.yaml')
+    
     # ===== LAUNCH ARGUMENTS =====
     declare_use_cuda = DeclareLaunchArgument(
         'use_cuda',
@@ -93,27 +97,19 @@ def generate_launch_description():
     )
 
     # ===== MULTI-OBJECT TRACKING NODE =====
-    # Optimized for obstacle avoidance with RTX A4000
-    # Single model + no Re-ID = 50% GPU savings while handling 20+ objects
+    # Carrega params.yaml para configuração centralizada
     tracking_node = Node(
         package='yolo',
         executable='multi_object_tracking',
         name='multi_object_tracking_node',
         output='screen',
-        parameters=[{
-            # ===== CAMERA TOPICS =====
-            'camera_image_topic': '/camera/color/image_raw',
-            'depth_topic': '/camera/aligned_depth_to_color/image_raw',
-            'camera_info_topic': '/camera/color/camera_info',
-            
-            # ===== YOLO MODEL =====
-            'model_path': LaunchConfiguration('model_path'),
-            'object_conf_thresh': LaunchConfiguration('object_conf'),
-            
-            # ===== HARDWARE OPTIMIZATION =====
-            'use_cuda': LaunchConfiguration('use_cuda'),
-            'use_fp16': LaunchConfiguration('use_fp16'),
-        }],
+        parameters=[
+            config_path,  # Carrega TODOS os parâmetros do params.yaml
+            {
+                # Sobrescreve model_path se passado como argumento de launch
+                'model_path': LaunchConfiguration('model_path'),
+            }
+        ],
         remappings=[],
     )
 

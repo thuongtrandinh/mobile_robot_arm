@@ -72,8 +72,21 @@ def generate_launch_description():
             'align_depth.enable': 'true',           # Căn chỉnh khung hình Depth khớp với RGB
             'rgb_camera.profile': '640,480,30',     # Cấu hình chuẩn 640x480 @ 30FPS
             'depth_module.profile': '640,480,30',   # Cấu hình chuẩn 640x480 @ 30FPS
+
+            # Spatial: Khử nhiễu theo không gian (làm mượt các lỗ thủng depth)
+            'filters': 'temporal,spatial,hole_filling',
+            
+            # 2. Cấu hình chi tiết cho Temporal Filter (để khử rung mạnh hơn)
+            'temporal_filter.smooth_alpha': '0.4', # Càng thấp càng mượt, nhưng sẽ hơi trễ ảnh depth
+            'temporal_filter.smooth_delta': '20',
+            
+            # 3. Khử răng cưa cho vùng biên đối tượng (giúp BBox ổn định hơn)
+            'spatial_filter.holes_fill': '2', 
+            
+            # 4. Đảm bảo Exposure ổn định (tránh rung do thay đổi ánh sáng đột ngột)
             'rgb_camera.auto_exposure_priority': 'false', 
             'depth_module.auto_exposure_priority': 'false',
+
             'initial_reset': 'true'                # Reset camera ngay khi khởi động để tránh lỗi ban đầu,               
         }.items()
     )
