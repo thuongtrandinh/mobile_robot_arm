@@ -419,9 +419,9 @@ def _track_update(self, detection: np.ndarray, feature: Optional[np.ndarray] = N
     self.motion_history.add(center_new, self.velocity)
     
     if self.time_since_update == 0 and self.hit_streak > 1:
-        # TỐI ƯU ANTI-JITTER CỰC MẠNH (alpha = 0.2)
-        # Giữ lại 80% quán tính của khung cũ, làm mượt tuyệt đối các rung lắc của YOLO
-        alpha = 0.2
+        # GIẢM ĐỘ TRỄ: Tăng alpha từ 0.2 → 0.8 để khung hình phản ứng tức thì với chuyển động
+        # alpha = 0.8 giúp bám rất sát đối tượng, vẫn lọc được rung nhẹ nhưng không bị trễ
+        alpha = 0.8
         self.bbox = alpha * detection[:4] + (1 - alpha) * self.bbox
     else:
         self.bbox = detection[:4].copy()

@@ -1,85 +1,67 @@
-# D435i Multi-Object Detector Configuration (Dynamic & Static Obstacle Avoidance)
-# Optimized for VGA 640x480 @ 30 FPS, RTX A4000 GPU
+/**:
+  ros__parameters:
+    # ===== MODEL & HARDWARE =====
+    model_path: 'yolov8n.pt'
+    
+    # ===== YOLO DETECTION PARAMETERS =====
+    yolo:
+      # Object detection confidence threshold (otimizado para reduzir falsos positivos)
+      object_conf_thresh: 0.65       # Aumentado de 0.50 para 0.65 (menos ruído)
+      
+      # Non-Maximum Suppression
+      iou_thresh: 0.50               # IOU threshold para NMS
+      
+      # Depth-Aware NMS (3D space filtering)
+      depth_nms_threshold: 0.5       # Objetos >0.5m apart em Z = ambos mantidos
+      
+      # Class filtering (COCO index - APENAS PESSOA)
+      # Classe 0 = person (otimizado para person-following)
+      dynamic_classes: [0]           # Reduzido de 23 classes para apenas pessoa
 
-# ===== YOLO DETECTION PARAMETERS (MULTI-CLASS COCO) =====
-yolo:
-  # Object detection confidence threshold (COCO classes: person, vehicle, animal, furniture, etc.)
-  object_conf_thresh: 0.50       # Lower threshold for detecting all obstacle types
-  
-  # Non-Maximum Suppression
-  iou_thresh: 0.50               # IOU threshold for NMS (detect overlapping objects)
-  
-  # Depth-Aware NMS (3D space filtering)
-  depth_nms_threshold: 0.5        # Objects >0.5m apart in Z axis = keep both (not occlusion)
-  
-  # Class filtering (COCO index - PURE DYNAMIC ONLY)
-  # Dynamic classes: person, vehicle, animal (moving objects)
-  # LiDAR 2D controller handles static obstacles more accurately
-  dynamic_classes: [0, 1, 2, 3, 4, 5, 6, 7, 8, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
+    # ===== TRACKING PARAMETERS (SHORT-TERM MEMORY) =====
+    tracking:
+      # Timeout & buffer (otimizado para transições rápidas)
+      tracking_timeout: 2.0          # Limpar memória EKF após 2s sem detecção
+      track_buffer: 60               # Manter ID por 60 frames (~2s @ 30Hz)
+      max_age_before_predict: 15     # Prever trajetória por 0.5s se objeto desaparecer
+      
+      # BoT-SORT matching thresholds
+      track_thresh: 0.40             # Confidence threshold para inicializar novo track
+      track_low_thresh: 0.10         # BYTE algorithm low threshold
+      match_thresh: 0.85              # Spatial matching threshold
+      
+      # Appearance features (Re-ID para estabilidade de ID)
+      use_appearance: false          # Desabilitado para economia de GPU
+      appearance_weight: 0.5         # Balance spatial (0.5) + appearance (0.5)
 
-# ===== TRACKING PARAMETERS (SHORT-TERM MEMORY) =====
-tracking:
-  # Timeout & buffer (optimized for rapid object transitions)
-  tracking_timeout: 2.0           # Clear EKF memory after 2s without detection
-  track_buffer: 60                # Keep track ID for 60 frames (~2s @ 30Hz)
-  max_age_before_predict: 15      # Predict trajectory only for 0.5s if object disappears
-  
-  # BoT-SORT matching thresholds
-  track_thresh: 0.40              # Confidence threshold for new track initialization
-  track_low_thresh: 0.10          # BYTE algorithm low threshold (patient tracking)
-  match_thresh: 0.8               # Spatial matching threshold (increased for accuracy)
-  
-  # Appearance features (Re-ID for ID stability)
-  use_appearance: true            # Re-ID ENABLED (ResNet18 + FP16 Tensor Core)
-  appearance_weight: 0.5          # Balance spatial (0.5) + appearance (0.5) matching
+    # ===== DEPTH FILTERING (3D VALIDATION) =====
+    depth_filter:
+      # Valid depth range for obstacle detection
+      min_depth_m: 0.3               # Ignorar objetos < 30cm (ruído do sensor)
+      max_depth_m: 6.0               # Ignorar objetos > 6m (confiança baixa)
+      
+    # ===== VELOCITY FILTER =====
+    velocity_filter:
+      alpha: 0.25                     # EMA smoothing factor para velocidade
 
-# ===== DEPTH FILTERING (3D VALIDATION) =====
-depth_filter:
-  # Valid depth range for obstacle detection
-  min_depth_m: 0.3                # Ignore objects closer than 30cm (sensor noise)
-  max_depth_m: 8.0                # Ignore objects farther than 8m (low confidence)
-  
-# ===== HISTOGRAM EQUALIZATION (OPTIONAL ENHANCEMENT) =====
-image_processing:
-  enable_histogram_equalization: false  # Disabled by default (not needed with depth validation)
-  clahe_clip_limit: 2.0                # Contrast limiting if enabled
-  clahe_tile_size: 8                   # Tile size for local contrast
+    # ===== ROS 2 QoS CONFIGURATION =====
+    ros2_qos:
+      # Publisher: Always latest (for controller)
+      publisher_depth: 1             # KEEP_LAST=1 (latest only)
+      
+      # Subscriber: Camera input buffer
+      subscriber_depth: 30           # Buffer para D435i (sincronização ApproximateTime)
+      
+      # Synchronization tolerance
+      sync_slop: 0.1                 # ±100ms para D435i
+      sync_queue_size: 30            # Buffer do TimeSynchronizer
 
-# ===== APPEARANCE FEATURE EXTRACTOR (ULTRA-OPTIMIZED) =====
-feature_extraction:
-  enabled: true                   # Re-ID feature extraction (ResNet18)
-  preprocessing: "OpenCV+GPU"     # cv2.resize + GPU tensor normalization
-  batch_inference: true           # Process all detections in parallel
-  tensor_normalization: "GPU"     # Broadcast (T/255 - mean)/std on GPU
-  fp16_acceleration: true         # FP16 precision for RTX A4000
-  expected_latency: "2ms"         # Per 20 objects (50ms PIL → 2ms GPU)
-velocity_filter:
-  alpha: 0.3                      # EMA smoothing factor for velocity
-
-# ===== PUBLISHING & METRICS =====
-publishing:
-  publish_rate: 30                # Hz
-  enable_visualization: true      # Enable for debugging (shows annotated video)
-  enable_performance_metrics: true  # Log FPS and latency
-
-# ===== ROS 2 QoS CONFIGURATION (ULTIMATE BOTTLENECK FIX) =====
-ros2_qos:
-  # Publisher: Always latest (for controller)
-  publisher_depth: 1              # KEEP_LAST=1 (latest only)
-  
-  # Subscriber: ULTRA-MINIMAL buffer (queue_size=2 aggressive dropping)
-  subscriber_depth: 2             # Reduced from 10 → 2 (aggressive frame drop)
-  
-  # Synchronization tolerance (relaxed sync)
-  sync_slop: 0.05                 # ±50ms (no USB delay tolerance)
-  sync_queue_size: 2              # DRASTICALLY reduced from 15 → 2
-
-# ===== D435i CAMERA INTRINSICS (VGA - 640x480) =====
-# Values extracted from /camera/color/camera_info (aligned depth uses color intrinsics)
-camera:
-  width: 640
-  height: 480
-  fx: 609.268    # Focal length X (K[0])
-  fy: 609.338    # Focal length Y (K[4])
-  cx: 323.599    # Principal point X (K[2])
-  cy: 246.130    # Principal point Y (K[5])
+    # ===== D435i CAMERA INTRINSICS (VGA - 640x480) =====
+    # Values extracted from /camera/color/camera_info (aligned depth uses color intrinsics)
+    camera:
+      width: 640
+      height: 480
+      fx: 609.268    # Focal length X (K[0])
+      fy: 609.338    # Focal length Y (K[4])
+      cx: 323.599    # Principal point X (K[2])
+      cy: 246.130    # Principal point Y (K[5])

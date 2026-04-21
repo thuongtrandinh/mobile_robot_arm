@@ -40,10 +40,78 @@ class MultiObjectTrackingNode(Node):
     def __init__(self):
         super().__init__('multi_object_tracking_node')
 
+        # ===== KHAI BÁO & ĐỌC PARAMETERS TỪ params.yaml =====
         self.declare_parameter('model_path', 'yolov8n.pt')
-        self.obj_conf = 0.50
         
-        self.dynamic_classes = {0, 1, 2, 3, 4, 5, 6, 7, 8, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23}
+        # YOLO parameters
+        self.declare_parameter('yolo.object_conf_thresh', 0.65)
+        self.declare_parameter('yolo.iou_thresh', 0.50)
+        self.declare_parameter('yolo.depth_nms_threshold', 0.5)
+        self.declare_parameter('yolo.dynamic_classes', [0, 1, 2, 3, 4, 5, 6, 7, 8, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23])
+        
+        # Tracking parameters
+        self.declare_parameter('tracking.tracking_timeout', 2.0)
+        self.declare_parameter('tracking.track_buffer', 60)
+        self.declare_parameter('tracking.track_thresh', 0.40)
+        self.declare_parameter('tracking.track_low_thresh', 0.10)
+        self.declare_parameter('tracking.match_thresh', 0.8)
+        self.declare_parameter('tracking.use_appearance', False)
+        self.declare_parameter('tracking.appearance_weight', 0.5)
+        self.declare_parameter('tracking.max_age_before_predict', 15)
+        
+        # Depth filter parameters
+        self.declare_parameter('depth_filter.min_depth_m', 0.3)
+        self.declare_parameter('depth_filter.max_depth_m', 6.0)
+        
+        # Velocity filter
+        self.declare_parameter('velocity_filter.alpha', 0.3)
+        
+        # ROS 2 QoS parameters
+        self.declare_parameter('ros2_qos.publisher_depth', 1)
+        self.declare_parameter('ros2_qos.subscriber_depth', 30)
+        self.declare_parameter('ros2_qos.sync_slop', 0.1)
+        self.declare_parameter('ros2_qos.sync_queue_size', 30)
+        
+        # Camera intrinsics (mặc định, sẽ ghi đè từ camera_info)
+        self.declare_parameter('camera.fx', 609.268)
+        self.declare_parameter('camera.fy', 609.338)
+        self.declare_parameter('camera.cx', 323.599)
+        self.declare_parameter('camera.cy', 246.130)
+        
+        # ===== LẤY GIÁ TRỊ PARAMETERS =====
+        self.obj_conf = self.get_parameter('yolo.object_conf_thresh').value
+        self.iou_thresh = self.get_parameter('yolo.iou_thresh').value
+        self.depth_nms_threshold = self.get_parameter('yolo.depth_nms_threshold').value
+        self.dynamic_classes = set(self.get_parameter('yolo.dynamic_classes').value)
+        
+        self.track_cleanup_timeout = self.get_parameter('tracking.tracking_timeout').value
+        track_buffer = self.get_parameter('tracking.track_buffer').value
+        track_thresh = self.get_parameter('tracking.track_thresh').value
+        track_low_thresh = self.get_parameter('tracking.track_low_thresh').value
+        match_thresh = self.get_parameter('tracking.match_thresh').value
+        use_appearance = self.get_parameter('tracking.use_appearance').value
+        appearance_weight = self.get_parameter('tracking.appearance_weight').value
+        max_age_before_predict = self.get_parameter('tracking.max_age_before_predict').value
+        
+        self.min_depth = self.get_parameter('depth_filter.min_depth_m').value
+        self.max_depth = self.get_parameter('depth_filter.max_depth_m').value
+        
+        self.velocity_filter_alpha = self.get_parameter('velocity_filter.alpha').value
+        
+        pub_depth = self.get_parameter('ros2_qos.publisher_depth').value
+        sub_depth = self.get_parameter('ros2_qos.subscriber_depth').value
+        sync_slop = self.get_parameter('ros2_qos.sync_slop').value
+        sync_queue_size = self.get_parameter('ros2_qos.sync_queue_size').value
+        
+        self.fx_param = self.get_parameter('camera.fx').value
+        self.fy_param = self.get_parameter('camera.fy').value
+        self.cx_param = self.get_parameter('camera.cx').value
+        self.cy_param = self.get_parameter('camera.cy').value
+        
+        self.get_logger().info(
+            f'⚙️ Parameters loaded: conf={self.obj_conf}, classes={self.dynamic_classes}, '
+            f'timeout={self.track_cleanup_timeout}s, depth_range=[{self.min_depth:.1f}, {self.max_depth:.1f}]m'
+        )
 
         pkg_share = get_package_share_directory('yolo')
         model_path = os.path.join(pkg_share, 'models', self.get_parameter('model_path').value)
@@ -55,25 +123,32 @@ class MultiObjectTrackingNode(Node):
         self.get_logger().info('✅ YOLOv8n & GPU đã khởi tạo.')
 
         self._tracker = BoTSortTracker(
-            track_thresh=0.40, 
-            track_buffer=60, 
-            match_thresh=0.8,
-            use_appearance=False, 
-            max_age_before_predict=15
+            track_thresh=track_thresh, 
+            track_buffer=track_buffer, 
+            match_thresh=match_thresh,
+            use_appearance=use_appearance, 
+            max_age_before_predict=max_age_before_predict
         )
         
         if HAS_DEPTH_NMS:
-            self._depth_nms = DepthAwareNMS(nms_threshold=0.65, depth_threshold=0.50)
+            self._depth_nms = DepthAwareNMS(nms_threshold=self.depth_nms_threshold, depth_threshold=self.min_depth)
 
         self.ekfs, self.velocity_filters = {}, {}
         self.track_last_seen_time, self.last_frame_ts, self.position_history = {}, {}, {}
-        self.track_cleanup_timeout = 2.0
-
-        self._bridge = CvBridge()
         
-        qos_pub = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT, history=HistoryPolicy.KEEP_LAST, depth=1)
-        # Tăng depth=30 để không bỏ lọt gói tin mạng nào từ camera
-        qos_sub = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT, history=HistoryPolicy.KEEP_LAST, depth=30)
+        self._bridge = CvBridge()
+        self._current_depth_map = None
+        
+        # Inicializar intrínsecos da câmera com valores padrão (serão sobrescrevidos por camera_info)
+        self.fx = self.fx_param
+        self.fy = self.fy_param
+        self.cx = self.cx_param
+        self.cy = self.cy_param
+        self.camera_info_received = False
+        
+        # QoS profiles from config
+        qos_pub = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT, history=HistoryPolicy.KEEP_LAST, depth=pub_depth)
+        qos_sub = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT, history=HistoryPolicy.KEEP_LAST, depth=sub_depth)
         
         self._pub_dynamics = self.create_publisher(ObstacleArray, '/tracking/dynamics', qos_profile=qos_pub)
         
@@ -88,11 +163,10 @@ class MultiObjectTrackingNode(Node):
         self.img_sub = message_filters.Subscriber(self, Image, '/camera/color/image_raw', qos_profile=qos_sub)
         self.depth_sub = message_filters.Subscriber(self, Image, '/camera/aligned_depth_to_color/image_raw', qos_profile=qos_sub)
         
-        # FIX CỰC QUAN TRỌNG: Tăng queue_size và slop để bao dung hơn với độ trễ của D435i
-        self.ts = message_filters.ApproximateTimeSynchronizer([self.img_sub, self.depth_sub], queue_size=30, slop=0.1)
+        # Synchronizer với parameters từ config
+        self.ts = message_filters.ApproximateTimeSynchronizer([self.img_sub, self.depth_sub], queue_size=sync_queue_size, slop=sync_slop)
         self.ts.registerCallback(self._synced_callback)
         
-        self.camera_info_received = False
         self.create_subscription(CameraInfo, '/camera/color/camera_info', self._cam_cb, 10)
 
         self._frame_intervals = deque(maxlen=30)
@@ -175,14 +249,21 @@ class MultiObjectTrackingNode(Node):
     def _get_depth(self, bbox, h, w):
         x1, y1, x2, y2 = map(int, bbox)
         if not (0 <= x1 < w and x2 <= w and 0 <= y1 < h and y2 <= h): return None
-        roi = self._current_depth_map[y1:y2, x1:x2]
-        valid = roi[(np.isfinite(roi)) & (roi > 0.3) & (roi < 8.0)]
+        
+        # Thu hẹp vùng lấy Depth (margin 10%) để tránh lấy nhầm độ sâu của nền
+        margin_w = int((x2 - x1) * 0.1)
+        margin_h = int((y2 - y1) * 0.1)
+        roi = self._current_depth_map[y1+margin_h:y2-margin_h, x1+margin_w:x2-margin_w]
+        
+        # Lọc với min/max_depth từ config
+        valid = roi[(np.isfinite(roi)) & (roi > self.min_depth) & (roi < self.max_depth)]
+        
         return float(np.median(valid)) if valid.size > 0 else None
 
     def _update_ekf_and_traj(self, tid, px, py, pz, ts_now, header):
         if tid not in self.ekfs:
             self.ekfs[tid] = CTRV_EKF(dt=0.033)
-            self.velocity_filters[tid] = VelocityFilter(alpha=0.3)
+            self.velocity_filters[tid] = VelocityFilter(alpha=self.velocity_filter_alpha)
             self.position_history[tid] = deque(maxlen=5)
 
         dt = max(ts_now - self.last_frame_ts.get(tid, ts_now - 0.033), 0.01)
