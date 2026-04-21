@@ -1,4 +1,4 @@
 #!/usr/bin/env python3
-from yolo.tracking_node import main
+from yolo.multi_object_tracking_node import main
 if __name__ == '__main__':
     main()

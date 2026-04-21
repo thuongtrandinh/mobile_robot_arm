@@ -12,11 +12,10 @@ yolo:
   # Depth-Aware NMS (3D space filtering)
   depth_nms_threshold: 0.5        # Objects >0.5m apart in Z axis = keep both (not occlusion)
   
-  # Class filtering (COCO index)
-  # Dynamic: 0=person, 2=car, 3=motorcycle, 5=bus, 7=truck, 17=cat, 18=dog, 19=horse
-  # Static: 40=backpack, 41=handbag, 42=suitcase, 56=chair, 57=couch, 58=potted_plant, 59=bed, 60=dining_table, 62=toilet, 84=book, 86=vase, 87=scissors, 88=teddy, 89=hair_dryer, 90=toothbrush
-  dynamic_classes: [0, 2, 3, 5, 7, 17, 18, 19]          # Person, vehicles, animals
-  static_classes: [40, 41, 42, 56, 57, 58, 59, 60, 84, 86, 87]  # Furniture, containers, etc.
+  # Class filtering (COCO index - PURE DYNAMIC ONLY)
+  # Dynamic classes: person, vehicle, animal (moving objects)
+  # LiDAR 2D controller handles static obstacles more accurately
+  dynamic_classes: [0, 1, 2, 3, 4, 5, 6, 7, 8, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
 
 # ===== TRACKING PARAMETERS (SHORT-TERM MEMORY) =====
 tracking:
@@ -28,11 +27,11 @@ tracking:
   # BoT-SORT matching thresholds
   track_thresh: 0.40              # Confidence threshold for new track initialization
   track_low_thresh: 0.10          # BYTE algorithm low threshold (patient tracking)
-  match_thresh: 0.7               # Spatial matching threshold
+  match_thresh: 0.8               # Spatial matching threshold (increased for accuracy)
   
-  # Appearance features (disabled for multi-object processing speed)
-  use_appearance: false           # Re-ID disabled to save GPU memory for many objects
-  appearance_weight: 0.0
+  # Appearance features (Re-ID for ID stability)
+  use_appearance: true            # Re-ID ENABLED (ResNet18 + FP16 Tensor Core)
+  appearance_weight: 0.5          # Balance spatial (0.5) + appearance (0.5) matching
 
 # ===== DEPTH FILTERING (3D VALIDATION) =====
 depth_filter:
@@ -46,15 +45,34 @@ image_processing:
   clahe_clip_limit: 2.0                # Contrast limiting if enabled
   clahe_tile_size: 8                   # Tile size for local contrast
 
-# ===== VELOCITY FILTERING (SMOOTH MOTION ESTIMATES) =====
+# ===== APPEARANCE FEATURE EXTRACTOR (ULTRA-OPTIMIZED) =====
+feature_extraction:
+  enabled: true                   # Re-ID feature extraction (ResNet18)
+  preprocessing: "OpenCV+GPU"     # cv2.resize + GPU tensor normalization
+  batch_inference: true           # Process all detections in parallel
+  tensor_normalization: "GPU"     # Broadcast (T/255 - mean)/std on GPU
+  fp16_acceleration: true         # FP16 precision for RTX A4000
+  expected_latency: "2ms"         # Per 20 objects (50ms PIL → 2ms GPU)
 velocity_filter:
   alpha: 0.3                      # EMA smoothing factor for velocity
 
 # ===== PUBLISHING & METRICS =====
 publishing:
   publish_rate: 30                # Hz
-  enable_visualization: false     # Disable for production (use Best Effort QoS)
+  enable_visualization: true      # Enable for debugging (shows annotated video)
   enable_performance_metrics: true  # Log FPS and latency
+
+# ===== ROS 2 QoS CONFIGURATION (ULTIMATE BOTTLENECK FIX) =====
+ros2_qos:
+  # Publisher: Always latest (for controller)
+  publisher_depth: 1              # KEEP_LAST=1 (latest only)
+  
+  # Subscriber: ULTRA-MINIMAL buffer (queue_size=2 aggressive dropping)
+  subscriber_depth: 2             # Reduced from 10 → 2 (aggressive frame drop)
+  
+  # Synchronization tolerance (relaxed sync)
+  sync_slop: 0.05                 # ±50ms (no USB delay tolerance)
+  sync_queue_size: 2              # DRASTICALLY reduced from 15 → 2
 
 # ===== D435i CAMERA INTRINSICS (VGA - 640x480) =====
 # Values extracted from /camera/color/camera_info (aligned depth uses color intrinsics)
