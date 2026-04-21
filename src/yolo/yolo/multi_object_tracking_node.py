@@ -21,9 +21,8 @@ import message_filters
 
 from sensor_msgs.msg import Image, CameraInfo, CompressedImage
 from std_msgs.msg import Header
-from nav_msgs.msg import Path
 from geometry_msgs.msg import PoseStamped
-from interfaces.msg import ObstacleArray, DynaObstacle
+from interfaces.msg import HumanState, HumanArray
 from ament_index_python.packages import get_package_share_directory
 
 from yolo.algorithms.botsort_handler import BoTSortTracker
@@ -150,7 +149,7 @@ class MultiObjectTrackingNode(Node):
         qos_pub = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT, history=HistoryPolicy.KEEP_LAST, depth=pub_depth)
         qos_sub = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT, history=HistoryPolicy.KEEP_LAST, depth=sub_depth)
         
-        self._pub_dynamics = self.create_publisher(ObstacleArray, '/tracking/dynamics', qos_profile=qos_pub)
+        self._pub_humans = self.create_publisher(HumanArray, '/tracking/humans', qos_profile=qos_pub)
         
         # Publisher cho debug - Sử dụng CompressedImage để nhẹ nhất có thể
         self._pub_debug_img = self.create_publisher(
@@ -226,7 +225,9 @@ class MultiObjectTrackingNode(Node):
         self._cleanup_memory(ts_now)
 
     def _publish_data(self, tracks_np, h, w, ts_now):
-        dyna_msg = ObstacleArray(header=Header(stamp=self.get_clock().now().to_msg(), frame_id="camera_link"))
+        # Tạo message mảng người động
+        human_msg = HumanArray()
+        human_msg.header = Header(stamp=self.get_clock().now().to_msg(), frame_id="camera_link")
 
         for i, track in enumerate(tracks_np):
             tid = int(track[4])
@@ -236,15 +237,26 @@ class MultiObjectTrackingNode(Node):
             depth = self._get_depth(bbox, h, w)
             if depth is None: continue
 
+            # Tọa độ tương đối so với camera (X hướng tới, Y hướng trái)
             px = float(depth)
             py = float(-(( (bbox[0]+bbox[2])/2 - self.cx ) * depth / self.fx))
-            pz = float(-(( (bbox[1]+bbox[3])/2 - self.cy ) * depth / self.fy))
             radius = float(abs(bbox[2] - bbox[0]) * depth / self.fx / 2.0 * 0.85)
 
-            trajectory = self._update_ekf_and_traj(tid, px, py, pz, ts_now, dyna_msg.header)
-            dyna_msg.dyna_obstacles.append(DynaObstacle(id=float(tid), distance=math.hypot(px, py), radius=radius, trajectory=trajectory))
+            # Cập nhật EKF và lấy thẳng vx, vy
+            vx, vy = self._update_ekf_velocity(tid, px, py, ts_now)
+            
+            # Gói vào HumanState
+            human = HumanState()
+            human.px = px
+            human.py = py
+            human.vx = float(vx)
+            human.vy = float(vy)
+            human.radius = radius
+            
+            human_msg.humans.append(human)
 
-        self._pub_dynamics.publish(dyna_msg)
+        # Bắn dữ liệu sang cho Controller
+        self._pub_humans.publish(human_msg)
 
     def _get_depth(self, bbox, h, w):
         x1, y1, x2, y2 = map(int, bbox)
@@ -260,7 +272,7 @@ class MultiObjectTrackingNode(Node):
         
         return float(np.median(valid)) if valid.size > 0 else None
 
-    def _update_ekf_and_traj(self, tid, px, py, pz, ts_now, header):
+    def _update_ekf_velocity(self, tid, px, py, ts_now):
         if tid not in self.ekfs:
             self.ekfs[tid] = CTRV_EKF(dt=0.033)
             self.velocity_filters[tid] = VelocityFilter(alpha=self.velocity_filter_alpha)
@@ -278,16 +290,9 @@ class MultiObjectTrackingNode(Node):
         ekf.update(np.array([px, py]), meas_vel)
 
         filtered_vel = self.velocity_filters[tid].update(np.array([float(ekf.state.v * np.cos(ekf.state.psi)), float(ekf.state.v * np.sin(ekf.state.psi)), 0.0]))
-        vx, vy = filtered_vel[0], filtered_vel[1]
         
-        path = Path(header=header)
-        for i in range(6): 
-            pose = PoseStamped(header=header)
-            pose.pose.position.x = float(px + vx*(i*0.25))
-            pose.pose.position.y = float(py + vy*(i*0.25))
-            pose.pose.position.z = float(pz)
-            path.poses.append(pose)
-        return path
+        # Chỉ trả về vx, vy (đã làm mượt)
+        return filtered_vel[0], filtered_vel[1]
 
     def _cleanup_memory(self, ts_now):
         stale_ids = [tid for tid, last in self.track_last_seen_time.items() if ts_now - last > self.track_cleanup_timeout]
