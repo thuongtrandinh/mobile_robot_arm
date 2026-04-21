@@ -8,6 +8,28 @@ endif()
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# ---------- ACADOS integration ----------
+option(CONTROLLER_ENABLE_ACADOS "Enable ACADOS generated solver integration" ON)
+set(ACADOS_INSTALL_DIR "$ENV{HOME}/acados")
+set(ACADOS_GENERATED_CODE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/c_generated_code")
+
+if(CONTROLLER_ENABLE_ACADOS)
+  set(ACADOS_INCLUDE_DIRS
+    ${ACADOS_INSTALL_DIR}/include
+    ${ACADOS_INSTALL_DIR}/include/acados
+    ${ACADOS_INSTALL_DIR}/include/blasfeo/include
+    ${ACADOS_INSTALL_DIR}/include/hpipm/include
+    ${ACADOS_GENERATED_CODE_DIR}
+    ${ACADOS_GENERATED_CODE_DIR}/ddmr_model
+  )
+
+  include_directories(${ACADOS_INCLUDE_DIRS})
+
+  if(EXISTS "${ACADOS_INSTALL_DIR}/lib")
+    link_directories(${ACADOS_INSTALL_DIR}/lib)
+  endif()
+endif()
+
 # ---------- Dependencies ----------
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
@@ -59,6 +81,23 @@ add_executable(ampcc_node
   src/main.cc
 )
 
+if(CONTROLLER_ENABLE_ACADOS)
+  set(ACADOS_GENERATED_SOURCES
+    ${ACADOS_GENERATED_CODE_DIR}/acados_solver_ddmr.c
+    ${ACADOS_GENERATED_CODE_DIR}/ddmr_model/ddmr_expl_ode_fun.c
+    ${ACADOS_GENERATED_CODE_DIR}/ddmr_model/ddmr_expl_vde_forw.c
+    ${ACADOS_GENERATED_CODE_DIR}/ddmr_model/ddmr_expl_vde_adj.c
+  )
+
+  foreach(_src IN LISTS ACADOS_GENERATED_SOURCES)
+    if(EXISTS "${_src}")
+      target_sources(ampcc_node PRIVATE ${_src})
+    else()
+      message(STATUS "ACADOS source not found yet: ${_src}")
+    endif()
+  endforeach()
+endif()
+
 target_include_directories(ampcc_node PRIVATE
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   ${EIGEN3_INCLUDE_DIRS}
@@ -67,6 +106,14 @@ target_include_directories(ampcc_node PRIVATE
 target_compile_definitions(ampcc_node PRIVATE ROS_BUILD)
 
 target_link_libraries(ampcc_node controller_core)
+
+if(CONTROLLER_ENABLE_ACADOS)
+  target_link_libraries(ampcc_node
+    acados
+    blasfeo
+    hpipm
+  )
+endif()
 
 ament_target_dependencies(ampcc_node
   rclcpp
@@ -98,6 +145,7 @@ install(
     scripts/ampcc_rviz_visualizer.py
     scripts/custom_env_visualizer_node.py
     scripts/eval_ppo.py
+    scripts/generate_acados_mpc.py
     scripts/rl_ocp_policy_bridge.py
     scripts/rl_policy_worker.py
   DESTINATION lib/${PROJECT_NAME}
