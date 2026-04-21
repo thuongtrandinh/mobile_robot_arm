@@ -25,9 +25,7 @@ Message Output:
     - Best Effort QoS (dropped if lag detected)
 
 Dynamic Classes (with trajectory):
-  person(0), car(2), motorcycle(3), truck(5), bus(6),
-  dog(16), cat(17), horse(18), sheep(19), cow(20),
-  elephant(21), bear(22), zebra(23), airplane(15), bird(14)
+  person(0)
 
 Static Classes (position only):
   chair(56), couch(57), bed(60), toilet(62), sink(67),
@@ -97,20 +95,13 @@ def generate_launch_description():
     )
 
     # ===== MULTI-OBJECT TRACKING NODE =====
-    # Carrega params.yaml para configuração centralizada
+    # Load params.yaml for centralized configuration
     tracking_node = Node(
         package='yolo',
         executable='multi_object_tracking',
         name='multi_object_tracking_node',
         output='screen',
-        parameters=[
-            config_path,  # Carrega TODOS os parâmetros do params.yaml
-            {
-                # Sobrescreve model_path se passado como argumento de launch
-                'model_path': LaunchConfiguration('model_path'),
-            }
-        ],
-        remappings=[],
+        parameters=[config_path],  # Automatically loads all parameters from params.yaml
     )
 
     # ===== RETURN LAUNCH DESCRIPTION =====

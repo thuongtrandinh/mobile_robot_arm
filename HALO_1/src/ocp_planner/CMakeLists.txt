@@ -60,8 +60,6 @@ target_link_libraries(${PROJECT_NAME}_node
 ################# pybind11 #####################
 ################################################
 
-<<<<<<< HEAD
-<<<<<<< HEAD
 option(BUILD_OCP_PYTHON_BINDINGS "Build pybind11 module for ocp_planner" ON)
 
 if(BUILD_OCP_PYTHON_BINDINGS)
@@ -94,19 +92,13 @@ if(BUILD_OCP_PYTHON_BINDINGS)
     message(WARNING "Python3 (Interpreter + Development.Module) not found. Skipping ocp_planner pybind module.")
   endif()
 endif()
-=======
-<<<<<<< HEAD
+
 # Use conda environment Python when available; otherwise fall back to system Python.
 if(DEFINED ENV{CONDA_PREFIX} AND NOT "$ENV{CONDA_PREFIX}" STREQUAL "")
   set(Python3_EXECUTABLE "$ENV{CONDA_PREFIX}/bin/python")
 endif()
-find_package(Python3 COMPONENTS Interpreter Development.Module REQUIRED)
-=======
-option(BUILD_OCP_PYTHON_BINDINGS "Build pybind11 module for ocp_planner" ON)
->>>>>>> 3ea914c (feat: fix error for ocp)
-=======
 option(BUILD_OCP_PYTHON_BINDINGS "Build pybind11 module for ocp_planner" OFF)
->>>>>>> a922a9a (fix: disable pybind11 python bindings due to missing extern/pybind11 submodule)
+
 
 if(BUILD_OCP_PYTHON_BINDINGS)
   # Prefer conda Python when available, otherwise fall back to system Python.
@@ -138,7 +130,6 @@ if(BUILD_OCP_PYTHON_BINDINGS)
     message(WARNING "Python3 (Interpreter + Development.Module) not found. Skipping ocp_planner pybind module.")
   endif()
 endif()
->>>>>>> 4f6363e (feat: fix error for ocp)
 
 ################################################
 ## Install ##

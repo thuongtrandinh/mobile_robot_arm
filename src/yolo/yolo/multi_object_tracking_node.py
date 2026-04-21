@@ -37,47 +37,13 @@ except ImportError:
 
 class MultiObjectTrackingNode(Node):
     def __init__(self):
-        super().__init__('multi_object_tracking_node')
+        # Enable automatic parameter declaration from YAML config
+        super().__init__('multi_object_tracking_node',
+                         allow_undeclared_parameters=True,
+                         automatically_declare_parameters_from_overrides=True)
 
-        # ===== KHAI BÁO & ĐỌC PARAMETERS TỪ params.yaml =====
-        self.declare_parameter('model_path', 'yolov8n.pt')
-        
-        # YOLO parameters
-        self.declare_parameter('yolo.object_conf_thresh', 0.65)
-        self.declare_parameter('yolo.iou_thresh', 0.50)
-        self.declare_parameter('yolo.depth_nms_threshold', 0.5)
-        self.declare_parameter('yolo.dynamic_classes', [0, 1, 2, 3, 4, 5, 6, 7, 8, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23])
-        
-        # Tracking parameters
-        self.declare_parameter('tracking.tracking_timeout', 2.0)
-        self.declare_parameter('tracking.track_buffer', 60)
-        self.declare_parameter('tracking.track_thresh', 0.40)
-        self.declare_parameter('tracking.track_low_thresh', 0.10)
-        self.declare_parameter('tracking.match_thresh', 0.8)
-        self.declare_parameter('tracking.use_appearance', False)
-        self.declare_parameter('tracking.appearance_weight', 0.5)
-        self.declare_parameter('tracking.max_age_before_predict', 15)
-        
-        # Depth filter parameters
-        self.declare_parameter('depth_filter.min_depth_m', 0.3)
-        self.declare_parameter('depth_filter.max_depth_m', 6.0)
-        
-        # Velocity filter
-        self.declare_parameter('velocity_filter.alpha', 0.3)
-        
-        # ROS 2 QoS parameters
-        self.declare_parameter('ros2_qos.publisher_depth', 1)
-        self.declare_parameter('ros2_qos.subscriber_depth', 30)
-        self.declare_parameter('ros2_qos.sync_slop', 0.1)
-        self.declare_parameter('ros2_qos.sync_queue_size', 30)
-        
-        # Camera intrinsics (mặc định, sẽ ghi đè từ camera_info)
-        self.declare_parameter('camera.fx', 609.268)
-        self.declare_parameter('camera.fy', 609.338)
-        self.declare_parameter('camera.cx', 323.599)
-        self.declare_parameter('camera.cy', 246.130)
-        
-        # ===== LẤY GIÁ TRỊ PARAMETERS =====
+        # ===== LẤY GIÁ TRỊ PARAMETERS TỨ FILE YAML =====
+        # Note: All parameters must be defined in params.yaml
         self.obj_conf = self.get_parameter('yolo.object_conf_thresh').value
         self.iou_thresh = self.get_parameter('yolo.iou_thresh').value
         self.depth_nms_threshold = self.get_parameter('yolo.depth_nms_threshold').value
