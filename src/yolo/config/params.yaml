@@ -16,7 +16,7 @@
       
       # Class filtering (COCO index - APENAS PESSOA)
       # Classe 0 = person (otimizado para person-following)
-      dynamic_classes: [0]           # Reduzido de 23 classes para apenas pessoa
+      dynamic_classes: [0]           # Detect only 'person' class (COCO index 0)
 
     # ===== TRACKING PARAMETERS (SHORT-TERM MEMORY) =====
     tracking:
