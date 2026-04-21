@@ -9,6 +9,7 @@
 #include <vector>
 
 #include <rclcpp/rclcpp.hpp>
+#include <rcl_interfaces/msg/set_parameters_result.hpp>
 #include <geometry_msgs/msg/twist_stamped.hpp>
 #include <nav_msgs/msg/occupancy_grid.hpp>
 #include <nav_msgs/msg/path.hpp>
@@ -33,6 +34,7 @@ rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr local_costmap_pub;
 rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr cmd_pub;
 rclcpp::TimerBase::SharedPtr mpc_solve_timer;
 rclcpp::CallbackGroup::SharedPtr mpc_callback_group;
+rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr param_callback_handle;
 JointState _latest_state;
 bool _has_latest_state = false;
 bool _has_reference = false;
@@ -47,6 +49,7 @@ uint64_t _mpc_fail_count = 0;
 uint64_t _ref_missing_count = 0;
 uint64_t _goal_stop_count = 0;
 std::atomic<bool> _shutting_down{false};
+robot_plann::MpcParams::Ptr _runtime_mpc_params;
 
 namespace {
 double ClampValue(double value, double low, double high) {
@@ -71,17 +74,17 @@ namespace {
 robot_plann::MpcParams::Ptr BuildMpcParamsFromNode(const rclcpp::Node::SharedPtr &node) {
   auto params = std::make_shared<robot_plann::MpcParams>();
   params->np = static_cast<uint16_t>(
-      node->declare_parameter<int>("mpc.horizon_steps", robot_plann::kNP));
-  params->dt = node->declare_parameter<double>("mpc.dt", robot_plann::kDT);
+    node->declare_parameter<int>("mpc_structure.n_horizon", 20));
+  params->dt = node->declare_parameter<double>("mpc_structure.dt", 0.1);
   params->max_linear_vel =
-      node->declare_parameter<double>("mpc.max_linear_vel", robot_plann::kMaxLinearVel);
+    node->declare_parameter<double>("constraints.max_linear_vel", robot_plann::kMaxLinearVel);
   params->max_angular_vel =
-      node->declare_parameter<double>("mpc.max_angular_vel", robot_plann::kMaxAngularVel);
+    node->declare_parameter<double>("constraints.max_angular_vel", robot_plann::kMaxAngularVel);
   params->max_linear_acc =
-      node->declare_parameter<double>("mpc.max_linear_acc", robot_plann::kMaxLinearAcc);
+    node->declare_parameter<double>("constraints.max_linear_acc", robot_plann::kMaxLinearAcc);
   params->max_angular_acc =
-      node->declare_parameter<double>("mpc.max_angular_acc", robot_plann::kMaxAngularAcc);
-  params->wheel_half_track = node->declare_parameter<double>("mpc.wheel_half_track", 0.3);
+    node->declare_parameter<double>("constraints.max_angular_acc", robot_plann::kMaxAngularAcc);
+  params->wheel_half_track = node->declare_parameter<double>("mpc_structure.wheel_half_track", 0.3);
   params->local_obst_num = node->declare_parameter<int>("mpc.local_obst_num", 8);
   params->solver_max_iter = node->declare_parameter<int>("mpc.solver.max_iter", 250);
   params->solver_max_cpu_time = node->declare_parameter<double>("mpc.solver.max_cpu_time", 0.09);
@@ -90,31 +93,45 @@ robot_plann::MpcParams::Ptr BuildMpcParamsFromNode(const rclcpp::Node::SharedPtr
     params->wall_constraint_activation_distance =
       node->declare_parameter<double>("mpc.wall_constraint_activation_distance", 2.0);
 
-  params->weights.slack = node->declare_parameter<double>("mpc.weights.slack", 99999.0);
-  params->weights.pose_x = node->declare_parameter<double>("mpc.weights.pose_x", 5.0);
-  params->weights.pose_y = node->declare_parameter<double>("mpc.weights.pose_y", 5.0);
-  params->weights.yaw_rate = node->declare_parameter<double>("mpc.weights.yaw_rate", 1.0);
-  params->weights.terminal_x = node->declare_parameter<double>("mpc.weights.terminal_x", 100.0);
-  params->weights.terminal_y = node->declare_parameter<double>("mpc.weights.terminal_y", 100.0);
-  params->weights.input_acc = node->declare_parameter<double>("mpc.weights.input_acc", 2.0);
-  params->weights.input_yaw_acc =
-      node->declare_parameter<double>("mpc.weights.input_yaw_acc", 0.5);
+    params->weights.w_x = node->declare_parameter<double>("cost_weights.w_x", 5.0);
+    params->weights.w_y = node->declare_parameter<double>("cost_weights.w_y", 5.0);
+    params->weights.w_theta = node->declare_parameter<double>("cost_weights.w_theta", 1.0);
+    params->weights.w_v = node->declare_parameter<double>("cost_weights.w_v", 1.0);
+    params->weights.w_r = node->declare_parameter<double>("cost_weights.w_r", 1.0);
+    params->weights.w_acc = node->declare_parameter<double>("cost_weights.w_acc", 2.0);
+    params->weights.w_dr = node->declare_parameter<double>("cost_weights.w_dr", 0.5);
+    params->weights.w_x_e = node->declare_parameter<double>("cost_weights.w_x_e", 100.0);
+    params->weights.w_y_e = node->declare_parameter<double>("cost_weights.w_y_e", 100.0);
+    params->weights.w_theta_e = node->declare_parameter<double>("cost_weights.w_theta_e", 1.0);
+    params->weights.w_v_e = node->declare_parameter<double>("cost_weights.w_v_e", 1.0);
+    params->weights.w_r_e = node->declare_parameter<double>("cost_weights.w_r_e", 1.0);
+
+    // Keep old aliases synchronized for any remaining legacy helper logic.
+    params->weights.pose_x = params->weights.w_x;
+    params->weights.pose_y = params->weights.w_y;
+    params->weights.yaw_rate = params->weights.w_r;
+    params->weights.terminal_x = params->weights.w_x_e;
+    params->weights.terminal_y = params->weights.w_y_e;
+    params->weights.input_acc = params->weights.w_acc;
+    params->weights.input_yaw_acc = params->weights.w_dr;
+
+    params->weights.slack = node->declare_parameter<double>("mpc.weights.slack", 99999.0);
   params->weights.smooth_acc = node->declare_parameter<double>("mpc.weights.smooth_acc", 0.05);
   params->weights.smooth_yaw_acc =
       node->declare_parameter<double>("mpc.weights.smooth_yaw_acc", 0.05);
 
   if (params->np < 2) {
-    RCLCPP_WARN(node->get_logger(), "mpc.horizon_steps must be >= 2, forcing 2");
+    RCLCPP_WARN(node->get_logger(), "mpc_structure.n_horizon must be >= 2, forcing 2");
     params->np = 2;
   }
-  if (params->np > robot_plann::kNP) {
+  if (params->np > DDMR_N) {
     RCLCPP_WARN(
         node->get_logger(),
-        "mpc.horizon_steps=%u exceeds compiled max kNP=%d, clamping to %d",
+        "mpc_structure.n_horizon=%u exceeds generated solver horizon DDMR_N=%d, clamping to %d",
         params->np,
-        robot_plann::kNP,
-        robot_plann::kNP);
-    params->np = robot_plann::kNP;
+        DDMR_N,
+        DDMR_N);
+    params->np = DDMR_N;
   }
   if (params->dt <= 0.0) {
     RCLCPP_WARN(node->get_logger(), "mpc.dt must be > 0, fallback to %.3f", robot_plann::kDT);
@@ -147,6 +164,86 @@ robot_plann::MpcParams::Ptr BuildMpcParamsFromNode(const rclcpp::Node::SharedPtr
   }
 
   return params;
+}
+
+rcl_interfaces::msg::SetParametersResult OnMpcParamUpdate(
+    const std::vector<rclcpp::Parameter> &changed_params) {
+  rcl_interfaces::msg::SetParametersResult result;
+  result.successful = true;
+  result.reason = "ok";
+
+  if (!_runtime_mpc_params) {
+    _runtime_mpc_params = std::make_shared<robot_plann::MpcParams>();
+  }
+  auto updated = std::make_shared<robot_plann::MpcParams>(*_runtime_mpc_params);
+
+  auto assign_non_negative = [&](const rclcpp::Parameter &param, double &dst) {
+    if (param.get_type() != rclcpp::ParameterType::PARAMETER_DOUBLE) {
+      return false;
+    }
+    dst = std::max(0.0, param.as_double());
+    return true;
+  };
+
+  for (const auto &param : changed_params) {
+    const std::string &name = param.get_name();
+    if (name == "cost_weights.w_x") assign_non_negative(param, updated->weights.w_x);
+    else if (name == "cost_weights.w_y") assign_non_negative(param, updated->weights.w_y);
+    else if (name == "cost_weights.w_theta") assign_non_negative(param, updated->weights.w_theta);
+    else if (name == "cost_weights.w_v") assign_non_negative(param, updated->weights.w_v);
+    else if (name == "cost_weights.w_r") assign_non_negative(param, updated->weights.w_r);
+    else if (name == "cost_weights.w_acc") assign_non_negative(param, updated->weights.w_acc);
+    else if (name == "cost_weights.w_dr") assign_non_negative(param, updated->weights.w_dr);
+    else if (name == "cost_weights.w_x_e") assign_non_negative(param, updated->weights.w_x_e);
+    else if (name == "cost_weights.w_y_e") assign_non_negative(param, updated->weights.w_y_e);
+    else if (name == "cost_weights.w_theta_e") assign_non_negative(param, updated->weights.w_theta_e);
+    else if (name == "cost_weights.w_v_e") assign_non_negative(param, updated->weights.w_v_e);
+    else if (name == "cost_weights.w_r_e") assign_non_negative(param, updated->weights.w_r_e);
+    else if (name == "constraints.max_linear_vel") assign_non_negative(param, updated->max_linear_vel);
+    else if (name == "constraints.max_linear_acc") assign_non_negative(param, updated->max_linear_acc);
+    else if (name == "constraints.max_angular_vel") assign_non_negative(param, updated->max_angular_vel);
+    else if (name == "constraints.max_angular_acc") assign_non_negative(param, updated->max_angular_acc);
+    else if (name == "mpc_structure.wheel_half_track") assign_non_negative(param, updated->wheel_half_track);
+  }
+
+  // Keep old aliases synchronized.
+  updated->weights.pose_x = updated->weights.w_x;
+  updated->weights.pose_y = updated->weights.w_y;
+  updated->weights.yaw_rate = updated->weights.w_r;
+  updated->weights.terminal_x = updated->weights.w_x_e;
+  updated->weights.terminal_y = updated->weights.w_y_e;
+  updated->weights.input_acc = updated->weights.w_acc;
+  updated->weights.input_yaw_acc = updated->weights.w_dr;
+
+  {
+    std::lock_guard<std::mutex> lock(_planner_mutex);
+    _runtime_mpc_params = updated;
+    if (_planner) {
+      _planner->UpdateMpcParams(_runtime_mpc_params);
+    }
+  }
+
+  RCLCPP_INFO(
+      _node->get_logger(),
+      "Runtime MPC params updated: W=[%.2f %.2f %.2f %.2f %.2f %.2f %.2f], We=[%.2f %.2f %.2f %.2f %.2f], limits(v=%.2f, a=%.2f, w=%.2f, dw=%.2f)",
+      updated->weights.w_x,
+      updated->weights.w_y,
+      updated->weights.w_theta,
+      updated->weights.w_v,
+      updated->weights.w_r,
+      updated->weights.w_acc,
+      updated->weights.w_dr,
+      updated->weights.w_x_e,
+      updated->weights.w_y_e,
+      updated->weights.w_theta_e,
+      updated->weights.w_v_e,
+      updated->weights.w_r_e,
+      updated->max_linear_vel,
+      updated->max_linear_acc,
+      updated->max_angular_vel,
+      updated->max_angular_acc);
+
+  return result;
 }
 }  // namespace
 
@@ -390,6 +487,9 @@ int main(int argc, char **argv) {
   robot_plann::_shutting_down.store(false);
   robot_plann::_node = std::make_shared<rclcpp::Node>("opt_planner");
   auto mpc_params = robot_plann::BuildMpcParamsFromNode(robot_plann::_node);
+  robot_plann::_runtime_mpc_params = std::make_shared<robot_plann::MpcParams>(*mpc_params);
+  robot_plann::param_callback_handle = robot_plann::_node->add_on_set_parameters_callback(
+      robot_plann::OnMpcParamUpdate);
 
   robot_plann::_planner = std::make_unique<robot_plann::Planner>(
       mpc_params, robot_plann::_verbose);
@@ -419,7 +519,7 @@ int main(int argc, char **argv) {
 
   RCLCPP_INFO(
       robot_plann::_node->get_logger(),
-      "MPC config: horizon=%u dt=%.3f (%.2f Hz) max_v=%.2f max_a=%.2f wheel_half_track=%.3f local_obst_num=%d",
+      "ACADOS config: horizon=%u dt=%.3f (%.2f Hz) max_v=%.2f max_a=%.2f wheel_half_track=%.3f local_obst_num=%d",
       mpc_params->np,
       mpc_params->dt,
       1.0 / mpc_params->dt,
@@ -427,6 +527,21 @@ int main(int argc, char **argv) {
       mpc_params->max_linear_acc,
       mpc_params->wheel_half_track,
       mpc_params->local_obst_num);
+    RCLCPP_INFO(
+      robot_plann::_node->get_logger(),
+      "W diag (x,y,theta,v,r,acc,dr)=(%.2f, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f), W_e diag=(%.2f, %.2f, %.2f, %.2f, %.2f)",
+      mpc_params->weights.w_x,
+      mpc_params->weights.w_y,
+      mpc_params->weights.w_theta,
+      mpc_params->weights.w_v,
+      mpc_params->weights.w_r,
+      mpc_params->weights.w_acc,
+      mpc_params->weights.w_dr,
+      mpc_params->weights.w_x_e,
+      mpc_params->weights.w_y_e,
+      mpc_params->weights.w_theta_e,
+      mpc_params->weights.w_v_e,
+      mpc_params->weights.w_r_e);
   RCLCPP_INFO(
       robot_plann::_node->get_logger(),
       "Planner reference mode: %s (debug_xref: v_max=%.2f v_min=%.2f slowdown=%.2f kp=%.2f)",
@@ -510,8 +625,10 @@ int main(int argc, char **argv) {
 
         executor.cancel();
         executor.remove_node(robot_plann::_node);
+        robot_plann::param_callback_handle.reset();
         robot_plann::mpc_callback_group.reset();
         robot_plann::_planner.reset();
+        robot_plann::_runtime_mpc_params.reset();
         robot_plann::_node.reset();
 
   rclcpp::shutdown();

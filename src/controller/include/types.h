@@ -26,8 +26,8 @@ static constexpr float kHalfMapWidth = 6.0;
 
 static constexpr float kVisualScale = 3.0;
 static constexpr float kInflationRadius = 0.3;  // typically equivalent to the robot's radius
-static constexpr int kNP = 10;
-static constexpr float kDT = 0.25;
+static constexpr int kNP = 20;
+static constexpr float kDT = 0.1;
 
 static constexpr double kMaxLinearVel  = 1.0;
 static constexpr double kMaxLinearAcc  = 1.0;
@@ -115,6 +115,20 @@ struct JointStateForPython {
 
 struct MpcParams {
   struct CostWeights {
+    double w_x = 5.0;
+    double w_y = 5.0;
+    double w_theta = 1.0;
+    double w_v = 1.0;
+    double w_r = 1.0;
+    double w_acc = 2.0;
+    double w_dr = 0.5;
+    double w_x_e = 100.0;
+    double w_y_e = 100.0;
+    double w_theta_e = 1.0;
+    double w_v_e = 1.0;
+    double w_r_e = 1.0;
+
+    // Backward-compatible aliases used by legacy code paths.
     double slack = 99999.0;
     double pose_x = 5.0;
     double pose_y = 5.0;

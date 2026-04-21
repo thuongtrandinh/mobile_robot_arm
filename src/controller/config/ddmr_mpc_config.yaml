@@ -1,0 +1,50 @@
+opt_planner:
+  ros__parameters:
+    # NHOM 1: thay doi cac gia tri nay thi can regenerate ACADOS C-code.
+    mpc_structure.n_horizon: 20
+    mpc_structure.dt: 0.1
+    mpc_structure.wheel_half_track: 0.3
+
+    # NHOM 2: co the tune runtime thong qua ros2 param set.
+    cost_weights.w_x: 5.0
+    cost_weights.w_y: 5.0
+    cost_weights.w_theta: 1.0
+    cost_weights.w_v: 1.0
+    cost_weights.w_r: 1.0
+    cost_weights.w_acc: 2.0
+    cost_weights.w_dr: 0.5
+
+    # Terminal cost (W_e)
+    cost_weights.w_x_e: 100.0
+    cost_weights.w_y_e: 100.0
+    cost_weights.w_theta_e: 1.0
+    cost_weights.w_v_e: 1.0
+    cost_weights.w_r_e: 1.0
+
+    constraints.max_linear_vel: 1.0
+    constraints.max_linear_acc: 1.0
+    constraints.max_angular_vel: 1.0
+    constraints.max_angular_acc: 1.0
+
+    planner.mpc_exec_hz: 20.0
+    planner.mpc_exec_period: 0.05
+    planner.mpc_control_dt: 0.05
+    planner.goal_stop_distance: 0.1
+    planner.cmd_topic: /diff_cont/cmd_vel
+    planner.cmd_max_linear_speed: 0.4
+    planner.cmd_max_angular_speed: 0.4
+    planner.reference_mode: astar_subgoal
+    planner.debug_xref_v_max: 0.6
+    planner.debug_xref_v_min: 0.05
+    planner.debug_xref_slowdown_distance: 1.5
+    planner.debug_xref_kp_dist: 0.8
+
+    # Optional legacy params kept for backward compatibility in other code paths.
+    mpc.local_obst_num: 8
+    mpc.solver.max_iter: 250
+    mpc.solver.max_cpu_time: 0.09
+    mpc.polygon_clearance_margin: 0.03
+    mpc.wall_constraint_activation_distance: 2.0
+    mpc.weights.slack: 99999.0
+    mpc.weights.smooth_acc: 0.05
+    mpc.weights.smooth_yaw_acc: 0.05

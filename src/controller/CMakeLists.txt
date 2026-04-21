@@ -46,8 +46,8 @@ find_package(GDAL REQUIRED)
 # ---------- Library: controller_core ----------
 add_library(controller_core SHARED
   src/astar.cc
+  src/acados_mpc.cc
   src/lookahead.cc
-  src/mpc.cc
   src/planner.cc
   src/smooth.cc
 )
@@ -71,7 +71,6 @@ target_link_libraries(controller_core
   ${OpenCV_LIBS}
   TIFF::TIFF
   GDAL::GDAL
-  casadi
 )
 
 target_compile_definitions(controller_core PUBLIC ROS_BUILD)
@@ -84,6 +83,8 @@ add_executable(ampcc_node
 if(CONTROLLER_ENABLE_ACADOS)
   set(ACADOS_GENERATED_SOURCES
     ${ACADOS_GENERATED_CODE_DIR}/acados_solver_ddmr.c
+    ${ACADOS_GENERATED_CODE_DIR}/ddmr_constraints/ddmr_constr_h_fun.c
+    ${ACADOS_GENERATED_CODE_DIR}/ddmr_constraints/ddmr_constr_h_fun_jac_uxt_zt.c
     ${ACADOS_GENERATED_CODE_DIR}/ddmr_model/ddmr_expl_ode_fun.c
     ${ACADOS_GENERATED_CODE_DIR}/ddmr_model/ddmr_expl_vde_forw.c
     ${ACADOS_GENERATED_CODE_DIR}/ddmr_model/ddmr_expl_vde_adj.c
@@ -140,16 +141,30 @@ install(
   DESTINATION share/${PROJECT_NAME}
 )
 
-install(
-  PROGRAMS
-    scripts/ampcc_rviz_visualizer.py
-    scripts/custom_env_visualizer_node.py
-    scripts/eval_ppo.py
-    scripts/generate_acados_mpc.py
-    scripts/rl_ocp_policy_bridge.py
-    scripts/rl_policy_worker.py
-  DESTINATION lib/${PROJECT_NAME}
+set(CONTROLLER_SCRIPT_FILES
+  scripts/ampcc_rviz_visualizer.py
+  scripts/custom_env_visualizer_node.py
+  scripts/eval_ppo.py
+  scripts/generate_acados_mpc.py
+  scripts/rl_ocp_policy_bridge.py
+  scripts/rl_policy_worker.py
 )
+
+set(CONTROLLER_EXISTING_SCRIPT_FILES "")
+foreach(_script IN LISTS CONTROLLER_SCRIPT_FILES)
+  if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${_script}")
+    list(APPEND CONTROLLER_EXISTING_SCRIPT_FILES ${_script})
+  else()
+    message(STATUS "Skip missing script in install(PROGRAMS): ${_script}")
+  endif()
+endforeach()
+
+if(CONTROLLER_EXISTING_SCRIPT_FILES)
+  install(
+    PROGRAMS ${CONTROLLER_EXISTING_SCRIPT_FILES}
+    DESTINATION lib/${PROJECT_NAME}
+  )
+endif()
 
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/config")
   install(

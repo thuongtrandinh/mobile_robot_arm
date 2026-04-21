@@ -25,7 +25,7 @@
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #endif
 
-#include "mpc.h"
+#include "acados_mpc.h"
 
 
 namespace robot_plann {
@@ -52,7 +52,7 @@ class Planner {
         mpc_params_->max_linear_vel,
         mpc_params_->max_linear_acc,
         mpc_params_->max_angular_vel);
-    ocp_planner_ = std::make_unique<Mpc>(verbose);
+    ocp_planner_ = std::make_shared<AcadosMpc>(verbose);
 
     ocp_planner_->SetParams(mpc_params_);
 #ifdef ROS_BUILD
@@ -115,6 +115,18 @@ class Planner {
     debug_xref_kp_dist_ = kp_dist;
   }
 
+  void UpdateMpcParams(const MpcParams::Ptr &params) {
+    if (!params) {
+      return;
+    }
+    mpc_params_ = std::make_shared<MpcParams>(*params);
+    vel_planner_->SetParams(
+        mpc_params_->max_linear_vel,
+        mpc_params_->max_linear_acc,
+        mpc_params_->max_angular_vel);
+    ocp_planner_->SetParams(mpc_params_);
+  }
+
   static bool ClipLine(double &x1, double &y1, double &x2, double &y2,
                        double x_min, double x_max, double y_min,
                        double y_max);
@@ -145,7 +157,7 @@ class Planner {
   std::unique_ptr<SmoothCorner> path_smoother_;
   std::unique_ptr<LookAhead> vel_planner_;
 
-  std::unique_ptr<Mpc> ocp_planner_;
+  std::shared_ptr<AcadosMpc> ocp_planner_;
 
 #ifdef ROS_BUILD
   std::shared_ptr<nav_msgs::msg::Path> a_start_smooth_path_;

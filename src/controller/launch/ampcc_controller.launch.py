@@ -34,7 +34,7 @@ def generate_launch_description():
         default_value=PathJoinSubstitution([
             FindPackageShare("controller"),
             "config",
-            "mpc_tuning.yaml",
+            "ddmr_mpc_config.yaml",
         ]),
         description="YAML file containing MPC and policy tuning parameters",
     )
