@@ -34,10 +34,10 @@
 #include "acados_c/sim_interface.h"
 #include "acados_c/external_function_interface.h"
 
-#define DDMR_NX     5
+#define DDMR_NX     7
 #define DDMR_NZ     0
-#define DDMR_NU     2
-#define DDMR_NP     0
+#define DDMR_NU     22
+#define DDMR_NP     98
 
 #ifdef __cplusplus
 extern "C" {

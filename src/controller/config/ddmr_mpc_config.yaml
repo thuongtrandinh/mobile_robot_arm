@@ -13,6 +13,9 @@ opt_planner:
     cost_weights.w_r: 1.0
     cost_weights.w_acc: 2.0
     cost_weights.w_dr: 0.5
+    cost_weights.w_smooth_acc: 0.05
+    cost_weights.w_smooth_dr: 0.05
+    cost_weights.w_slack: 99999.0
 
     # Terminal cost (W_e)
     cost_weights.w_x_e: 100.0

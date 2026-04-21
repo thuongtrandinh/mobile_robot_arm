@@ -4,9 +4,22 @@
 #include <array>
 #include <cmath>
 #include <iostream>
+#include <limits>
 
 namespace robot_plann {
 namespace {
+
+constexpr int kNumWalls = 2;
+constexpr int kNumHumans = 5;
+constexpr int kNumStatics = 5;
+constexpr int kNumPolyEdges = 20;
+constexpr int kOffsetWalls = 0;
+constexpr int kOffsetHumans = kOffsetWalls + 4 * kNumWalls;
+constexpr int kOffsetStatics = kOffsetHumans + 3 * kNumHumans;
+constexpr int kOffsetPoly = kOffsetStatics + 3 * kNumStatics;
+constexpr int kExpectedNp = kOffsetPoly + 3 * kNumPolyEdges;
+
+static_assert(kExpectedNp == DDMR_NP, "Parameter layout mismatch with generated ACADOS solver");
 
 inline int SafePathIndex(int k, int path_size) {
   if (path_size <= 0) {
@@ -52,6 +65,101 @@ MpcParams::Ptr BuildDefaultParams() {
   params->wheel_half_track = 0.3;
   params->local_obst_num = 8;
   return params;
+}
+
+void BuildPolygonHalfspaces(
+    const std::vector<Eigen::Vector2d> &vertices,
+    std::vector<std::array<double, 3>> &halfspaces,
+    int max_edges) {
+  halfspaces.clear();
+  if (vertices.size() < 2) {
+    return;
+  }
+
+  for (std::size_t i = 0; i < vertices.size() && static_cast<int>(halfspaces.size()) < max_edges; ++i) {
+    const Eigen::Vector2d &a = vertices[i];
+    const Eigen::Vector2d &b = vertices[(i + 1) % vertices.size()];
+    const Eigen::Vector2d e = b - a;
+    const double n = e.norm();
+    if (n < 1e-9) {
+      continue;
+    }
+
+    // Clockwise polygon -> inward normal is [-dy, dx].
+    const double ax = -e.y() / n;
+    const double ay = e.x() / n;
+    const double bb = ax * a.x() + ay * a.y();
+    halfspaces.push_back({ax, ay, bb});
+  }
+}
+
+void FillStageParams(const JointState &state, std::array<double, DDMR_NP> &p) {
+  p.fill(0.0);
+
+  // Walls: [sx, sy, dx, dy] * 2
+  for (int i = 0; i < kNumWalls; ++i) {
+    const int base = kOffsetWalls + 4 * i;
+    if (i < static_cast<int>(state.walls.size())) {
+      const auto &w = state.walls[static_cast<std::size_t>(i)];
+      p[base + 0] = w.first.x;
+      p[base + 1] = w.first.y;
+      p[base + 2] = w.second.x - w.first.x;
+      p[base + 3] = w.second.y - w.first.y;
+    }
+  }
+
+  // Humans: [hx, hy, safe_d2]
+  for (int i = 0; i < kNumHumans; ++i) {
+    const int base = kOffsetHumans + 3 * i;
+    if (i < static_cast<int>(state.hum.size())) {
+      const auto &h = state.hum[static_cast<std::size_t>(i)];
+      const double safe_r = h.radius + kInflationRadius + 0.1;
+      p[base + 0] = h.px;
+      p[base + 1] = h.py;
+      p[base + 2] = safe_r * safe_r;
+    }
+  }
+
+  // Static obstacles: [ox, oy, safe_d2]
+  for (int i = 0; i < kNumStatics; ++i) {
+    const int base = kOffsetStatics + 3 * i;
+    if (i < static_cast<int>(state.obst.size())) {
+      const auto &o = state.obst[static_cast<std::size_t>(i)];
+      const double safe_r = o.radius + kInflationRadius + 0.1;
+      p[base + 0] = o.px;
+      p[base + 1] = o.py;
+      p[base + 2] = safe_r * safe_r;
+    }
+  }
+
+  // Polygon halfspaces: [A_x, A_y, b] * M
+  std::vector<std::array<double, 3>> halfspaces;
+  BuildPolygonHalfspaces(state.rect.vertices, halfspaces, kNumPolyEdges);
+
+  for (int i = 0; i < kNumPolyEdges; ++i) {
+    const int base = kOffsetPoly + 3 * i;
+    if (i < static_cast<int>(halfspaces.size())) {
+      p[base + 0] = halfspaces[static_cast<std::size_t>(i)][0];
+      p[base + 1] = halfspaces[static_cast<std::size_t>(i)][1];
+      p[base + 2] = halfspaces[static_cast<std::size_t>(i)][2];
+    } else {
+      // Fallback inactive edges: keep min-penetration trivially satisfiable.
+      p[base + 0] = 0.0;
+      p[base + 1] = 0.0;
+      p[base + 2] = -1e6;
+    }
+  }
+
+  // Ensure dual-norm relaxation remains feasible even without polygon edges.
+  if (halfspaces.empty()) {
+    p[kOffsetPoly + 0] = 1.0;
+    p[kOffsetPoly + 1] = 0.0;
+    p[kOffsetPoly + 2] = -1e6;
+
+    p[kOffsetPoly + 3] = 0.0;
+    p[kOffsetPoly + 4] = 1.0;
+    p[kOffsetPoly + 5] = -1e6;
+  }
 }
 
 }  // namespace
@@ -122,6 +230,14 @@ bool AcadosMpc::UpdateRuntimeWeightsAndConstraints() {
   w[4 + DDMR_NY * 4] = params_->weights.w_r;
   w[5 + DDMR_NY * 5] = params_->weights.w_acc;
   w[6 + DDMR_NY * 6] = params_->weights.w_dr;
+  // Keep small positive regularization for all virtual controls.
+  const double w_jv = std::max(1e-6, params_->weights.smooth_acc * params_->dt * params_->dt);
+  const double w_jr = std::max(1e-6, params_->weights.smooth_yaw_acc * params_->dt * params_->dt);
+  w[7 + DDMR_NY * 7] = w_jv;
+  w[8 + DDMR_NY * 8] = w_jr;
+  for (int i = 9; i < DDMR_NY; ++i) {
+    w[i + DDMR_NY * i] = 1e-4;
+  }
 
   for (int k = 0; k < DDMR_N; ++k) {
     ocp_nlp_cost_model_set(nlp_config_, nlp_dims_, nlp_in_, k, "W", w.data());
@@ -140,21 +256,32 @@ bool AcadosMpc::UpdateRuntimeWeightsAndConstraints() {
   const double max_angular_vel = std::max(0.0, params_->max_angular_vel);
   const double max_angular_acc = std::max(0.0, params_->max_angular_acc);
 
-  std::array<double, DDMR_NH> lh{
-      -max_linear_vel,
-      -max_linear_vel,
-      -max_linear_acc,
-      -max_linear_acc,
-  };
-  std::array<double, DDMR_NH> uh{
-      max_linear_vel,
-      max_linear_vel,
-      max_linear_acc,
-      max_linear_acc,
-  };
+    std::array<double, DDMR_NH> lh{};
+    std::array<double, DDMR_NH> uh{};
+    lh.fill(0.0);
+    uh.fill(1e9);
+    // Wheel limits.
+    lh[0] = -max_linear_vel;
+    lh[1] = -max_linear_vel;
+    lh[2] = -max_linear_acc;
+    lh[3] = -max_linear_acc;
+    uh[0] = max_linear_vel;
+    uh[1] = max_linear_vel;
+    uh[2] = max_linear_acc;
+    uh[3] = max_linear_acc;
+    // Dual-norm relaxed hard bound index (4 wheel + 2 walls + 5 hum + 5 stat = 16).
+    lh[16] = 0.95;
+    uh[16] = 1.05;
 
-  std::array<double, DDMR_NBU> lbu{-max_linear_acc, -max_angular_acc};
-  std::array<double, DDMR_NBU> ubu{max_linear_acc, max_angular_acc};
+    std::array<double, DDMR_NBU> lbu{};
+    std::array<double, DDMR_NBU> ubu{};
+    lbu.fill(0.0);
+    ubu.fill(1e3);
+    // j_v / j_r bounds
+    lbu[0] = -5.0;
+    ubu[0] = 5.0;
+    lbu[1] = -5.0;
+    ubu[1] = 5.0;
 
   std::array<double, DDMR_NBX> lbx{-max_angular_vel};
   std::array<double, DDMR_NBX> ubx{max_angular_vel};
@@ -197,12 +324,14 @@ MpcReturn AcadosMpc::RunMpc(const JointState &state, std::vector<robot_plann::Po
 
   UpdateRuntimeWeightsAndConstraints();
 
-  std::array<double, DDMR_NX> current_x{
+    std::array<double, DDMR_NX> current_x{
       state.robot.px,
       state.robot.py,
       state.robot.yaw,
       state.robot.v,
       state.robot.yaw_rate,
+      0.0,
+      0.0,
   };
 
   ocp_nlp_constraints_model_set(
@@ -210,20 +339,26 @@ MpcReturn AcadosMpc::RunMpc(const JointState &state, std::vector<robot_plann::Po
   ocp_nlp_constraints_model_set(
       nlp_config_, nlp_dims_, nlp_in_, nlp_out_, 0, "ubx", current_x.data());
 
+  std::array<double, DDMR_NP> stage_p{};
+  FillStageParams(state, stage_p);
+  for (int k = 0; k < DDMR_N; ++k) {
+    ddmr_acados_update_params(acados_capsule_, k, stage_p.data(), DDMR_NP);
+  }
+
   for (int k = 0; k < DDMR_N; ++k) {
     const int idx = SafePathIndex(k, static_cast<int>(path.size()));
     const auto &ref = path.at(static_cast<std::size_t>(idx));
     const double theta_ref = HeadingAt(path, idx, state.robot.yaw);
 
-    std::array<double, DDMR_NY> yref{
-        ref.x,
-        ref.y,
-        theta_ref,
-        ref.v,
-        0.0,
-        0.0,
-        0.0,
-    };
+    std::array<double, DDMR_NY> yref{};
+    yref.fill(0.0);
+    yref[0] = ref.x;
+    yref[1] = ref.y;
+    yref[2] = theta_ref;
+    yref[3] = ref.v;
+    yref[4] = 0.0;
+    yref[5] = 0.0;
+    yref[6] = 0.0;
     ocp_nlp_cost_model_set(nlp_config_, nlp_dims_, nlp_in_, k, "yref", yref.data());
   }
 
@@ -240,10 +375,11 @@ MpcReturn AcadosMpc::RunMpc(const JointState &state, std::vector<robot_plann::Po
 
   const int status = ddmr_acados_solve(acados_capsule_);
 
-  std::array<double, DDMR_NU> u0{};
-  ocp_nlp_out_get(nlp_config_, nlp_dims_, nlp_out_, 0, "u", u0.data());
-  opt_traj[0].uk.acc = u0[0];
-  opt_traj[0].uk.dr = u0[1];
+  std::array<double, DDMR_NX> x0_sol{};
+  ocp_nlp_out_get(nlp_config_, nlp_dims_, nlp_out_, 0, "x", x0_sol.data());
+  // Preserve old planner interface: publish acc/dr equivalent command channels.
+  opt_traj[0].uk.acc = x0_sol[5];
+  opt_traj[0].uk.dr = x0_sol[6];
 
   const int max_export_stages = std::min<int>(kNP, DDMR_N + 1);
   for (int k = 0; k < max_export_stages; ++k) {
@@ -256,10 +392,9 @@ MpcReturn AcadosMpc::RunMpc(const JointState &state, std::vector<robot_plann::Po
     opt_traj[static_cast<std::size_t>(k)].xk.r = xk[4];
 
     if (k < std::min<int>(kNP, DDMR_N)) {
-      std::array<double, DDMR_NU> uk{};
-      ocp_nlp_out_get(nlp_config_, nlp_dims_, nlp_out_, k, "u", uk.data());
-      opt_traj[static_cast<std::size_t>(k)].uk.acc = uk[0];
-      opt_traj[static_cast<std::size_t>(k)].uk.dr = uk[1];
+      // Keep compatibility with old consumer expecting [acc, dr].
+      opt_traj[static_cast<std::size_t>(k)].uk.acc = xk[5];
+      opt_traj[static_cast<std::size_t>(k)].uk.dr = xk[6];
     }
   }
 

@@ -84,6 +84,10 @@ int main()
     ubx0[3] = 0;
     lbx0[4] = 0;
     ubx0[4] = 0;
+    lbx0[5] = 0;
+    ubx0[5] = 0;
+    lbx0[6] = 0;
+    ubx0[6] = 0;
 
     ocp_nlp_constraints_model_set(nlp_config, nlp_dims, nlp_in, nlp_out, 0, "lbx", lbx0);
     ocp_nlp_constraints_model_set(nlp_config, nlp_dims, nlp_in, nlp_out, 0, "ubx", ubx0);
@@ -95,11 +99,33 @@ int main()
     x_init[2] = 0.0;
     x_init[3] = 0.0;
     x_init[4] = 0.0;
+    x_init[5] = 0.0;
+    x_init[6] = 0.0;
 
     // initial value for control input
     double u0[NU];
     u0[0] = 0.0;
     u0[1] = 0.0;
+    u0[2] = 0.0;
+    u0[3] = 0.0;
+    u0[4] = 0.0;
+    u0[5] = 0.0;
+    u0[6] = 0.0;
+    u0[7] = 0.0;
+    u0[8] = 0.0;
+    u0[9] = 0.0;
+    u0[10] = 0.0;
+    u0[11] = 0.0;
+    u0[12] = 0.0;
+    u0[13] = 0.0;
+    u0[14] = 0.0;
+    u0[15] = 0.0;
+    u0[16] = 0.0;
+    u0[17] = 0.0;
+    u0[18] = 0.0;
+    u0[19] = 0.0;
+    u0[20] = 0.0;
+    u0[21] = 0.0;
 
     // prepare evaluation
     int NTIMINGS = 1;

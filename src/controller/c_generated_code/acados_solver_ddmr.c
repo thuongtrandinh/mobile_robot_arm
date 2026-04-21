@@ -243,7 +243,7 @@ static ocp_nlp_dims* ddmr_acados_create_setup_dimensions(ddmr_solver_capsule* ca
     nsbx[0] = 0;
     ns[0] = NS0;
     
-    nbxe[0] = 5;
+    nbxe[0] = 7;
     
     ny[0] = NY0;
     nh[0] = NH0;
@@ -387,7 +387,14 @@ void ddmr_acados_create_setup_functions(ddmr_solver_capsule* capsule)
 void ddmr_acados_create_set_default_parameters(ddmr_solver_capsule* capsule)
 {
 
-    // no parameters defined
+    const int N = capsule->nlp_solver_plan->N;
+    // initialize parameters to nominal value
+    double* p = calloc(NP, sizeof(double));
+
+    for (int i = 0; i <= N; i++) {
+        ddmr_acados_update_params(capsule, i, p, NP);
+    }
+    free(p);
 
 
     // no global parameters defined
@@ -486,6 +493,28 @@ void ddmr_acados_setup_nlp_in(ddmr_solver_capsule* capsule, const int N, double*
     W_0[4+(NY0) * 4] = 1;
     W_0[5+(NY0) * 5] = 2;
     W_0[6+(NY0) * 6] = 0.5;
+    W_0[7+(NY0) * 7] = 0.0005000000000000001;
+    W_0[8+(NY0) * 8] = 0.0005000000000000001;
+    W_0[9+(NY0) * 9] = 0.0001;
+    W_0[10+(NY0) * 10] = 0.0001;
+    W_0[11+(NY0) * 11] = 0.0001;
+    W_0[12+(NY0) * 12] = 0.0001;
+    W_0[13+(NY0) * 13] = 0.0001;
+    W_0[14+(NY0) * 14] = 0.0001;
+    W_0[15+(NY0) * 15] = 0.0001;
+    W_0[16+(NY0) * 16] = 0.0001;
+    W_0[17+(NY0) * 17] = 0.0001;
+    W_0[18+(NY0) * 18] = 0.0001;
+    W_0[19+(NY0) * 19] = 0.0001;
+    W_0[20+(NY0) * 20] = 0.0001;
+    W_0[21+(NY0) * 21] = 0.0001;
+    W_0[22+(NY0) * 22] = 0.0001;
+    W_0[23+(NY0) * 23] = 0.0001;
+    W_0[24+(NY0) * 24] = 0.0001;
+    W_0[25+(NY0) * 25] = 0.0001;
+    W_0[26+(NY0) * 26] = 0.0001;
+    W_0[27+(NY0) * 27] = 0.0001;
+    W_0[28+(NY0) * 28] = 0.0001;
     ocp_nlp_cost_model_set(nlp_config, nlp_dims, nlp_in, 0, "W", W_0);
     free(W_0);
     double* Vx_0 = calloc(NY0*NX, sizeof(double));
@@ -495,12 +524,34 @@ void ddmr_acados_setup_nlp_in(ddmr_solver_capsule* capsule, const int N, double*
     Vx_0[2+(NY0) * 2] = 1;
     Vx_0[3+(NY0) * 3] = 1;
     Vx_0[4+(NY0) * 4] = 1;
+    Vx_0[5+(NY0) * 5] = 1;
+    Vx_0[6+(NY0) * 6] = 1;
     ocp_nlp_cost_model_set(nlp_config, nlp_dims, nlp_in, 0, "Vx", Vx_0);
     free(Vx_0);
     double* Vu_0 = calloc(NY0*NU, sizeof(double));
     // change only the non-zero elements:
-    Vu_0[5+(NY0) * 0] = 1;
-    Vu_0[6+(NY0) * 1] = 1;
+    Vu_0[7+(NY0) * 0] = 1;
+    Vu_0[8+(NY0) * 1] = 1;
+    Vu_0[9+(NY0) * 2] = 1;
+    Vu_0[10+(NY0) * 3] = 1;
+    Vu_0[11+(NY0) * 4] = 1;
+    Vu_0[12+(NY0) * 5] = 1;
+    Vu_0[13+(NY0) * 6] = 1;
+    Vu_0[14+(NY0) * 7] = 1;
+    Vu_0[15+(NY0) * 8] = 1;
+    Vu_0[16+(NY0) * 9] = 1;
+    Vu_0[17+(NY0) * 10] = 1;
+    Vu_0[18+(NY0) * 11] = 1;
+    Vu_0[19+(NY0) * 12] = 1;
+    Vu_0[20+(NY0) * 13] = 1;
+    Vu_0[21+(NY0) * 14] = 1;
+    Vu_0[22+(NY0) * 15] = 1;
+    Vu_0[23+(NY0) * 16] = 1;
+    Vu_0[24+(NY0) * 17] = 1;
+    Vu_0[25+(NY0) * 18] = 1;
+    Vu_0[26+(NY0) * 19] = 1;
+    Vu_0[27+(NY0) * 20] = 1;
+    Vu_0[28+(NY0) * 21] = 1;
     ocp_nlp_cost_model_set(nlp_config, nlp_dims, nlp_in, 0, "Vu", Vu_0);
     free(Vu_0);
     double* yref = calloc(NY, sizeof(double));
@@ -520,6 +571,28 @@ void ddmr_acados_setup_nlp_in(ddmr_solver_capsule* capsule, const int N, double*
     W[4+(NY) * 4] = 1;
     W[5+(NY) * 5] = 2;
     W[6+(NY) * 6] = 0.5;
+    W[7+(NY) * 7] = 0.0005000000000000001;
+    W[8+(NY) * 8] = 0.0005000000000000001;
+    W[9+(NY) * 9] = 0.0001;
+    W[10+(NY) * 10] = 0.0001;
+    W[11+(NY) * 11] = 0.0001;
+    W[12+(NY) * 12] = 0.0001;
+    W[13+(NY) * 13] = 0.0001;
+    W[14+(NY) * 14] = 0.0001;
+    W[15+(NY) * 15] = 0.0001;
+    W[16+(NY) * 16] = 0.0001;
+    W[17+(NY) * 17] = 0.0001;
+    W[18+(NY) * 18] = 0.0001;
+    W[19+(NY) * 19] = 0.0001;
+    W[20+(NY) * 20] = 0.0001;
+    W[21+(NY) * 21] = 0.0001;
+    W[22+(NY) * 22] = 0.0001;
+    W[23+(NY) * 23] = 0.0001;
+    W[24+(NY) * 24] = 0.0001;
+    W[25+(NY) * 25] = 0.0001;
+    W[26+(NY) * 26] = 0.0001;
+    W[27+(NY) * 27] = 0.0001;
+    W[28+(NY) * 28] = 0.0001;
 
     for (int i = 1; i < N; i++)
     {
@@ -533,6 +606,8 @@ void ddmr_acados_setup_nlp_in(ddmr_solver_capsule* capsule, const int N, double*
     Vx[2+(NY) * 2] = 1;
     Vx[3+(NY) * 3] = 1;
     Vx[4+(NY) * 4] = 1;
+    Vx[5+(NY) * 5] = 1;
+    Vx[6+(NY) * 6] = 1;
     for (int i = 1; i < N; i++)
     {
         ocp_nlp_cost_model_set(nlp_config, nlp_dims, nlp_in, i, "Vx", Vx);
@@ -542,8 +617,28 @@ void ddmr_acados_setup_nlp_in(ddmr_solver_capsule* capsule, const int N, double*
     
     double* Vu = calloc(NY*NU, sizeof(double));
     // change only the non-zero elements:
-    Vu[5+(NY) * 0] = 1;
-    Vu[6+(NY) * 1] = 1;
+    Vu[7+(NY) * 0] = 1;
+    Vu[8+(NY) * 1] = 1;
+    Vu[9+(NY) * 2] = 1;
+    Vu[10+(NY) * 3] = 1;
+    Vu[11+(NY) * 4] = 1;
+    Vu[12+(NY) * 5] = 1;
+    Vu[13+(NY) * 6] = 1;
+    Vu[14+(NY) * 7] = 1;
+    Vu[15+(NY) * 8] = 1;
+    Vu[16+(NY) * 9] = 1;
+    Vu[17+(NY) * 10] = 1;
+    Vu[18+(NY) * 11] = 1;
+    Vu[19+(NY) * 12] = 1;
+    Vu[20+(NY) * 13] = 1;
+    Vu[21+(NY) * 14] = 1;
+    Vu[22+(NY) * 15] = 1;
+    Vu[23+(NY) * 16] = 1;
+    Vu[24+(NY) * 17] = 1;
+    Vu[25+(NY) * 18] = 1;
+    Vu[26+(NY) * 19] = 1;
+    Vu[27+(NY) * 20] = 1;
+    Vu[28+(NY) * 21] = 1;
 
     for (int i = 1; i < N; i++)
     {
@@ -577,6 +672,82 @@ void ddmr_acados_setup_nlp_in(ddmr_solver_capsule* capsule, const int N, double*
 
 
 
+    // slacks
+    double* zlumem = calloc(4*NS, sizeof(double));
+    double* Zl = zlumem+NS*0;
+    double* Zu = zlumem+NS*1;
+    double* zl = zlumem+NS*2;
+    double* zu = zlumem+NS*3;
+    // change only the non-zero elements:
+    Zl[0] = 99999;
+    Zl[1] = 99999;
+    Zl[2] = 99999;
+    Zl[3] = 99999;
+    Zl[4] = 99999;
+    Zl[5] = 99999;
+    Zl[6] = 99999;
+    Zl[7] = 99999;
+    Zl[8] = 99999;
+    Zl[9] = 99999;
+    Zl[10] = 99999;
+    Zl[11] = 99999;
+    Zl[12] = 99999;
+    Zl[13] = 99999;
+    Zl[14] = 99999;
+    Zl[15] = 99999;
+    Zl[16] = 99999;
+    Zl[17] = 99999;
+    Zl[18] = 99999;
+    Zl[19] = 99999;
+    Zl[20] = 99999;
+    Zl[21] = 99999;
+    Zl[22] = 99999;
+    Zl[23] = 99999;
+    Zl[24] = 99999;
+    Zl[25] = 99999;
+    Zl[26] = 99999;
+    Zl[27] = 99999;
+    Zl[28] = 99999;
+    Zl[29] = 99999;
+    Zu[0] = 99999;
+    Zu[1] = 99999;
+    Zu[2] = 99999;
+    Zu[3] = 99999;
+    Zu[4] = 99999;
+    Zu[5] = 99999;
+    Zu[6] = 99999;
+    Zu[7] = 99999;
+    Zu[8] = 99999;
+    Zu[9] = 99999;
+    Zu[10] = 99999;
+    Zu[11] = 99999;
+    Zu[12] = 99999;
+    Zu[13] = 99999;
+    Zu[14] = 99999;
+    Zu[15] = 99999;
+    Zu[16] = 99999;
+    Zu[17] = 99999;
+    Zu[18] = 99999;
+    Zu[19] = 99999;
+    Zu[20] = 99999;
+    Zu[21] = 99999;
+    Zu[22] = 99999;
+    Zu[23] = 99999;
+    Zu[24] = 99999;
+    Zu[25] = 99999;
+    Zu[26] = 99999;
+    Zu[27] = 99999;
+    Zu[28] = 99999;
+    Zu[29] = 99999;
+
+    for (int i = 1; i < N; i++)
+    {
+        ocp_nlp_cost_model_set(nlp_config, nlp_dims, nlp_in, i, "Zl", Zl);
+        ocp_nlp_cost_model_set(nlp_config, nlp_dims, nlp_in, i, "Zu", Zu);
+        ocp_nlp_cost_model_set(nlp_config, nlp_dims, nlp_in, i, "zl", zl);
+        ocp_nlp_cost_model_set(nlp_config, nlp_dims, nlp_in, i, "zu", zu);
+    }
+    free(zlumem);
 
 
 
@@ -590,6 +761,8 @@ void ddmr_acados_setup_nlp_in(ddmr_solver_capsule* capsule, const int N, double*
     idxbx0[2] = 2;
     idxbx0[3] = 3;
     idxbx0[4] = 4;
+    idxbx0[5] = 5;
+    idxbx0[6] = 6;
 
     double* lubx0 = calloc(2*NBX0, sizeof(double));
     double* lbx0 = lubx0;
@@ -602,12 +775,14 @@ void ddmr_acados_setup_nlp_in(ddmr_solver_capsule* capsule, const int N, double*
     free(idxbx0);
     free(lubx0);
     // idxbxe_0
-    int* idxbxe_0 = malloc(5 * sizeof(int));
+    int* idxbxe_0 = malloc(7 * sizeof(int));
     idxbxe_0[0] = 0;
     idxbxe_0[1] = 1;
     idxbxe_0[2] = 2;
     idxbxe_0[3] = 3;
     idxbxe_0[4] = 4;
+    idxbxe_0[5] = 5;
+    idxbxe_0[6] = 6;
     ocp_nlp_constraints_model_set(nlp_config, nlp_dims, nlp_in, nlp_out, 0, "idxbxe", idxbxe_0);
     free(idxbxe_0);
 
@@ -627,13 +802,53 @@ void ddmr_acados_setup_nlp_in(ddmr_solver_capsule* capsule, const int N, double*
     int* idxbu = malloc(NBU * sizeof(int));
     idxbu[0] = 0;
     idxbu[1] = 1;
+    idxbu[2] = 2;
+    idxbu[3] = 3;
+    idxbu[4] = 4;
+    idxbu[5] = 5;
+    idxbu[6] = 6;
+    idxbu[7] = 7;
+    idxbu[8] = 8;
+    idxbu[9] = 9;
+    idxbu[10] = 10;
+    idxbu[11] = 11;
+    idxbu[12] = 12;
+    idxbu[13] = 13;
+    idxbu[14] = 14;
+    idxbu[15] = 15;
+    idxbu[16] = 16;
+    idxbu[17] = 17;
+    idxbu[18] = 18;
+    idxbu[19] = 19;
+    idxbu[20] = 20;
+    idxbu[21] = 21;
     double* lubu = calloc(2*NBU, sizeof(double));
     double* lbu = lubu;
     double* ubu = lubu + NBU;
-    lbu[0] = -1;
-    ubu[0] = 1;
-    lbu[1] = -1;
-    ubu[1] = 1;
+    lbu[0] = -5;
+    ubu[0] = 5;
+    lbu[1] = -5;
+    ubu[1] = 5;
+    ubu[2] = 1000;
+    ubu[3] = 1000;
+    ubu[4] = 1000;
+    ubu[5] = 1000;
+    ubu[6] = 1000;
+    ubu[7] = 1000;
+    ubu[8] = 1000;
+    ubu[9] = 1000;
+    ubu[10] = 1000;
+    ubu[11] = 1000;
+    ubu[12] = 1000;
+    ubu[13] = 1000;
+    ubu[14] = 1000;
+    ubu[15] = 1000;
+    ubu[16] = 1000;
+    ubu[17] = 1000;
+    ubu[18] = 1000;
+    ubu[19] = 1000;
+    ubu[20] = 1000;
+    ubu[21] = 1000;
 
     for (int i = 0; i < N; i++)
     {
@@ -678,10 +893,64 @@ void ddmr_acados_setup_nlp_in(ddmr_solver_capsule* capsule, const int N, double*
     lh[1] = -1;
     lh[2] = -1;
     lh[3] = -1;
+    lh[16] = 0.95;
+    lh[17] = 0.4;
+    lh[18] = 0.4;
+    lh[19] = 0.4;
+    lh[20] = 0.4;
+    lh[21] = 0.4;
+    lh[22] = 0.4;
+    lh[23] = 0.4;
+    lh[24] = 0.4;
+    lh[25] = 0.4;
+    lh[26] = 0.4;
+    lh[27] = 0.4;
+    lh[28] = 0.4;
+    lh[29] = 0.4;
+    lh[30] = 0.4;
+    lh[31] = 0.4;
+    lh[32] = 0.4;
+    lh[33] = 0.4;
+    lh[34] = 0.4;
+    lh[35] = 0.4;
+    lh[36] = 0.4;
     uh[0] = 1;
     uh[1] = 1;
     uh[2] = 1;
     uh[3] = 1;
+    uh[4] = 1000000000;
+    uh[5] = 1000000000;
+    uh[6] = 1000000000;
+    uh[7] = 1000000000;
+    uh[8] = 1000000000;
+    uh[9] = 1000000000;
+    uh[10] = 1000000000;
+    uh[11] = 1000000000;
+    uh[12] = 1000000000;
+    uh[13] = 1000000000;
+    uh[14] = 1000000000;
+    uh[15] = 1000000000;
+    uh[16] = 1.05;
+    uh[17] = 1000000000;
+    uh[18] = 1000000000;
+    uh[19] = 1000000000;
+    uh[20] = 1000000000;
+    uh[21] = 1000000000;
+    uh[22] = 1000000000;
+    uh[23] = 1000000000;
+    uh[24] = 1000000000;
+    uh[25] = 1000000000;
+    uh[26] = 1000000000;
+    uh[27] = 1000000000;
+    uh[28] = 1000000000;
+    uh[29] = 1000000000;
+    uh[30] = 1000000000;
+    uh[31] = 1000000000;
+    uh[32] = 1000000000;
+    uh[33] = 1000000000;
+    uh[34] = 1000000000;
+    uh[35] = 1000000000;
+    uh[36] = 1000000000;
 
     for (int i = 1; i < N; i++)
     {
@@ -704,6 +973,50 @@ void ddmr_acados_setup_nlp_in(ddmr_solver_capsule* capsule, const int N, double*
 
 
 
+    // set up soft bounds for nonlinear constraints
+    int* idxsh = malloc(NSH * sizeof(int));
+    idxsh[0] = 6;
+    idxsh[1] = 7;
+    idxsh[2] = 8;
+    idxsh[3] = 9;
+    idxsh[4] = 10;
+    idxsh[5] = 11;
+    idxsh[6] = 12;
+    idxsh[7] = 13;
+    idxsh[8] = 14;
+    idxsh[9] = 15;
+    idxsh[10] = 17;
+    idxsh[11] = 18;
+    idxsh[12] = 19;
+    idxsh[13] = 20;
+    idxsh[14] = 21;
+    idxsh[15] = 22;
+    idxsh[16] = 23;
+    idxsh[17] = 24;
+    idxsh[18] = 25;
+    idxsh[19] = 26;
+    idxsh[20] = 27;
+    idxsh[21] = 28;
+    idxsh[22] = 29;
+    idxsh[23] = 30;
+    idxsh[24] = 31;
+    idxsh[25] = 32;
+    idxsh[26] = 33;
+    idxsh[27] = 34;
+    idxsh[28] = 35;
+    idxsh[29] = 36;
+    double* lush = calloc(2*NSH, sizeof(double));
+    double* lsh = lush;
+    double* ush = lush + NSH;
+
+    for (int i = 1; i < N; i++)
+    {
+        ocp_nlp_constraints_model_set(nlp_config, nlp_dims, nlp_in, nlp_out, i, "idxsh", idxsh);
+        ocp_nlp_constraints_model_set(nlp_config, nlp_dims, nlp_in, nlp_out, i, "lsh", lsh);
+        ocp_nlp_constraints_model_set(nlp_config, nlp_dims, nlp_in, nlp_out, i, "ush", ush);
+    }
+    free(idxsh);
+    free(lush);
 
 
 
@@ -1023,7 +1336,7 @@ int ddmr_acados_update_params(ddmr_solver_capsule* capsule, int stage, double *p
 {
     int solver_status = 0;
 
-    int casadi_np = 0;
+    int casadi_np = 98;
     if (casadi_np != np) {
         printf("acados_update_params: trying to set %i parameters for external functions."
             " External function has %i parameters. Exiting.\n", np, casadi_np);

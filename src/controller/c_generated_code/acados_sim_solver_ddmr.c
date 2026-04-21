@@ -180,11 +180,18 @@ int ddmr_acados_sim_create(ddmr_sim_solver_capsule * capsule)
     capsule->acados_sim_mem = ddmr_sim_solver->mem;
 
 
+    /* initialize parameter values */
+    double* p = calloc(np, sizeof(double));
+    
+
+    ddmr_acados_sim_update_params(capsule, p, np);
+    free(p);
+
 
     /* initialize input */
     // x
-    double x0[5];
-    for (int ii = 0; ii < 5; ii++)
+    double x0[7];
+    for (int ii = 0; ii < 7; ii++)
         x0[ii] = 0.0;
 
     sim_in_set(ddmr_sim_config, ddmr_sim_dims,
@@ -192,19 +199,19 @@ int ddmr_acados_sim_create(ddmr_sim_solver_capsule * capsule)
 
 
     // u
-    double u0[2];
-    for (int ii = 0; ii < 2; ii++)
+    double u0[22];
+    for (int ii = 0; ii < 22; ii++)
         u0[ii] = 0.0;
 
     sim_in_set(ddmr_sim_config, ddmr_sim_dims,
                ddmr_sim_in, "u", u0);
 
     // S_forw
-    double S_forw[35];
-    for (int ii = 0; ii < 35; ii++)
+    double S_forw[203];
+    for (int ii = 0; ii < 203; ii++)
         S_forw[ii] = 0.0;
-    for (int ii = 0; ii < 5; ii++)
-        S_forw[ii + ii * 5 ] = 1.0;
+    for (int ii = 0; ii < 7; ii++)
+        S_forw[ii + ii * 7 ] = 1.0;
 
 
     sim_in_set(ddmr_sim_config, ddmr_sim_dims,
