@@ -19,9 +19,11 @@ from ultralytics import YOLO
 from cv_bridge import CvBridge
 import message_filters
 
+from visualization_msgs.msg import Marker, MarkerArray
+
 from sensor_msgs.msg import Image, CameraInfo, CompressedImage
 from std_msgs.msg import Header
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped, Point
 from interfaces.msg import HumanState, HumanArray
 from ament_index_python.packages import get_package_share_directory
 
@@ -41,6 +43,10 @@ class MultiObjectTrackingNode(Node):
         super().__init__('multi_object_tracking_node',
                          allow_undeclared_parameters=True,
                          automatically_declare_parameters_from_overrides=True)
+
+        self.human_pub = self.create_publisher(HumanArray, 'tracked_humans', 10)
+        # Publisher cho RViz Debug
+        self.marker_pub = self.create_publisher(MarkerArray, 'human_markers', 10)
 
         # ===== LẤY GIÁ TRỊ PARAMETERS TỨ FILE YAML =====
         # Helper function to get parameter with default value
@@ -143,6 +149,7 @@ class MultiObjectTrackingNode(Node):
         self._last_cb_time = None
         self.create_timer(3.0, self._log_performance)
 
+
     def _cam_cb(self, msg):
         if not self.camera_info_received:
             self.fx, self.fy, self.cx, self.cy = msg.k[0], msg.k[4], msg.k[2], msg.k[5]
@@ -173,9 +180,7 @@ class MultiObjectTrackingNode(Node):
     def _process_frame(self, frame, ts_recv):
         ts_now = self.get_clock().now().nanoseconds * 1e-9
 
-        # FIX: Use track_low_thresh for BYTE Association to catch weak arm detections
-        # Ensures that outstretched limbs don't create separate ghost bboxes
-        # NMS (iou_thresh=0.35) will merge them into single unified box
+        # 1. Dự đoán YOLO với ngưỡng thấp để BYTE Association bắt được các phần cơ thể mờ
         results = self._yolo.predict(frame, conf=self.track_low_thresh, verbose=False, device='cuda', half=True)[0]
             
         raw_dets = []
@@ -184,18 +189,76 @@ class MultiObjectTrackingNode(Node):
             if int(cls) in self.dynamic_classes:
                 raw_dets.append({'box': (int(x1), int(y1), int(x2), int(y2)), 'conf': float(conf), 'cls': int(cls)})
 
-        detections = self._depth_nms.apply(raw_dets, self._current_depth_map, self.obj_conf) if HAS_DEPTH_NMS and self._current_depth_map is not None and raw_dets else raw_dets
+        # 2. Lọc NMS kết hợp Depth để tránh gộp nhầm người ở các khoảng cách khác nhau
+        detections = self._depth_nms.apply(raw_dets, self._current_depth_map, self.obj_conf) \
+                     if (self._current_depth_map is not None and raw_dets) else raw_dets
 
         if detections:
             dets_np = np.array([[*d['box'], d['conf']] for d in detections], dtype=np.float32)
         else:
             dets_np = np.empty((0, 5), dtype=np.float32)
 
+        # 3. Cập nhật Tracker (BoT-SORT/ByteTrack)
         tracks_np = self._tracker.update(dets_np, features=None)
 
+        # 4. KHỞI TẠO TIN NHẮN (Giải quyết lỗi name 'msg' is not defined)
+        msg = HumanArray()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.frame_id = "camera_link"
+
         h, w = frame.shape[:2]
+        
+        for track in tracks_np:
+            x1, y1, x2, y2, tid = track
+            tid = int(tid)
+            
+            # Lấy độ sâu trung bình vùng trung tâm đối tượng
+            depth = self._get_depth((x1, y1, x2, y2), h, w)
+            if depth is None:
+                continue
+
+            # --- ĐOẠN ĐÃ ĐƯỢC SỬA LẠI ---
+            # Tính tọa độ pixel tâm của BBox (gọi là u cho trục X của ảnh)
+            u = (x1 + x2) / 2.0
+            
+            # Tâm quang học của camera (thường nằm ở chính giữa chiều rộng ảnh)
+            cx_cam = w / 2.0 
+            
+            # Tính tọa độ thực tế (Pinhole Camera Model)
+            px = float(depth)
+            py = float(-(u - cx_cam) * depth / self.fx) 
+            # -----------------------------
+            
+            # Cập nhật EKF để ước lượng vận tốc vx, vy (né vật cản động)
+            vx, vy = self._update_ekf_velocity(tid, px, py, ts_now)
+            
+            # Gán dữ liệu vào tin nhắn HumanState
+            human_msg = HumanState()
+            human_msg.id = int(tid)
+            human_msg.px = float(px)
+            human_msg.py = float(py)
+            human_msg.vx = float(vx)
+            human_msg.vy = float(vy)
+            
+            # Bán kính bao quanh vật cản để robot né (tính dựa trên chiều rộng BBox)
+            human_msg.radius = float(abs(x2 - x1) * depth / self.fx / 2.0)
+            
+            msg.humans.append(human_msg)
+
+        # 5. PUBLISH DỮ LIỆU
+        self.human_pub.publish(msg)
+        
+        # 6. HIỂN THỊ DEBUG TRÊN RVIZ2 (MarkerArray)
+        marker_array = MarkerArray()
+        for i, h_info in enumerate(msg.humans):
+            h_markers = self.create_human_marker(h_info, i)
+            marker_array.markers.extend(h_markers)
+        
+        if marker_array.markers:
+            self.marker_pub.publish(marker_array)
+
+        # 7. DỌN DẸP BỘ NHỚ VÀ DEBUG IMAGE
         self._publish_debug_visual(frame, tracks_np)
-        self._publish_data(tracks_np, h, w, ts_now)
         self._cleanup_memory(ts_now)
 
     def _publish_data(self, tracks_np, h, w, ts_now):
@@ -252,6 +315,49 @@ class MultiObjectTrackingNode(Node):
         valid_fallback = roi_fallback[(np.isfinite(roi_fallback)) & (roi_fallback > self.min_depth) & (roi_fallback < self.max_depth)]
         
         return float(np.median(valid_fallback)) if valid_fallback.size > 0 else None
+    
+    def create_human_marker(self, human, human_id):
+        markers = []
+        now = self.get_clock().now().to_msg()
+        
+        # 1. Khối trụ đỏ (Vùng vật cản)
+        obs = Marker()
+        obs.header.frame_id = "camera_link"
+        obs.header.stamp = now
+        obs.ns = "danger_zones"
+        obs.id = human_id
+        obs.type = Marker.CYLINDER
+        obs.action = Marker.ADD
+        obs.pose.position.x = human.px
+        obs.pose.position.y = human.py
+        obs.pose.position.z = 0.4 # Đặt thấp để dễ quan sát mặt đất
+        
+        # Scale dựa trên bán kính né tránh thực tế
+        obs.scale.x = human.radius * 2.0 
+        obs.scale.y = human.radius * 2.0
+        obs.scale.z = 0.8
+        
+        obs.color.r = 1.0; obs.color.g = 0.1; obs.color.b = 0.1; obs.color.a = 0.5
+        obs.lifetime = rclpy.duration.Duration(seconds=0.1).to_msg()
+        markers.append(obs)
+
+        # 2. Mũi tên vận tốc (Trend di chuyển)
+        vel_mag = math.hypot(human.vx, human.vy)
+        if vel_mag > 0.05:
+            arrow = Marker()
+            arrow.header = obs.header
+            arrow.ns = "velocity_vectors"
+            arrow.id = human_id + 1000
+            arrow.type = Marker.ARROW
+            arrow.points = [
+                Point(x=human.px, y=human.py, z=0.4),
+                Point(x=human.px + human.vx * 0.5, y=human.py + human.vy * 0.5, z=0.4) # Scale mũi tên 0.5s để không quá dài
+            ]
+            arrow.scale.x = 0.05; arrow.scale.y = 0.1; arrow.scale.z = 0.1
+            arrow.color.r = 1.0; arrow.color.g = 1.0; arrow.color.b = 0.0; arrow.color.a = 1.0
+            markers.append(arrow)
+
+        return markers
 
     def _update_ekf_velocity(self, tid, px, py, ts_now):
         if tid not in self.ekfs:
@@ -302,9 +408,17 @@ class MultiObjectTrackingNode(Node):
         return float(vx), float(vy)
 
     def _cleanup_memory(self, ts_now):
-        stale_ids = [tid for tid, last in self.track_last_seen_time.items() if ts_now - last > self.track_cleanup_timeout]
-        for tid in stale_ids:
+        # 1. Lấy danh sách tất cả các ID ĐANG TỒN TẠI trong thuật toán BoT-SORT
+        active_tids = [track.track_id for track in self._tracker.tracks]
+        
+        # 2. Quét mảng EKF của bạn. Nếu có ID nào nằm trong EKF mà BoT-SORT đã xóa, 
+        # thì đưa vào danh sách cần dọn dẹp (expired_tids)
+        expired_tids = [tid for tid in self.ekfs.keys() if tid not in active_tids]
+
+        # 3. Dọn dẹp sạch sẽ mọi từ điển (dictionary)
+        for tid in expired_tids:
             for d in [self.ekfs, self.velocity_filters, self.position_history, self.last_frame_ts, self.track_last_seen_time]:
+                # Sử dụng hàm pop an toàn, nếu không có key thì trả về None thay vì báo lỗi
                 d.pop(tid, None)
 
     def _publish_debug_visual(self, frame, tracks_np):
