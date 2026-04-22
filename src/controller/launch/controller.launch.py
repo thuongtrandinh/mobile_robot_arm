@@ -43,11 +43,12 @@ def generate_launch_description():
     )
     tuning_config_arg = DeclareLaunchArgument(
         "tuning_config",
-        default_value=PathJoinSubstitution([FindPackageShare("controller"), "config", "ddmr_mpc_config.yaml"]),
-    )
-    mppi_params_file_arg = DeclareLaunchArgument(
-        "mppi_params_file",
-        default_value=PathJoinSubstitution([FindPackageShare("controller"), "config", "mppi_params.yaml"]),
+        default_value=PathJoinSubstitution([
+            FindPackageShare("controller"),
+            "config",
+            "ddmr_mpc_config.yaml",
+        ]),
+        description="YAML file containing MPC and policy tuning parameters",
     )
     halo_drl_dir_arg = DeclareLaunchArgument(
         "halo_drl_dir", default_value="HALO_1/drl_moudle"
@@ -130,6 +131,7 @@ def generate_launch_description():
                 "goal_checker_id": "general_goal_checker",
                 "planner_half_width": 5.8,
                 "planner_half_height": 9.8,
+                "auto_relax_constraints": False,
                 "auto_relax_constraints": False,
                 "visualize_actions": visualize_actions,
                 "action_marker_topic": action_marker_topic,
