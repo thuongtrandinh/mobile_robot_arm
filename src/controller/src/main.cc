@@ -10,6 +10,7 @@
 
 #include <rclcpp/rclcpp.hpp>
 #include <rcl_interfaces/msg/set_parameters_result.hpp>
+#include <geometry_msgs/msg/twist.hpp>
 #include <geometry_msgs/msg/twist_stamped.hpp>
 #include <nav_msgs/msg/occupancy_grid.hpp>
 #include <nav_msgs/msg/path.hpp>
@@ -31,6 +32,7 @@ int _verbose = 1;
 rclcpp::Node::SharedPtr _node;
 rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr astar_path_pub;
 rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr local_costmap_pub;
+rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_unstamped_pub;
 rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr cmd_pub;
 rclcpp::TimerBase::SharedPtr mpc_solve_timer;
 rclcpp::CallbackGroup::SharedPtr mpc_callback_group;
@@ -57,7 +59,18 @@ double ClampValue(double value, double low, double high) {
 }
 
 void PublishCmdVel(double linear, double angular) {
-  if (!_node || !cmd_pub) {
+  if (!_node) {
+    return;
+  }
+
+  if (cmd_unstamped_pub) {
+    geometry_msgs::msg::Twist msg;
+    msg.linear.x = linear;
+    msg.angular.z = angular;
+    cmd_unstamped_pub->publish(msg);
+  }
+
+  if (!cmd_pub) {
     return;
   }
 
@@ -333,22 +346,34 @@ void MpcExecTimerCallback() {
     return;
   }
 
-  double half_track = 0.3;
-  {
-    std::lock_guard<std::mutex> lock(_planner_mutex);
-    half_track = _planner->GetWheelHalfTrack();
+  // Prefer MPC predicted k=1 state command (v, omega).
+  double linear = mpc_return.stages[1].xk.vx;
+  double angular = mpc_return.stages[1].xk.r;
+
+  const bool predicted_valid = std::isfinite(linear) && std::isfinite(angular);
+  const bool predicted_nonzero = std::abs(linear) > 1e-4 || std::abs(angular) > 1e-4;
+
+  // If predicted state command is degenerate, fallback to integrating MPC (acc, dr).
+  if (!predicted_valid || !predicted_nonzero) {
+    double half_track = 0.3;
+    {
+      std::lock_guard<std::mutex> lock(_planner_mutex);
+      half_track = _planner->GetWheelHalfTrack();
+    }
+
+    double v_left = state_snapshot.robot.v - state_snapshot.robot.yaw_rate * half_track;
+    double v_right = state_snapshot.robot.v + state_snapshot.robot.yaw_rate * half_track;
+
+    const double al = mpc_return.stages[0].uk.acc - mpc_return.stages[0].uk.dr * half_track;
+    const double ar = mpc_return.stages[0].uk.acc + mpc_return.stages[0].uk.dr * half_track;
+
+    v_left += al * _mpc_control_dt;
+    v_right += ar * _mpc_control_dt;
+
+    linear = 0.5 * (v_left + v_right);
+    angular = (v_right - v_left) / (2.0 * half_track);
   }
-  double v_left = state_snapshot.robot.v - state_snapshot.robot.yaw_rate * half_track;
-  double v_right = state_snapshot.robot.v + state_snapshot.robot.yaw_rate * half_track;
 
-  const double al = mpc_return.stages[0].uk.acc - mpc_return.stages[0].uk.dr * half_track;
-  const double ar = mpc_return.stages[0].uk.acc + mpc_return.stages[0].uk.dr * half_track;
-
-  v_left += al * _mpc_control_dt;
-  v_right += ar * _mpc_control_dt;
-
-  double linear = 0.5 * (v_left + v_right);
-  double angular = (v_right - v_left) / (2.0 * half_track);
   linear = ClampValue(linear, -_cmd_max_linear_speed, _cmd_max_linear_speed);
   angular = ClampValue(angular, -_cmd_max_angular_speed, _cmd_max_angular_speed);
 
@@ -568,6 +593,8 @@ int main(int argc, char **argv) {
       }
       const std::string cmd_topic = robot_plann::_node->declare_parameter<std::string>(
         "planner.cmd_topic", "/diff_cont/cmd_vel");
+      const std::string cmd_unstamped_topic = robot_plann::_node->declare_parameter<std::string>(
+        "planner.cmd_unstamped_topic", "/diff_cont/cmd_vel_unstamped");
       const std::string local_costmap_topic =
         robot_plann::_node->declare_parameter<std::string>(
           "planner.local_costmap_topic", "/a_star/local_costmap");
@@ -580,7 +607,6 @@ int main(int argc, char **argv) {
       if (robot_plann::_goal_stop_distance < 0.0) {
         robot_plann::_goal_stop_distance = 0.0;
       }
-
   auto plann_srv = robot_plann::_node->create_service<interfaces::srv::OcpLocalPlann>(
       "/ocp_plann", robot_plann::PlannSrvCallback);
 
@@ -588,6 +614,8 @@ int main(int argc, char **argv) {
       robot_plann::_node->create_publisher<nav_msgs::msg::Path>("/a_star_path", 1);
       robot_plann::local_costmap_pub =
         robot_plann::_node->create_publisher<nav_msgs::msg::OccupancyGrid>(local_costmap_topic, 1);
+      robot_plann::cmd_unstamped_pub =
+        robot_plann::_node->create_publisher<geometry_msgs::msg::Twist>(cmd_unstamped_topic, 10);
       robot_plann::cmd_pub =
         robot_plann::_node->create_publisher<geometry_msgs::msg::TwistStamped>(cmd_topic, 10);
 
@@ -600,9 +628,10 @@ int main(int argc, char **argv) {
         robot_plann::mpc_callback_group);
       RCLCPP_INFO(
         robot_plann::_node->get_logger(),
-        "Zero-latency pipeline: reference via service, MPC solve %.2f Hz, immediate cmd publish, cmd topic %s",
+        "Zero-latency pipeline: reference via service, MPC solve %.2f Hz, cmd TwistStamped topic %s, cmd Twist topic %s",
         1.0 / robot_plann::_mpc_solve_period,
-        cmd_topic.c_str());
+        cmd_topic.c_str(),
+        cmd_unstamped_topic.c_str());
       RCLCPP_INFO(
         robot_plann::_node->get_logger(),
         "Goal stop distance enabled: %.3f m",
@@ -619,6 +648,7 @@ int main(int argc, char **argv) {
           robot_plann::mpc_solve_timer.reset();
         }
 
+  robot_plann::cmd_unstamped_pub.reset();
         robot_plann::cmd_pub.reset();
         robot_plann::astar_path_pub.reset();
         robot_plann::local_costmap_pub.reset();

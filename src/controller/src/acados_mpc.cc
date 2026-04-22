@@ -11,7 +11,7 @@ namespace {
 
 constexpr int kNumWalls = 2;
 constexpr int kNumHumans = 5;
-constexpr int kNumStatics = 5;
+constexpr int kNumStatics = 40;
 constexpr int kNumPolyEdges = 20;
 constexpr int kOffsetWalls = 0;
 constexpr int kOffsetHumans = kOffsetWalls + 4 * kNumWalls;
@@ -96,16 +96,29 @@ void BuildPolygonHalfspaces(
 void FillStageParams(const JointState &state, std::array<double, DDMR_NP> &p) {
   p.fill(0.0);
 
-  // Walls: [sx, sy, dx, dy] * 2
+  std::vector<int> nearest_static_idx;
+  nearest_static_idx.reserve(state.obst.size());
+  for (int i = 0; i < static_cast<int>(state.obst.size()); ++i) {
+    nearest_static_idx.push_back(i);
+  }
+  std::sort(
+      nearest_static_idx.begin(),
+      nearest_static_idx.end(),
+      [&state](int a, int b) {
+        const auto &oa = state.obst[static_cast<std::size_t>(a)];
+        const auto &ob = state.obst[static_cast<std::size_t>(b)];
+        const double da2 = std::pow(oa.px - state.robot.px, 2) + std::pow(oa.py - state.robot.py, 2);
+        const double db2 = std::pow(ob.px - state.robot.px, 2) + std::pow(ob.py - state.robot.py, 2);
+        return da2 < db2;
+      });
+
+  // Walls disabled in grid-circle mode. Keep parameters harmless.
   for (int i = 0; i < kNumWalls; ++i) {
     const int base = kOffsetWalls + 4 * i;
-    if (i < static_cast<int>(state.walls.size())) {
-      const auto &w = state.walls[static_cast<std::size_t>(i)];
-      p[base + 0] = w.first.x;
-      p[base + 1] = w.first.y;
-      p[base + 2] = w.second.x - w.first.x;
-      p[base + 3] = w.second.y - w.first.y;
-    }
+    p[base + 0] = 0.0;
+    p[base + 1] = 0.0;
+    p[base + 2] = 0.0;
+    p[base + 3] = 0.0;
   }
 
   // Humans: [hx, hy, safe_d2]
@@ -120,11 +133,12 @@ void FillStageParams(const JointState &state, std::array<double, DDMR_NP> &p) {
     }
   }
 
-  // Static obstacles: [ox, oy, safe_d2]
+  // Static obstacles: [ox, oy, safe_d2] for nearest obstacles first.
   for (int i = 0; i < kNumStatics; ++i) {
     const int base = kOffsetStatics + 3 * i;
-    if (i < static_cast<int>(state.obst.size())) {
-      const auto &o = state.obst[static_cast<std::size_t>(i)];
+    if (i < static_cast<int>(nearest_static_idx.size())) {
+      const int src_idx = nearest_static_idx[static_cast<std::size_t>(i)];
+      const auto &o = state.obst[static_cast<std::size_t>(src_idx)];
       const double safe_r = o.radius + kInflationRadius + 0.1;
       p[base + 0] = o.px;
       p[base + 1] = o.py;
@@ -132,33 +146,13 @@ void FillStageParams(const JointState &state, std::array<double, DDMR_NP> &p) {
     }
   }
 
-  // Polygon halfspaces: [A_x, A_y, b] * M
-  std::vector<std::array<double, 3>> halfspaces;
-  BuildPolygonHalfspaces(state.rect.vertices, halfspaces, kNumPolyEdges);
-
+  // Polygon constraints disabled in grid-circle mode.
+  // Set edges to inactive halfspaces so constraints remain trivially feasible.
   for (int i = 0; i < kNumPolyEdges; ++i) {
     const int base = kOffsetPoly + 3 * i;
-    if (i < static_cast<int>(halfspaces.size())) {
-      p[base + 0] = halfspaces[static_cast<std::size_t>(i)][0];
-      p[base + 1] = halfspaces[static_cast<std::size_t>(i)][1];
-      p[base + 2] = halfspaces[static_cast<std::size_t>(i)][2];
-    } else {
-      // Fallback inactive edges: keep min-penetration trivially satisfiable.
-      p[base + 0] = 0.0;
-      p[base + 1] = 0.0;
-      p[base + 2] = -1e6;
-    }
-  }
-
-  // Ensure dual-norm relaxation remains feasible even without polygon edges.
-  if (halfspaces.empty()) {
-    p[kOffsetPoly + 0] = 1.0;
-    p[kOffsetPoly + 1] = 0.0;
-    p[kOffsetPoly + 2] = -1e6;
-
-    p[kOffsetPoly + 3] = 0.0;
-    p[kOffsetPoly + 4] = 1.0;
-    p[kOffsetPoly + 5] = -1e6;
+    p[base + 0] = 0.0;
+    p[base + 1] = 0.0;
+    p[base + 2] = -1e6;
   }
 }
 
@@ -254,8 +248,6 @@ bool AcadosMpc::UpdateRuntimeWeightsAndConstraints() {
   const double max_linear_vel = std::max(0.0, params_->max_linear_vel);
   const double max_linear_acc = std::max(0.0, params_->max_linear_acc);
   const double max_angular_vel = std::max(0.0, params_->max_angular_vel);
-  const double max_angular_acc = std::max(0.0, params_->max_angular_acc);
-
     std::array<double, DDMR_NH> lh{};
     std::array<double, DDMR_NH> uh{};
     lh.fill(0.0);
@@ -270,8 +262,9 @@ bool AcadosMpc::UpdateRuntimeWeightsAndConstraints() {
     uh[2] = max_linear_acc;
     uh[3] = max_linear_acc;
     // Dual-norm relaxed hard bound index (4 wheel + 2 walls + 5 hum + 5 stat = 16).
-    lh[16] = 0.95;
-    uh[16] = 1.05;
+    // A too-tight band often causes QP min-step stalls in cluttered scenes.
+    lh[16] = 0.70;
+    uh[16] = 1.30;
 
     std::array<double, DDMR_NBU> lbu{};
     std::array<double, DDMR_NBU> ubu{};
@@ -402,7 +395,9 @@ MpcReturn AcadosMpc::RunMpc(const JointState &state, std::vector<robot_plann::Po
     std::cout << "[AcadosMpc] Solve failed with status " << status << std::endl;
   }
 
-  return {opt_traj, status == 0};
+  // ACADOS status 4 indicates NLP failure; do not treat it as valid control.
+  const bool is_ok = (status == 0 || status == 3);
+  return {opt_traj, is_ok};
 }
 
 }  // namespace robot_plann

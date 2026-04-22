@@ -1,5 +1,4 @@
 #!/usr/bin/python3
-import importlib
 import json
 import math
 import os
@@ -10,7 +9,7 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import rclpy
-from interfaces.msg import ObstacleState, WallState, PolyState, HumanState, Point as PolyPoint
+from interfaces.msg import ObstacleState, WallState, PolyState, HumanState
 from interfaces.msg import JointState as InterfaceJointState
 from interfaces.srv import OcpLocalPlann
 from geometry_msgs.msg import PoseStamped
@@ -46,9 +45,9 @@ class RlOcpPolicyBridge(Node):
         self.declare_parameter("obstacle_radius", 0.2)
         self.declare_parameter("obstacle_sample_step", 16)
         self.declare_parameter("use_map_static_obstacles", True)
-        self.declare_parameter("map_static_obstacle_radius", 0.18)
-        self.declare_parameter("map_static_sample_step_m", 0.35)
-        self.declare_parameter("map_static_obstacle_limit", 80)
+        self.declare_parameter("map_static_obstacle_radius", 0.2)
+        self.declare_parameter("map_static_sample_step_m", 0.3)
+        self.declare_parameter("map_static_obstacle_limit", 40)
         self.declare_parameter("enforce_scene_entities", True)
         self.declare_parameter("human_fallback_enabled", True)
         self.declare_parameter("human_fallback_limit", 20)
@@ -211,6 +210,7 @@ class RlOcpPolicyBridge(Node):
         self._has_received_map = False
         self.map_geometry_polygons: List[List[Tuple[float, float]]] = []
         self.map_geometry_walls: List[Tuple[float, float, float, float]] = []
+        self.map_static_circles: List[Tuple[float, float, float]] = []
         self.last_sent_map_polygons_count = 0
         self.last_sent_map_walls_count = 0
         self._last_map_geometry_log_ns = 0
@@ -238,12 +238,6 @@ class RlOcpPolicyBridge(Node):
         self.last_mask_snap_distance = 0.0
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
-        self.cv2 = None
-        try:
-            self.cv2 = importlib.import_module("cv2")
-        except Exception as exc:
-            raise RuntimeError("OpenCV (cv2) is required for map geometry extraction: %s" % str(exc))
-
         self._start_policy_worker()
 
         self.create_subscription(Odometry, self.odom_topic, self._odom_callback, 10)
@@ -506,99 +500,20 @@ class RlOcpPolicyBridge(Node):
         if msg.info.width == 0 or msg.info.height == 0:
             self.map_geometry_polygons = []
             self.map_geometry_walls = []
+            self.map_static_circles = []
             return
 
-        grid = np.array(msg.data, dtype=np.int16).reshape((msg.info.height, msg.info.width))
-        obstacle_img = np.zeros_like(grid, dtype=np.uint8)
-        obstacle_img[grid > self.map_geometry_obstacle_threshold] = 255
-        img_for_cv = np.flipud(obstacle_img)
-
-        contours, _ = self.cv2.findContours(
-            img_for_cv,
-            self.cv2.RETR_EXTERNAL,
-            self.cv2.CHAIN_APPROX_SIMPLE,
-        )
-
-        polygons: List[List[Tuple[float, float]]] = []
-        walls: List[Tuple[float, float, float, float]] = []
-        boundary_contours = 0
-        boundary_walls = 0
-        inner_large_polygons = 0
-        map_area_px = max(1.0, float(self.map_width * self.map_height))
-        for contour in contours:
-            peri = self.cv2.arcLength(contour, True)
-            eps = self.map_geometry_poly_epsilon_ratio * peri
-            approx = self.cv2.approxPolyDP(contour, eps, True)
-            if len(approx) < 2:
-                continue
-
-            poly_pts: List[Tuple[float, float]] = []
-            for vertex in approx:
-                u = int(vertex[0][0])
-                v = int(vertex[0][1])
-                x_m, y_m = self._pixel_to_meter(u, v)
-                poly_pts.append((x_m, y_m))
-
-            arr = np.array(poly_pts, dtype=np.float64)
-            diffs = arr[:, None, :] - arr[None, :, :]
-            dists = np.linalg.norm(diffs, axis=2)
-            span = float(np.max(dists)) if dists.size > 0 else 0.0
-            contour_area = float(self.cv2.contourArea(contour))
-            area_ratio = contour_area / map_area_px
-
-            if self._is_wall_like_geometry(poly_pts):
-                wall = self._wall_segment_from_points(poly_pts)
-                if wall is not None:
-                    walls.append(wall)
-                continue
-
-            if span > self.map_geometry_boundary_span_threshold:
-                if self._is_map_boundary_contour(contour, area_ratio):
-                    # Boundary contour should define corridor walls; force a stable 4-edge representation.
-                    boundary_contours += 1
-                    loop_walls = self._rectangle_walls_from_contour(contour)
-                    if not loop_walls:
-                        loop_walls = self._simplify_wall_loop(poly_pts)
-                    boundary_walls += len(loop_walls)
-                    walls.extend(loop_walls)
-                elif len(poly_pts) >= 3:
-                    # Large non-boundary contours are interior structures; keep as polygons.
-                    inner_large_polygons += 1
-                    polygons.append(poly_pts)
-                continue
-
-            if len(poly_pts) >= 3:
-                polygons.append(poly_pts)
-
-        self.map_geometry_polygons = polygons
-        self.map_geometry_walls = walls
+        # Grid-based circle sampling mode: disable contour/polygon/wall extraction entirely.
+        self.map_geometry_polygons = []
+        self.map_geometry_walls = []
+        self.map_static_circles = []
 
         if self.map_geometry_debug_log:
-            obstacle_cells = int(np.count_nonzero(obstacle_img))
             self._throttled_log(
                 "_last_map_geometry_log_ns",
                 self.map_geometry_debug_period_sec,
-                "[map_geometry/raw] obstacle_cells=%d contours=%d walls=%d polygons=%d"
-                % (
-                    obstacle_cells,
-                    int(len(contours)),
-                    int(len(walls)),
-                    int(len(polygons)),
-                ),
+                "[map_geometry/grid] map updated; walls=0 polygons=0 (using OccupancyGrid sampling)",
             )
-            if boundary_contours > 0 or inner_large_polygons > 0:
-                self._throttled_log(
-                    "_last_map_geometry_log_ns",
-                    self.map_geometry_debug_period_sec,
-                    "[map_geometry/classify] boundary_contours=%d boundary_walls=%d inner_large_polygons=%d edge_margin_px=%d area_ratio=%.2f"
-                    % (
-                        int(boundary_contours),
-                        int(boundary_walls),
-                        int(inner_large_polygons),
-                        int(self.map_geometry_boundary_edge_margin_px),
-                        float(self.map_geometry_boundary_area_ratio),
-                    ),
-                )
 
     def _pixel_to_meter(self, u: int, v: int) -> Tuple[float, float]:
         row_occ = self.map_height - 1 - v
@@ -774,79 +689,9 @@ class RlOcpPolicyBridge(Node):
         return walls
 
     def _get_map_geometry_msgs(self) -> Tuple[List[PolyState], List[WallState]]:
-        pose_map = self._current_pose_in_map_frame()
-        if pose_map is None:
-            if self.map_geometry_debug_log:
-                self._throttled_log(
-                    "_last_sent_geometry_log_ns",
-                    self.map_geometry_debug_period_sec,
-                    "[map_geometry/local] skip send: pose_in_map unavailable (pose_frame=%s map_frame=%s)"
-                    % (str(self.pose_frame), str(self.map_frame)),
-                )
-            self.last_sent_map_polygons_count = 0
-            self.last_sent_map_walls_count = 0
-            return [], []
-
-        px_map, py_map = pose_map
-        x_lim = min(self.effective_half_width, self.planner_x_limit)
-        y_lim = min(self.effective_half_height, self.planner_y_limit)
-        footprint_keepout = self.robot_radius + 0.15
-
-        poly_states: List[PolyState] = []
-        for poly_pts in self.map_geometry_polygons:
-            if len(poly_pts) < 3:
-                continue
-
-            centroid_x = float(sum(pt[0] for pt in poly_pts) / len(poly_pts))
-            centroid_y = float(sum(pt[1] for pt in poly_pts) / len(poly_pts))
-            dist = math.hypot(centroid_x - px_map, centroid_y - py_map)
-            if dist < footprint_keepout:
-                continue
-            if abs(centroid_x - px_map) > x_lim or abs(centroid_y - py_map) > y_lim:
-                continue
-
-            poly_msg = PolyState()
-            poly_msg.is_clockwise = True
-            poly_msg.vertices = [PolyPoint(x=float(x), y=float(y)) for x, y in poly_pts]
-            poly_states.append(poly_msg)
-
-        walls: List[WallState] = []
-        for sx, sy, ex, ey in self.map_geometry_walls:
-            mid_x = 0.5 * (float(sx) + float(ex))
-            mid_y = 0.5 * (float(sy) + float(ey))
-            dist = math.hypot(mid_x - px_map, mid_y - py_map)
-            if dist < footprint_keepout:
-                continue
-            if abs(mid_x - px_map) > x_lim or abs(mid_y - py_map) > y_lim:
-                continue
-
-            wall = WallState()
-            wall.sx = float(sx)
-            wall.sy = float(sy)
-            wall.ex = float(ex)
-            wall.ey = float(ey)
-            walls.append(wall)
-
-        self.last_sent_map_polygons_count = int(len(poly_states))
-        self.last_sent_map_walls_count = int(len(walls))
-        if self.map_geometry_debug_log:
-            self._throttled_log(
-                "_last_sent_geometry_log_ns",
-                self.map_geometry_debug_period_sec,
-                "[map_geometry/local] robot=(%.2f, %.2f) limits=(%.2f, %.2f) kept_walls=%d/%d kept_polygons=%d/%d"
-                % (
-                    float(px_map),
-                    float(py_map),
-                    float(x_lim),
-                    float(y_lim),
-                    int(self.last_sent_map_walls_count),
-                    int(len(self.map_geometry_walls)),
-                    int(self.last_sent_map_polygons_count),
-                    int(len(self.map_geometry_polygons)),
-                ),
-            )
-
-        return poly_states, walls
+        self.last_sent_map_polygons_count = 0
+        self.last_sent_map_walls_count = 0
+        return [], []
 
     def _throttled_log(self, stamp_attr: str, period_sec: float, message: str) -> None:
         now_ns = int(self.get_clock().now().nanoseconds)
@@ -1020,8 +865,10 @@ class RlOcpPolicyBridge(Node):
 
     def _map_to_obstacle_tuples(self) -> List[Tuple[float, float, float]]:
         if not self.use_map_static_obstacles:
+            self.map_static_circles = []
             return []
         if self.current_pose is None:
+            self.map_static_circles = []
             return []
         if (
             self.map_data is None
@@ -1029,10 +876,12 @@ class RlOcpPolicyBridge(Node):
             or self.map_width <= 0
             or self.map_height <= 0
         ):
+            self.map_static_circles = []
             return []
 
         pose_map = self._current_pose_in_map_frame()
         if pose_map is None:
+            self.map_static_circles = []
             return []
         px, py = pose_map
         x_lim = min(self.effective_half_width, self.planner_x_limit)
@@ -1067,6 +916,8 @@ class RlOcpPolicyBridge(Node):
         if len(static_obs) > max(1, self.map_static_obstacle_limit):
             static_obs.sort(key=lambda p: math.hypot(p[0] - px, p[1] - py))
             static_obs = static_obs[: max(1, self.map_static_obstacle_limit)]
+
+        self.map_static_circles = list(static_obs)
 
         return static_obs
 
@@ -1238,8 +1089,20 @@ class RlOcpPolicyBridge(Node):
         self.action_debug_pub.publish(msg)
 
     def _scan_to_obstacle_msgs(self) -> List[ObstacleState]:
+        # Use both lidar and map-grid circles, then keep only nearest N for ACADOS.
+        obs_tuples = self._scan_to_obstacle_tuples()
+        pose_map = self._current_pose_in_map_frame()
+        if pose_map is not None:
+            px, py = pose_map
+            obs_tuples.sort(key=lambda o: math.hypot(float(o[0]) - px, float(o[1]) - py))
+
+        # Keep only nearest obstacles to match ACADOS parameter capacity.
+        max_supported = 40
+        keep_n = min(max_supported, max(1, int(self.map_static_obstacle_limit)))
+        obs_tuples = obs_tuples[:keep_n]
+
         obstacles = []
-        for obs_x, obs_y, radius in self._scan_to_obstacle_tuples():
+        for obs_x, obs_y, radius in obs_tuples:
             obstacle = ObstacleState()
             obstacle.px = float(obs_x)
             obstacle.py = float(obs_y)
@@ -1308,7 +1171,7 @@ class RlOcpPolicyBridge(Node):
             "gx": gx,
             "gy": gy,
             "obstacles": self._scan_to_obstacle_tuples(),
-            "walls": list(self.map_geometry_walls),
+            "walls": [],
         }
         return self._query_policy_worker(worker_req)
 
@@ -1577,7 +1440,7 @@ class RlOcpPolicyBridge(Node):
             self._throttled_log(
                 "_last_policy_wait_map_log_ns",
                 2.0,
-                "[policy_loop] waiting map data on topic %s (OpenCV extraction not started yet)"
+                "[policy_loop] waiting map data on topic %s (grid sampling not started yet)"
                 % str(self.map_topic),
             )
             return

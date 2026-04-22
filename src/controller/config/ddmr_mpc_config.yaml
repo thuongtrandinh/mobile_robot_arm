@@ -1,11 +1,12 @@
 opt_planner:
   ros__parameters:
-    # NHOM 1: thay doi cac gia tri nay thi can regenerate ACADOS C-code.
+    # ACADOS structure (regenerate C-code when changing these values)
     mpc_structure.n_horizon: 20
     mpc_structure.dt: 0.1
     mpc_structure.wheel_half_track: 0.3
+    scene_limits.num_static_obstacles: 40
 
-    # NHOM 2: co the tune runtime thong qua ros2 param set.
+    # Runtime-tunable cost weights
     cost_weights.w_x: 5.0
     cost_weights.w_y: 5.0
     cost_weights.w_theta: 1.0
@@ -13,36 +14,19 @@ opt_planner:
     cost_weights.w_r: 1.0
     cost_weights.w_acc: 2.0
     cost_weights.w_dr: 0.5
-    cost_weights.w_smooth_acc: 0.05
-    cost_weights.w_smooth_dr: 0.05
-    cost_weights.w_slack: 99999.0
-
-    # Terminal cost (W_e)
     cost_weights.w_x_e: 100.0
     cost_weights.w_y_e: 100.0
     cost_weights.w_theta_e: 1.0
     cost_weights.w_v_e: 1.0
     cost_weights.w_r_e: 1.0
 
+    # Runtime constraints
     constraints.max_linear_vel: 1.0
-    constraints.max_linear_acc: 1.0
     constraints.max_angular_vel: 1.0
+    constraints.max_linear_acc: 1.0
     constraints.max_angular_acc: 1.0
 
-    planner.mpc_exec_hz: 20.0
-    planner.mpc_exec_period: 0.05
-    planner.mpc_control_dt: 0.05
-    planner.goal_stop_distance: 0.1
-    planner.cmd_topic: /diff_cont/cmd_vel
-    planner.cmd_max_linear_speed: 0.4
-    planner.cmd_max_angular_speed: 0.4
-    planner.reference_mode: astar_subgoal
-    planner.debug_xref_v_max: 0.6
-    planner.debug_xref_v_min: 0.05
-    planner.debug_xref_slowdown_distance: 1.5
-    planner.debug_xref_kp_dist: 0.8
-
-    # Optional legacy params kept for backward compatibility in other code paths.
+    # Optional legacy keys still consumed by current node paths
     mpc.local_obst_num: 8
     mpc.solver.max_iter: 250
     mpc.solver.max_cpu_time: 0.09
@@ -51,3 +35,62 @@ opt_planner:
     mpc.weights.slack: 99999.0
     mpc.weights.smooth_acc: 0.05
     mpc.weights.smooth_yaw_acc: 0.05
+
+    # Direct frequency tuning [Hz]
+    planner.mpc_exec_hz: 20.0
+    planner.cmd_publish_hz: 20.0
+    # Legacy period params (fallback if *_hz <= 0)
+    planner.mpc_exec_period: 0.05
+    planner.cmd_publish_period: 0.05
+    # Integration step for wheel acceleration to cmd_vel conversion in planner timer
+    planner.mpc_control_dt: 0.05
+    # Force zero cmd_vel when distance(robot, goal) <= this threshold [m]
+    planner.goal_stop_distance: 0.1
+    planner.cmd_topic: /diff_cont/cmd_vel
+    planner.cmd_unstamped_topic: /diff_cont/cmd_vel_unstamped
+    planner.cmd_max_linear_speed: 0.4
+    planner.cmd_max_angular_speed: 0.4
+    # Reference source in planner:
+    # - astar_subgoal: existing pipeline (A* from sub-goal then smooth/lookahead)
+    # - direct_goal_xref: debug mode, build direct xref from current pose to global goal
+    planner.reference_mode: astar_subgoal
+    planner.debug_xref_v_max: 0.6
+    planner.debug_xref_v_min: 0.05
+    planner.debug_xref_slowdown_distance: 1.5
+    planner.debug_xref_kp_dist: 0.8
+
+rl_ocp_policy_bridge:
+  ros__parameters:
+    # Direct frequency tuning [Hz]
+    policy_hz: 10.0
+    service_hz: 10.0
+    # Goal source mode:
+    # - rl_local_goal: use PPO-generated local sub-goal
+    # - rviz_global_goal: bypass PPO and send RViz global goal directly to planner
+    goal_source_mode: rviz_global_goal
+    # Legacy params (fallback/compatibility)
+    timer_period: 0.1
+    policy_period: 0.1
+    mpc_period: 0.1
+    # Treat goal as reached only when very close, to avoid premature stop.
+    goal_tolerance: 0.08
+    # Integration step used to convert planner acceleration to cmd_vel
+    control_dt: 0.25
+    # Expected MPC horizon control steps for trajectory visualization
+    mpc_horizon_steps: 20
+    # Warn as unstable when consecutive MPC predicted trajectories differ too much [m]
+    mpc_stability_warn_threshold: 0.35
+    # Keep wall/poly constraints always active unless explicitly enabled
+    auto_relax_constraints: false
+    # Include occupied cells from /map as static obstacles for RL mask/planner debug
+    use_map_static_obstacles: true
+    map_static_obstacle_radius: 0.2
+    map_static_sample_step_m: 0.3
+    map_static_obstacle_limit: 40
+    # Always populate JointState with walls/poly/obstacles/humans fallback
+    enforce_scene_entities: false
+    human_fallback_enabled: true
+    map_geometry_boundary_area_ratio: 1.0 # Ép nó không nhận diện tường
+    map_geometry_wall_linearity_ratio: 100.0 # Ép nó không nhận diện tường
+    human_fallback_limit: 20
+    human_fallback_radius: 0.25

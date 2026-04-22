@@ -39,14 +39,14 @@
 #define DDMR_NX     7
 #define DDMR_NZ     0
 #define DDMR_NU     22
-#define DDMR_NP     98
+#define DDMR_NP     203
 #define DDMR_NP_GLOBAL     0
 #define DDMR_NBX    1
 #define DDMR_NBX0   7
 #define DDMR_NBU    22
 #define DDMR_NSBX   0
 #define DDMR_NSBU   0
-#define DDMR_NSH    30
+#define DDMR_NSH    65
 #define DDMR_NSH0   0
 #define DDMR_NSG    0
 #define DDMR_NSPHI  0
@@ -55,7 +55,7 @@
 #define DDMR_NSPHIN 0
 #define DDMR_NSPHI0 0
 #define DDMR_NSBXN  0
-#define DDMR_NS     30
+#define DDMR_NS     65
 #define DDMR_NS0    0
 #define DDMR_NSN    0
 #define DDMR_NG     0
@@ -65,7 +65,7 @@
 #define DDMR_NY     29
 #define DDMR_NYN    5
 #define DDMR_N      20
-#define DDMR_NH     37
+#define DDMR_NH     72
 #define DDMR_NHN    0
 #define DDMR_NH0    0
 #define DDMR_NPHI0  0
