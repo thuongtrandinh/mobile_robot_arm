@@ -178,12 +178,20 @@ class CTRV_EKF:
         # Update covariance
         self.P = (np.eye(5) - K @ H) @ self.P
         
-        # Update velocity estimate from linear velocity
+        # FIX: Remove velocity deadzone - allow EKF to update freely for all movements
+        # Previously had if vel_mag < 0.015 check that froze velocity, preventing acceleration detection
         vel_mag = np.linalg.norm(velocity)
-        if vel_mag > 0.01:  # Only update if moving
-            self.state.v = vel_mag
-            # Update heading from velocity vector
-            self.state.psi = np.arctan2(velocity[1], velocity[0])
+        
+        # Always blend velocity - no deadzone to prevent momentum accumulation
+        alpha = 0.3
+        self.state.v = (1 - alpha) * self.state.v + alpha * vel_mag
+        
+        # Update heading safely
+        measured_psi = np.arctan2(velocity[1], velocity[0])
+        diff = measured_psi - self.state.psi
+        diff = (diff + np.pi) % (2 * np.pi) - np.pi
+        
+        self.state.psi += alpha * diff
     
     def predict_trajectory(self, horizon: float = 5.0) -> np.ndarray:
         """Predict future positions over horizon seconds

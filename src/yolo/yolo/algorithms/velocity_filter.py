@@ -56,8 +56,15 @@ class VelocityFilter:
             mean_v = np.mean(history_array, axis=0)
             std_v = np.std(history_array, axis=0)
 
+            # FIX: Outlier Rejection Trap - prevent division by zero when stationary
+            # When standing still, std_v = 0.0, causing z_score to explode when motion starts
+            # Use safe minimum std to allow natural acceleration from rest
+            # safe_std = 0.3 m/s allows smooth transitions: z = |0.3 - 0| / 0.3 = 1.0 < 2.0 threshold
+            safe_std = np.maximum(std_v, 0.3)
+            
             # Z-score: how many standard deviations away from mean
-            z_score = np.abs((velocity - mean_v) / (std_v + 1e-6))
+            # Only reject if jump exceeds 2 sigma of safe_std (>0.6 m/s in single frame = actual noise)
+            z_score = np.abs((velocity - mean_v) / safe_std)
 
             # If any component is outlier (z > 2.0), skip update and return last good value
             if np.any(z_score > 2.0):

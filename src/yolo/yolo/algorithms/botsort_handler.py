@@ -191,7 +191,10 @@ class BoTSortTracker:
         # Return active tracks (recently matched)
         active_tracks = []
         for track in self.tracks:
-            if track.time_since_update == 0:
+            # FIX: Increase persistence to 30 frames (~1 second at 30Hz)
+            # Allows continuous output even when YOLO is temporarily blurred/missed
+            # System maintains track ID and provides EKF-predicted position to controller
+            if track.time_since_update <= 30:
                 bbox = track.bbox
                 active_tracks.append([
                     bbox[0], bbox[1], bbox[2], bbox[3], track.track_id
@@ -263,11 +266,11 @@ class BoTSortTracker:
             cost_matrix = (1 - iou_matrix) * (1 - self.appearance_weight) + \
                          app_distance_matrix * self.appearance_weight
             
-            # ===== FIX 1: SPATIAL GATING (Anti-Swap-ID) =====
-            # If two objects don't overlap (IoU = 0.0), force cost = 1.0 (impossible to match)
-            # This prevents the system from matching objects that are far apart,
-            # even if their clothing colors are similar
-            cost_matrix[iou_matrix == 0.0] = 1.0
+            # FIX: REMOVE SPATIAL GATING to allow fast-moving targets to maintain ID
+            # Previously: cost_matrix[iou_matrix == 0.0] = 1.0
+            # When moving fast or with motion blur, IoU can be 0 but Hungarian still matches
+            # by finding closest distance - this is correct behavior for continuous tracking
+            # DISABLED: cost_matrix[iou_matrix == 0.0] = 1.0
         else:
             cost_matrix = 1 - iou_matrix
         
@@ -419,9 +422,10 @@ def _track_update(self, detection: np.ndarray, feature: Optional[np.ndarray] = N
     self.motion_history.add(center_new, self.velocity)
     
     if self.time_since_update == 0 and self.hit_streak > 1:
-        # GIẢM ĐỘ TRỄ: Tăng alpha từ 0.2 → 0.8 để khung hình phản ứng tức thì với chuyển động
-        # alpha = 0.8 giúp bám rất sát đối tượng, vẫn lọc được rung nhẹ nhưng không bị trễ
-        alpha = 0.8
+        # FIX: Increase alpha back to 0.85 for responsive BBox tracking
+        # BBox must follow actual movement tightly to prevent IoU=0.0 during fast motion
+        # This prevents ID loss when person moves quickly and body escapes old BBox
+        alpha = 0.85
         self.bbox = alpha * detection[:4] + (1 - alpha) * self.bbox
     else:
         self.bbox = detection[:4].copy()

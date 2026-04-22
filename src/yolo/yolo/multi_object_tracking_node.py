@@ -43,35 +43,39 @@ class MultiObjectTrackingNode(Node):
                          automatically_declare_parameters_from_overrides=True)
 
         # ===== LẤY GIÁ TRỊ PARAMETERS TỨ FILE YAML =====
-        # Note: All parameters must be defined in params.yaml
-        self.obj_conf = self.get_parameter('yolo.object_conf_thresh').value
-        self.iou_thresh = self.get_parameter('yolo.iou_thresh').value
-        self.depth_nms_threshold = self.get_parameter('yolo.depth_nms_threshold').value
-        self.dynamic_classes = set(self.get_parameter('yolo.dynamic_classes').value)
+        # Helper function to get parameter with default value
+        def get_param(name, default):
+            param = self.get_parameter(name)
+            return param.value if param else default
         
-        self.track_cleanup_timeout = self.get_parameter('tracking.tracking_timeout').value
-        track_buffer = self.get_parameter('tracking.track_buffer').value
-        track_thresh = self.get_parameter('tracking.track_thresh').value
-        track_low_thresh = self.get_parameter('tracking.track_low_thresh').value
-        match_thresh = self.get_parameter('tracking.match_thresh').value
-        use_appearance = self.get_parameter('tracking.use_appearance').value
-        appearance_weight = self.get_parameter('tracking.appearance_weight').value
-        max_age_before_predict = self.get_parameter('tracking.max_age_before_predict').value
+        self.obj_conf = get_param('yolo.object_conf_thresh', 0.65)
+        self.iou_thresh = get_param('yolo.iou_thresh', 0.50)
+        self.depth_nms_threshold = get_param('yolo.depth_nms_threshold', 0.5)
+        self.dynamic_classes = set(get_param('yolo.dynamic_classes', [0]))
         
-        self.min_depth = self.get_parameter('depth_filter.min_depth_m').value
-        self.max_depth = self.get_parameter('depth_filter.max_depth_m').value
+        self.track_cleanup_timeout = get_param('tracking.tracking_timeout', 2.0)
+        track_buffer = get_param('tracking.track_buffer', 60)
+        track_thresh = get_param('tracking.track_thresh', 0.40)
+        self.track_low_thresh = get_param('tracking.track_low_thresh', 0.10)
+        match_thresh = get_param('tracking.match_thresh', 0.85)
+        use_appearance = get_param('tracking.use_appearance', False)
+        appearance_weight = get_param('tracking.appearance_weight', 0.5)
+        max_age_before_predict = get_param('tracking.max_age_before_predict', 15)
         
-        self.velocity_filter_alpha = self.get_parameter('velocity_filter.alpha').value
+        self.min_depth = get_param('depth_filter.min_depth_m', 0.3)
+        self.max_depth = get_param('depth_filter.max_depth_m', 6.0)
         
-        pub_depth = self.get_parameter('ros2_qos.publisher_depth').value
-        sub_depth = self.get_parameter('ros2_qos.subscriber_depth').value
-        sync_slop = self.get_parameter('ros2_qos.sync_slop').value
-        sync_queue_size = self.get_parameter('ros2_qos.sync_queue_size').value
+        self.velocity_filter_alpha = get_param('velocity_filter.alpha', 0.25)
         
-        self.fx_param = self.get_parameter('camera.fx').value
-        self.fy_param = self.get_parameter('camera.fy').value
-        self.cx_param = self.get_parameter('camera.cx').value
-        self.cy_param = self.get_parameter('camera.cy').value
+        pub_depth = get_param('ros2_qos.publisher_depth', 1)
+        sub_depth = get_param('ros2_qos.subscriber_depth', 30)
+        sync_slop = get_param('ros2_qos.sync_slop', 0.1)
+        sync_queue_size = get_param('ros2_qos.sync_queue_size', 30)
+        
+        self.fx_param = get_param('camera.fx', 609.268)
+        self.fy_param = get_param('camera.fy', 609.338)
+        self.cx_param = get_param('camera.cx', 323.599)
+        self.cy_param = get_param('camera.cy', 246.130)
         
         self.get_logger().info(
             f'⚙️ Parameters loaded: conf={self.obj_conf}, classes={self.dynamic_classes}, '
@@ -91,7 +95,8 @@ class MultiObjectTrackingNode(Node):
             track_thresh=track_thresh, 
             track_buffer=track_buffer, 
             match_thresh=match_thresh,
-            use_appearance=use_appearance, 
+            use_appearance=use_appearance,
+            track_low_thresh=self.track_low_thresh,
             max_age_before_predict=max_age_before_predict
         )
         
@@ -168,7 +173,8 @@ class MultiObjectTrackingNode(Node):
     def _process_frame(self, frame, ts_recv):
         ts_now = self.get_clock().now().nanoseconds * 1e-9
 
-        results = self._yolo.predict(frame, conf=self.obj_conf, verbose=False, device='cuda', half=True)[0]
+        # FIX: Use track_low_thresh instead of obj_conf to avoid losing weak detections during pose changes
+        results = self._yolo.predict(frame, conf=self.track_low_thresh, verbose=False, device='cuda', half=True)[0]
             
         raw_dets = []
         for box in results.boxes.data:
@@ -228,21 +234,30 @@ class MultiObjectTrackingNode(Node):
         x1, y1, x2, y2 = map(int, bbox)
         if not (0 <= x1 < w and x2 <= w and 0 <= y1 < h and y2 <= h): return None
         
-        # Thu hẹp vùng lấy Depth (margin 10%) để tránh lấy nhầm độ sâu của nền
-        margin_w = int((x2 - x1) * 0.1)
-        margin_h = int((y2 - y1) * 0.1)
+        # Primary ROI: focus on torso center only
+        margin_w = int((x2 - x1) * 0.35)
+        margin_h = int((y2 - y1) * 0.15)
         roi = self._current_depth_map[y1+margin_h:y2-margin_h, x1+margin_w:x2-margin_w]
         
-        # Lọc với min/max_depth từ config
         valid = roi[(np.isfinite(roi)) & (roi > self.min_depth) & (roi < self.max_depth)]
+        if valid.size > 0:
+            return float(np.median(valid))
         
-        return float(np.median(valid)) if valid.size > 0 else None
+        # FIX: FALLBACK MECHANISM for close-range tracking (< 50cm)
+        # If center region is empty (standing too close), use entire BBox
+        # This prevents humans: [] flicker when person is at minimum distance
+        roi_fallback = self._current_depth_map[y1:y2, x1:x2]
+        valid_fallback = roi_fallback[(np.isfinite(roi_fallback)) & (roi_fallback > self.min_depth) & (roi_fallback < self.max_depth)]
+        
+        return float(np.median(valid_fallback)) if valid_fallback.size > 0 else None
 
     def _update_ekf_velocity(self, tid, px, py, ts_now):
         if tid not in self.ekfs:
             self.ekfs[tid] = CTRV_EKF(dt=0.033)
             self.velocity_filters[tid] = VelocityFilter(alpha=self.velocity_filter_alpha)
-            self.position_history[tid] = deque(maxlen=5)
+            # FIX: Increase buffer from 5 to 15 frames (~0.5s)
+            # Longer derivative window = cleaner velocity estimates, noise cancellation
+            self.position_history[tid] = deque(maxlen=15)
 
         dt = max(ts_now - self.last_frame_ts.get(tid, ts_now - 0.033), 0.01)
         self.last_frame_ts[tid] = ts_now
@@ -251,14 +266,38 @@ class MultiObjectTrackingNode(Node):
         ekf.dt = dt
         ekf.predict()
         
-        self.position_history[tid].append(np.array([px, py]))
-        meas_vel = (self.position_history[tid][-1] - self.position_history[tid][-2])/dt if len(self.position_history[tid]) >= 2 else np.zeros(2)
+        # Store position with timestamp for real-time velocity calculation
+        self.position_history[tid].append((np.array([px, py]), ts_now))
+        
+        # FIX: Calculate velocity using ACTUAL elapsed time, not frame count
+        # This handles variable camera framerate and eliminates timestamp jitter
+        if len(self.position_history[tid]) >= 2:
+            pos_old, ts_old = self.position_history[tid][0]
+            pos_new, ts_new = self.position_history[tid][-1]
+            # FIX: Increase min delta_t from 0.01 to 0.033 to prevent velocity explosion
+            # Dividing by very small time values causes velocity to spike unrealistically
+            # 0.033s = 1 frame at 30Hz, preventing division by tiny numbers
+            delta_t = max(ts_new - ts_old, 0.033)  # Actual time elapsed
+            meas_vel = (pos_new - pos_old) / delta_t
+        else:
+            meas_vel = np.zeros(2)
+            
         ekf.update(np.array([px, py]), meas_vel)
 
-        filtered_vel = self.velocity_filters[tid].update(np.array([float(ekf.state.v * np.cos(ekf.state.psi)), float(ekf.state.v * np.sin(ekf.state.psi)), 0.0]))
+        filtered_vel = self.velocity_filters[tid].update(np.array([
+            float(ekf.state.v * np.cos(ekf.state.psi)), 
+            float(ekf.state.v * np.sin(ekf.state.psi)), 
+            0.0
+        ]))
         
-        # Chỉ trả về vx, vy (đã làm mượt)
-        return filtered_vel[0], filtered_vel[1]
+        vx, vy = filtered_vel[0], filtered_vel[1]
+        
+        # FIX: Eliminate subnormal float garbage (2.8e-45 is subnormal zero)
+        # Check if values are near zero and clamp to exactly 0.0
+        if abs(vx) < 1e-4: vx = 0.0
+        if abs(vy) < 1e-4: vy = 0.0
+        
+        return float(vx), float(vy)
 
     def _cleanup_memory(self, ts_now):
         stale_ids = [tid for tid, last in self.track_last_seen_time.items() if ts_now - last > self.track_cleanup_timeout]
