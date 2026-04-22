@@ -173,7 +173,9 @@ class MultiObjectTrackingNode(Node):
     def _process_frame(self, frame, ts_recv):
         ts_now = self.get_clock().now().nanoseconds * 1e-9
 
-        # FIX: Use track_low_thresh instead of obj_conf to avoid losing weak detections during pose changes
+        # FIX: Use track_low_thresh for BYTE Association to catch weak arm detections
+        # Ensures that outstretched limbs don't create separate ghost bboxes
+        # NMS (iou_thresh=0.35) will merge them into single unified box
         results = self._yolo.predict(frame, conf=self.track_low_thresh, verbose=False, device='cuda', half=True)[0]
             
         raw_dets = []

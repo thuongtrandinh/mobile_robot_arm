@@ -191,10 +191,11 @@ class BoTSortTracker:
         # Return active tracks (recently matched)
         active_tracks = []
         for track in self.tracks:
-            # FIX: Increase persistence to 30 frames (~1 second at 30Hz)
-            # Allows continuous output even when YOLO is temporarily blurred/missed
-            # System maintains track ID and provides EKF-predicted position to controller
-            if track.time_since_update <= 30:
+            # GHOSTING FIX: Reduce persistence from 30 frames to 2 frames (~66ms at 30Hz)
+            # For dynamic obstacle avoidance, stale poses (raised arm) must not persist
+            # If track not seen for 2 frames, remove bbox immediately
+            # This prevents RL-MPC from steering around phantom obstacles from old poses
+            if track.time_since_update <= 2:
                 bbox = track.bbox
                 active_tracks.append([
                     bbox[0], bbox[1], bbox[2], bbox[3], track.track_id

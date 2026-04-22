@@ -6,10 +6,12 @@ multi_object_tracking_node:
     # ===== YOLO DETECTION PARAMETERS =====
     yolo:
       # Object detection confidence threshold (reduced to prevent losing targets during pose changes)
-      object_conf_thresh: 0.45       # Reduced from 0.65 to catch arms/extended poses with lower confidence
+      object_conf_thresh: 0.40       # Reduced to 0.40 for better arm/extended pose detection
       
-      # Non-Maximum Suppression
-      iou_thresh: 0.50               # IOU threshold para NMS
+      # Non-Maximum Suppression - STRENGTHENED to eliminate ghosting
+      # When arms extend, body+arms may create 2 overlapping BBoxes
+      # Strong NMS (0.35) merges them into single unified bbox
+      iou_thresh: 0.35               # Reduced from 0.50 to 0.35 for aggressive bbox merging
       
       # Depth-Aware NMS (3D space filtering)
       depth_nms_threshold: 0.5       # Objetos >0.5m apart em Z = ambos mantidos
@@ -20,10 +22,11 @@ multi_object_tracking_node:
 
     # ===== TRACKING PARAMETERS (SHORT-TERM MEMORY) =====
     tracking:
-      # Timeout & buffer (otimizado para transições rápidas)
-      tracking_timeout: 2.0          # Limpar memória EKF após 2s sem detecção
-      track_buffer: 90               # Increased from 60 to 90: keep tracks longer when YOLO temporarily loses detection
-      max_age_before_predict: 30     # Increased from 15 to 30: predict trajectory for up to 1 second during occlusion
+      # Timeout & buffer - OPTIMIZED for dynamic obstacle avoidance (NOT person-following)
+      # Goal: Eliminate ghost bboxes from stale poses (arm raised, etc)
+      tracking_timeout: 0.5          # Reduced from 2.0s to 0.5s: aggressive EKF cleanup
+      track_buffer: 30               # Reduced from 90: remove stale obstacles faster
+      max_age_before_predict: 30     # Keep at 30 for motion prediction during brief occlusion
       
       # BoT-SORT matching thresholds - RELAXED for continuous tracking
       track_thresh: 0.30             # Relaxed from 0.45 to 0.30 for better weak detection capture
