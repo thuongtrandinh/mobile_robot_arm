@@ -638,7 +638,10 @@ int main(int argc, char **argv) {
       */
       RCLCPP_INFO(
         robot_plann::_node->get_logger(),
-        "Planner node is running in reference-only mode; Nav2 FollowPath/MPPI will track the returned A* path.");
+        "Zero-latency pipeline: reference via service, MPC solve %.2f Hz, cmd TwistStamped topic %s, cmd Twist topic %s",
+        1.0 / robot_plann::_mpc_solve_period,
+        cmd_topic.c_str(),
+        cmd_unstamped_topic.c_str());
       RCLCPP_INFO(
         robot_plann::_node->get_logger(),
         "Goal stop distance enabled: %.3f m",

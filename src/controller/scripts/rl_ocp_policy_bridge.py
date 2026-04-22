@@ -10,8 +10,7 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import rclpy
-from rclpy.action import ActionClient
-from interfaces.msg import ObstacleState, WallState, PolyState, HumanState, HumanArray
+from interfaces.msg import ObstacleState, WallState, PolyState, HumanState
 from interfaces.msg import JointState as InterfaceJointState
 from interfaces.srv import OcpLocalPlann
 from geometry_msgs.msg import PoseStamped

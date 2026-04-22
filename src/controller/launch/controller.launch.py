@@ -43,11 +43,12 @@ def generate_launch_description():
     )
     tuning_config_arg = DeclareLaunchArgument(
         "tuning_config",
-        default_value=PathJoinSubstitution([FindPackageShare("controller"), "config", "ddmr_mpc_config.yaml"]),
-    )
-    mppi_params_file_arg = DeclareLaunchArgument(
-        "mppi_params_file",
-        default_value=PathJoinSubstitution([FindPackageShare("controller"), "config", "mppi_params.yaml"]),
+        default_value=PathJoinSubstitution([
+            FindPackageShare("controller"),
+            "config",
+            "ddmr_mpc_config.yaml",
+        ]),
+        description="YAML file containing MPC and policy tuning parameters",
     )
     halo_drl_dir_arg = DeclareLaunchArgument(
         "halo_drl_dir", default_value="HALO_1/drl_moudle"
