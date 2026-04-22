@@ -106,16 +106,20 @@ def launch_setup(context, *args, **kwargs):
         arguments=[
             '/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock',
             '/scan@sensor_msgs/msg/LaserScan[gz.msgs.LaserScan',
-            '/zed/zed_node/imu/data@sensor_msgs/msg/Imu[gz.msgs.IMU',
-            '/zed/zed_node/left/image_rect_color/image@sensor_msgs/msg/Image[gz.msgs.Image',
-            '/zed/zed_node/left/image_rect_color/camera_info@sensor_msgs/msg/CameraInfo[gz.msgs.CameraInfo',
-            '/zed/zed_node/left/image_rect_color/depth_image@sensor_msgs/msg/Image[gz.msgs.Image',
+            # Bridge cho IMU của D435i
+            '/imu@sensor_msgs/msg/Imu[ignition.msgs.IMU',
+            
+            # Bridge cho Camera D435i (RGB, Depth, Info)
+            '/camera/image@sensor_msgs/msg/Image[ignition.msgs.Image',
+            '/camera/depth_image@sensor_msgs/msg/Image[ignition.msgs.Image',
+            '/camera/camera_info@sensor_msgs/msg/CameraInfo[ignition.msgs.CameraInfo',
         ],
+
         remappings=[
-            ('/zed/zed_node/imu/data', '/imu'),
-            ('/zed/zed_node/left/image_rect_color/image', '/zed/zed_node/rgb/color/rect/image'),
-            ('/zed/zed_node/left/image_rect_color/camera_info', '/zed/zed_node/rgb/color/rect/camera_info'),
-            ('/zed/zed_node/left/image_rect_color/depth_image', '/zed/zed_node/depth/depth_registered'),
+            ('/imu', '/camera/imu'),
+            ('/camera/image', '/camera/color/image_raw'),
+            ('/camera/depth_image', '/camera/depth/image_rect_raw'),
+            ('/camera/camera_info', '/camera/color/camera_info'),
         ],
         parameters=[{'use_sim_time': use_sim_time}],
         output='screen'

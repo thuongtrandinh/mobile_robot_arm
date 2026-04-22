@@ -1,71 +1,34 @@
 <?xml version="1.0" ?>
 <robot name="diff_drive" xmlns:xacro="http://ros.org/wiki/xacro">
-    <gazebo reference="chassis">
-        <material>Gazebo/Aluminium</material>
-    </gazebo>
+
+    <gazebo reference="chassis"><material>Gazebo/Aluminium</material></gazebo>
 
     <gazebo reference="left_wheel">
         <material>Gazebo/Blue</material>
-        <mu1>1.0</mu1>
-        <mu2>1.0</mu2>
-        <kp>1000000.0</kp>
-        <kd>10.0</kd>
-        <minDepth>0.001</minDepth>
-        <maxVel>10.0</maxVel>
+        <mu1>1.0</mu1><mu2>1.0</mu2>
+        <kp>1000000.0</kp><kd>10.0</kd>
     </gazebo>
 
     <gazebo reference="right_wheel">
         <material>Gazebo/Blue</material>
-        <mu1>1.0</mu1>
-        <mu2>1.0</mu2>
-        <kp>1000000.0</kp>
-        <kd>10.0</kd>
-        <minDepth>0.001</minDepth>
-        <maxVel>10.0</maxVel>
+        <mu1>1.0</mu1><mu2>1.0</mu2>
+        <kp>1000000.0</kp><kd>10.0</kd>
     </gazebo>
 
-    <gazebo reference="above_base_caster">
-        <material>Gazebo/Yellow</material>
-    </gazebo>
-
-    <gazebo reference="right_base_caster">
-        <material>Gazebo/Yellow</material>
-    </gazebo>
-
-    <gazebo reference="left_base_caster">
-        <material>Gazebo/Yellow</material>
-    </gazebo>
-
-    <gazebo reference="back_base_caster">
-        <material>Gazebo/Yellow</material>
-    </gazebo>
-
-    <gazebo reference="caster_wheel">
-        <material>Gazebo/Red</material>
-        <mu1>0.0</mu1>
-        <mu2>0.0</mu2>
-        <kp>1000000.0</kp>
-        <kd>100.0</kd>
-        <minDepth>0.001</minDepth>
-        <maxVel>1.0</maxVel>
-    </gazebo>
-
-    <gazebo reference="face_link">
-        <material>Gazebo/Red</material>
-    </gazebo>
+    <gazebo reference="caster_wheel"><mu1>0.0</mu1><mu2>0.0</mu2></gazebo>
+    <gazebo reference="above_base_caster"><mu1>0.0</mu1><mu2>0.0</mu2></gazebo>
+    <gazebo reference="right_base_caster"><mu1>0.0</mu1><mu2>0.0</mu2></gazebo>
+    <gazebo reference="left_base_caster"><mu1>0.0</mu1><mu2>0.0</mu2></gazebo>
+    <gazebo reference="back_base_caster"><mu1>0.0</mu1><mu2>0.0</mu2></gazebo>
 
     <gazebo reference="laser">
-        <material>Gazebo/Orange</material>
-    </gazebo>
-
-    <gazebo reference="laser">
-        <sensor name="laser" type="gpu_ray">
-            <gz_frame_id>laser</gz_frame_id>
+        <sensor name="laser_sensor" type="gpu_lidar">
             <always_on>true</always_on>
             <visualize>true</visualize>
-            <update_rate>5</update_rate>
+            <update_rate>10.0</update_rate>
             <topic>scan</topic>
-            <ray>
+            <gz_frame_id>laser</gz_frame_id>
+            <lidar>
                 <scan>
                     <horizontal>
                         <samples>720</samples>
@@ -77,77 +40,37 @@
                 <range>
                     <min>0.12</min>
                     <max>12.0</max>
-                    <resolution>0.01</resolution>
                 </range>
-                <noise>
-                    <type>gaussian</type>
-                    <mean>0.0</mean>
-                    <stddev>0.01</stddev>
-                </noise>
-            </ray>
+            </lidar>
         </sensor>
     </gazebo>
     
-    <gazebo reference="zed2_link">
-        <sensor name="imu" type="imu">
+    <gazebo reference="camera_link">
+        <sensor name="camera_sensor" type="rgbd_camera">
             <always_on>true</always_on>
-            <update_rate>100</update_rate>
-            <gz_frame_id>zed2_link</gz_frame_id>
-            <topic>/zed/zed_node/imu/data</topic>
-            <imu>
-                <angular_velocity>
-                    <x><noise type="gaussian"><mean>0.0</mean><stddev>2e-4</stddev></noise></x>
-                    <y><noise type="gaussian"><mean>0.0</mean><stddev>2e-4</stddev></noise></y>
-                    <z><noise type="gaussian"><mean>0.0</mean><stddev>2e-4</stddev></noise></z>
-                </angular_velocity>
-                <linear_acceleration>
-                    <x><noise type="gaussian"><mean>0.0</mean><stddev>1.7e-2</stddev></noise></x>
-                    <y><noise type="gaussian"><mean>0.0</mean><stddev>1.7e-2</stddev></noise></y>
-                    <z><noise type="gaussian"><mean>0.0</mean><stddev>1.7e-2</stddev></noise></z>
-                </linear_acceleration>
-            </imu>
+            <update_rate>30.0</update_rate>
+            <topic>camera</topic>
+            <gz_frame_id>camera_link</gz_frame_id>
+            <camera name="d435i">
+                <horizontal_fov>1.50098</horizontal_fov>
+                <image>
+                    <width>640</width>
+                    <height>480</height>
+                </image>
+                <clip>
+                    <near>0.1</near>
+                    <far>10.0</far>
+                </clip>
+            </camera>
         </sensor>
     </gazebo>
 
-    <gazebo reference="zed2_left_camera_frame">
-        <sensor name="zed2_left_camera_sensor" type="rgbd_camera">
+    <gazebo reference="camera_link">
+        <sensor name="imu_sensor" type="imu">
             <always_on>true</always_on>
-            <update_rate>30</update_rate>
-            <visualize>true</visualize>
-            <gz_frame_id>zed2_left_camera_frame</gz_frame_id>
-            
-            <topic>/zed/zed_node/left/image_rect_color</topic>
-            
-            <camera>
-                <horizontal_fov>1.91986</horizontal_fov>
-                <image>
-                    <width>1280</width>
-                    <height>720</height>
-                    <format>R8G8B8</format>
-                </image>
-                <clip><near>0.2</near><far>20.0</far></clip>
-            </camera>
-            <noise><type>gaussian</type><mean>0.0</mean><stddev>0.003</stddev></noise>
-        </sensor>
-    </gazebo>
-
-    <gazebo reference="zed2_right_camera_frame">
-        <sensor name="zed2_right_camera_sensor" type="camera">
-            <always_on>true</always_on>
-            <update_rate>30</update_rate>
-            <visualize>false</visualize> <gz_frame_id>zed2_right_camera_frame</gz_frame_id>
-            <topic>zed2/right/image_raw</topic>
-            <camera_info_topic>zed2/right/camera_info</camera_info_topic>
-            <camera>
-                <horizontal_fov>1.91986</horizontal_fov>
-                <image>
-                    <width>1280</width>
-                    <height>720</height>
-                    <format>R8G8B8</format>
-                </image>
-                <clip><near>0.2</near><far>20.0</far></clip>
-            </camera>
-            <noise><type>gaussian</type><mean>0.0</mean><stddev>0.003</stddev></noise>
+            <update_rate>100.0</update_rate>
+            <topic>imu</topic>
+            <gz_frame_id>camera_link</gz_frame_id>
         </sensor>
     </gazebo>
 
