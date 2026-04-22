@@ -37,7 +37,7 @@
 #define DDMR_NX     7
 #define DDMR_NZ     0
 #define DDMR_NU     22
-#define DDMR_NP     98
+#define DDMR_NP     203
 
 #ifdef __cplusplus
 extern "C" {

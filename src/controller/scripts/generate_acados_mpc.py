@@ -46,7 +46,7 @@ def _default_config() -> Dict[str, Any]:
         "scene_limits": {
             "num_walls": 2,
             "num_humans": 5,
-            "num_static_obstacles": 5,
+            "num_static_obstacles": 40,
             "num_polygon_edges": 20,
         },
         "cost_weights": {
@@ -94,6 +94,14 @@ def _load_config(package_dir: Path) -> Dict[str, Any]:
     ms["n_horizon"] = int(params.get("mpc_structure.n_horizon", ms["n_horizon"]))
     ms["dt"] = float(params.get("mpc_structure.dt", ms["dt"]))
     ms["wheel_half_track"] = float(params.get("mpc_structure.wheel_half_track", ms["wheel_half_track"]))
+
+    sl = cfg["scene_limits"]
+    sl["num_walls"] = int(params.get("scene_limits.num_walls", sl["num_walls"]))
+    sl["num_humans"] = int(params.get("scene_limits.num_humans", sl["num_humans"]))
+    sl["num_static_obstacles"] = int(
+        params.get("scene_limits.num_static_obstacles", sl["num_static_obstacles"])
+    )
+    sl["num_polygon_edges"] = int(params.get("scene_limits.num_polygon_edges", sl["num_polygon_edges"]))
 
     cw = cfg["cost_weights"]
     cw["w_x"] = float(params.get("cost_weights.w_x", cw["w_x"]))

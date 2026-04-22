@@ -257,11 +257,7 @@ MpcReturn Planner::SolveMpcFromCachedReference(const JointState &state) {
       std::cout << "Invalid cached reference trajectory with len = "
                 << astar_path_.size() << std::endl;
     }
-    auto mpc_stages = MpcStages();
-    Eigen::Vector2d pid_acc = this->PidCalc(state);
-    mpc_stages[0].uk.acc = pid_acc(0);
-    mpc_stages[0].uk.dr = pid_acc(1);
-    return {mpc_stages, true};
+    return {MpcStages(), false};
   }
 
   auto final_path = astar_path_;
@@ -291,15 +287,9 @@ MpcReturn Planner::SolveMpcFromCachedReference(const JointState &state) {
   auto mpc_return = ocp_planner_->RunMpc(revised_state, final_path);
 
   if (!mpc_return.success) {
-    // Keep robot moving toward goal when NLP is temporarily infeasible.
-    auto fallback_stages = MpcStages();
-    Eigen::Vector2d pid_acc = this->PidCalc(revised_state);
-    fallback_stages[0].uk.acc = pid_acc(0);
-    fallback_stages[0].uk.dr = pid_acc(1);
-    if (!move_forward_) {
-      fallback_stages[0].uk.acc = -fallback_stages[0].uk.acc;
-    }
-    return {fallback_stages, true};
+    // Fail-safe: do not fallback to goal-seeking PID when NLP is infeasible,
+    // because PID does not enforce obstacle constraints and can cause collisions.
+    return {MpcStages(), false};
   }
 
   // std::cout << "===" << std::endl;
@@ -523,37 +513,6 @@ bool Planner::SimpleRayCast(Eigen::Vector2d &goal,
   }
 
   return ((goal - pos).norm() < 0.1)? false: true;
-}
-
-Eigen::Vector2d Planner::PidCalc(const JointState &state) {
-  Eigen::Vector3d robot_pose;
-  robot_pose << state.robot.px, state.robot.py, state.robot.yaw;
-  
-  Eigen::Vector2d desired_pos;
-  desired_pos << state.robot.gx, state.robot.gy;
-
-  double alpha = 
-      atan2(desired_pos(1) - robot_pose(1), desired_pos(0) - robot_pose(0)) - 
-      robot_pose(2);
-  
-  Unwrap(alpha);
-
-  double forward = (alpha <= M_PI / 2 && alpha > -M_PI / 2)? 1.0: -1.0;
-  double dist_error = forward * 
-      EuclideanNorm(desired_pos(0) - robot_pose(0), 
-                    desired_pos(1) - robot_pose(1));
-
-  if (abs(dist_error) < 0.05) alpha = 0;
-
-  Eigen::Vector2d acc_ctrl;
-  Eigen::Vector2d desired_vel;
-  desired_vel << 0.8 * dist_error, 2.0 * alpha;
-
-  const double dt = GetMpcDt();
-  acc_ctrl(0) = (desired_vel(0) - state.robot.v) / (dt * 0.5);
-  acc_ctrl(1) = (desired_vel(1) - state.robot.yaw_rate) / (dt * 0.5);
-
-  return acc_ctrl;
 }
 
 cv::Mat Planner::CreateMap() {

@@ -144,7 +144,6 @@ class Planner {
   bool SimpleRayCast(Eigen::Vector2d &goal, const Eigen::Vector2d &pos);
   cv::Point MapCoord2ImgIdx(const Eigen::Vector2d &pt, bool vis = false) const;
   Eigen::Vector2d ImgIdx2MapCoord(const cv::Point &idx, bool vis = false) const;
-  Eigen::Vector2d PidCalc(const JointState &state);
   std::vector<Point> BuildDirectReferenceTrajectory(
       const JointState &state, const Eigen::Vector2d &goal) const;
   double ComputeDirectReferenceSpeed(double remaining_distance) const;

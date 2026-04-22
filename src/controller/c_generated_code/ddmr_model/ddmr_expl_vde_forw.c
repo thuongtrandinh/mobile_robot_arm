@@ -55,9 +55,9 @@ static const casadi_int casadi_s0[3] = {7, 1, 1};
 static const casadi_int casadi_s1[3] = {7, 7, 1};
 static const casadi_int casadi_s2[3] = {7, 22, 1};
 static const casadi_int casadi_s3[3] = {22, 1, 1};
-static const casadi_int casadi_s4[3] = {98, 1, 1};
+static const casadi_int casadi_s4[3] = {203, 1, 1};
 
-/* ddmr_expl_vde_forw:(i0[7],i1[7x7],i2[7x22],i3[22],i4[98])->(o0[7],o1[7x7],o2[7x22]) */
+/* ddmr_expl_vde_forw:(i0[7],i1[7x7],i2[7x22],i3[22],i4[203])->(o0[7],o1[7x7],o2[7x22]) */
 static int casadi_f0(const casadi_real** arg, casadi_real** res, casadi_int* iw, casadi_real* w, int mem) {
   casadi_real a0, a1, a2, a3, a4, a5, a6, a7, a8;
   a0=arg[0]? arg[0][3] : 0;
