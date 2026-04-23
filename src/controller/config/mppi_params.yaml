@@ -62,8 +62,6 @@ controller_server:
         - GoalCritic
         - GoalAngleCritic
         - PathAlignCritic
-        - PathFollowCritic
-        - PathAngleCritic
         - PreferForwardCritic
 
       # Trọng số của các Critics (Tùy chỉnh để thay đổi hành vi lái)
@@ -71,17 +69,17 @@ controller_server:
         cost_weight: 4.0
       ObstaclesCritic:
         repulsion_weight: 1.5
-        cost_weight: 2.0
+        cost_weight: 25.0
         collision_cost: 100000.0
       PathAlignCritic:
-        cost_weight: 14.0
+        cost_weight: 2.0  # Giảm mạnh để không bám chặt vào đường thẳng, cho phép lách vật cản
         max_heuristic_path_distance: 3.0
       GoalCritic:
-        cost_weight: 5.0
-        threshold_to_consider: 1.4
+        cost_weight: 45.0  # Tăng cực mạnh để MPPI bằng mọi giá tiến về local_goal
+        threshold_to_consider: 2.0
       GoalAngleCritic:
-        cost_weight: 3.0
-        threshold_to_consider: 0.5
+        cost_weight: 15.0  # Ưu tiên quay mũi xe về hướng local_goal
+        threshold_to_consider: 1.0
       PreferForwardCritic:
         cost_weight: 5.0
         threshold_to_consider: 0.5
