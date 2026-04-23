@@ -1,7 +1,5 @@
 import os
 from ament_index_python.packages import get_package_share_directory
-import os
-from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, GroupAction
 from launch.launch_description_sources import PythonLaunchDescriptionSource
@@ -35,7 +33,6 @@ def generate_launch_description():
     mppi_params_file = LaunchConfiguration("mppi_params_file")
 
     use_sim_time_arg = DeclareLaunchArgument(
-        "use_sim_time", default_value="true", description="Use simulation time if true"
         "use_sim_time", default_value="true", description="Use simulation time if true"
     )
     respawn_arg = DeclareLaunchArgument(
