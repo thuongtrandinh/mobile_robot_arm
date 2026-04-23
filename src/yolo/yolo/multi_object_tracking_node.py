@@ -198,10 +198,11 @@ class MultiObjectTrackingNode(Node):
         # 3. Cập nhật Tracker (BoT-SORT/ByteTrack)
         tracks_np = self._tracker.update(dets_np, features=None)
 
-        # 4. KHỞI TẠO TIN NHẮN (Giải quyết lỗi name 'msg' is not defined)
+        # 4. KHỞI TẠO TIN NHẮN VÀ MARKER
         msg = HumanArray()
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.header.frame_id = "camera_link"
+        marker_array = MarkerArray()
 
         h, w = frame.shape[:2]
         
@@ -209,48 +210,38 @@ class MultiObjectTrackingNode(Node):
             x1, y1, x2, y2, tid = track
             tid = int(tid)
             
-            # Lấy độ sâu trung bình vùng trung tâm đối tượng
             depth = self._get_depth((x1, y1, x2, y2), h, w)
             if depth is None:
                 continue
 
-            # --- ĐOẠN ĐÃ ĐƯỢC SỬA LẠI ---
-            # Tính tọa độ pixel tâm của BBox (gọi là u cho trục X của ảnh)
             u = (x1 + x2) / 2.0
-            
-            # Tâm quang học của camera (thường nằm ở chính giữa chiều rộng ảnh)
-            cx_cam = w / 2.0 
-            
-            # Tính tọa độ thực tế (Pinhole Camera Model)
+            cx_cam = w / 2.0
             px = float(depth)
-            py = float(-(u - cx_cam) * depth / self.fx) 
-            # -----------------------------
-            
-            # Cập nhật EKF để ước lượng vận tốc vx, vy (né vật cản động)
+            py = float(-(u - cx_cam) * depth / self.fx)
+
+            v_center = (y1 + y2) / 2.0
+            cy_cam = h / 2.0
+            pz = float(-(v_center - cy_cam) * depth / self.fy)
+            human_height = float(abs(y2 - y1) * depth / self.fy)
+
             vx, vy = self._update_ekf_velocity(tid, px, py, ts_now)
             
-            # Gán dữ liệu vào tin nhắn HumanState
             human_msg = HumanState()
-            human_msg.id = int(tid)
-            human_msg.px = float(px)
-            human_msg.py = float(py)
-            human_msg.vx = float(vx)
-            human_msg.vy = float(vy)
-            
-            # Bán kính bao quanh vật cản để robot né (tính dựa trên chiều rộng BBox)
+            human_msg.id = tid
+            human_msg.px = px
+            human_msg.py = py
+            human_msg.vx = vx
+            human_msg.vy = vy
             human_msg.radius = float(abs(x2 - x1) * depth / self.fx / 2.0)
             
             msg.humans.append(human_msg)
+            h_markers = self.create_human_marker(human_msg, tid, pz, human_height)
+            marker_array.markers.extend(h_markers)
 
-        # 5. PUBLISH DỮ LIỆU
+        # 5. PUBLISH DỮ LIỆU ĐIỀU KHIỂN
         self.human_pub.publish(msg)
         
         # 6. HIỂN THỊ DEBUG TRÊN RVIZ2 (MarkerArray)
-        marker_array = MarkerArray()
-        for i, h_info in enumerate(msg.humans):
-            h_markers = self.create_human_marker(h_info, i)
-            marker_array.markers.extend(h_markers)
-        
         if marker_array.markers:
             self.marker_pub.publish(marker_array)
 
@@ -279,7 +270,7 @@ class MultiObjectTrackingNode(Node):
         
         return float(np.median(valid_fallback)) if valid_fallback.size > 0 else None
     
-    def create_human_marker(self, human, human_id):
+    def create_human_marker(self, human, human_id, pz, human_height):
         markers = []
         now = self.get_clock().now().to_msg()
         
@@ -293,12 +284,12 @@ class MultiObjectTrackingNode(Node):
         obs.action = Marker.ADD
         obs.pose.position.x = human.px
         obs.pose.position.y = human.py
-        obs.pose.position.z = 0.4 # Đặt thấp để dễ quan sát mặt đất
+        obs.pose.position.z = pz
         
-        # Scale dựa trên bán kính né tránh thực tế
+        # Scale dựa trên bán kính né tránh và chiều cao thực tế
         obs.scale.x = human.radius * 2.0 
         obs.scale.y = human.radius * 2.0
-        obs.scale.z = 0.8
+        obs.scale.z = max(0.5, human_height)
         
         obs.color.r = 1.0; obs.color.g = 0.1; obs.color.b = 0.1; obs.color.a = 0.5
         obs.lifetime = rclpy.duration.Duration(seconds=0.1).to_msg()
@@ -312,9 +303,10 @@ class MultiObjectTrackingNode(Node):
             arrow.ns = "velocity_vectors"
             arrow.id = human_id + 1000
             arrow.type = Marker.ARROW
+            z_arrow = pz - (human_height / 2.0) + 0.1
             arrow.points = [
-                Point(x=human.px, y=human.py, z=0.4),
-                Point(x=human.px + human.vx * 0.5, y=human.py + human.vy * 0.5, z=0.4) # Scale mũi tên 0.5s để không quá dài
+                Point(x=human.px, y=human.py, z=z_arrow),
+                Point(x=human.px + human.vx * 0.5, y=human.py + human.vy * 0.5, z=z_arrow)
             ]
             arrow.scale.x = 0.05; arrow.scale.y = 0.1; arrow.scale.z = 0.1
             arrow.color.r = 1.0; arrow.color.g = 1.0; arrow.color.b = 0.0; arrow.color.a = 1.0
