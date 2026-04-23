@@ -512,16 +512,19 @@ class RlOcpPolicyBridge(Node):
         if self.last_sent_follow_path is None:
             return True
         path_delta = self._path_distance(path_msg, self.last_sent_follow_path)
-        if path_delta >= self.follow_path_replan_path_delta:
-            return True
+        if path_delta < self.follow_path_replan_path_delta:
+            return False
 
         now_ns = int(self.get_clock().now().nanoseconds)
         elapsed = (now_ns - int(self.last_follow_path_send_ns)) / 1e9
         return elapsed >= self.follow_path_replan_min_interval_sec
 
     def _send_new_follow_path_goal(self, goal_msg: FollowPath.Goal) -> None:
+        sent_path = goal_msg.path
         self.follow_path_goal_future = self.follow_path_client.send_goal_async(goal_msg)
-        self.follow_path_goal_future.add_done_callback(self._on_follow_path_goal_response)
+        self.follow_path_goal_future.add_done_callback(
+            lambda future, path=sent_path: self._on_follow_path_goal_response(future, path)
+        )
 
     def _on_follow_path_cancel_done(self, future) -> None:
         try:
@@ -563,7 +566,8 @@ class RlOcpPolicyBridge(Node):
 
         self._send_new_follow_path_goal(goal_msg)
 
-    def _on_follow_path_goal_response(self, future) -> None:
+    def _on_follow_path_goal_response(self, future, sent_path: Path) -> None:
+        self.follow_path_goal_future = None
         try:
             goal_handle = future.result()
         except Exception as exc:
@@ -575,9 +579,8 @@ class RlOcpPolicyBridge(Node):
             return
 
         self.active_follow_path_goal_handle = goal_handle
-        if self.pending_follow_path_msg is None:
-            self.last_sent_follow_path = goal_handle.request.path
-            self.last_follow_path_send_ns = int(self.get_clock().now().nanoseconds)
+        self.last_sent_follow_path = sent_path
+        self.last_follow_path_send_ns = int(self.get_clock().now().nanoseconds)
         self.follow_path_result_future = goal_handle.get_result_async()
         self.follow_path_result_future.add_done_callback(self._on_follow_path_result)
 
