@@ -97,18 +97,18 @@ def generate_launch_description():
         nav2_cmd
     ])
 
-    # 2. GỌI AMPCC NODE (Dành cho A* smooth & OCP service) - ĐÃ TẮT VÌ BẠN CHỈ MUỐN DÙNG MPPI
-    # ampcc_node = Node(
-    #     package="controller",
-    #     executable="ampcc_node",
-    #     name="opt_planner",
-    #     output="screen",
-    #     parameters=[tuning_config, {"use_sim_time": use_sim_time}],
-    #     respawn=respawn,
-    #     arguments=["--ros-args", "--log-level", log_level],
-    # )
+    # 2. GỌI PLANNER NODE (Chỉ giữ A* smooth & local path service)
+    ampcc_node = Node(
+        package="controller",
+        executable="ampcc_node",
+        name="opt_planner",
+        output="screen",
+        parameters=[tuning_config, {"use_sim_time": use_sim_time}],
+        respawn=respawn,
+        arguments=["--ros-args", "--log-level", log_level],
+    )
 
-    # 3. GỌI RL BRIDGE
+    # 3. GỌI RL BRIDGE (RL local goal -> A* service -> FollowPath/MPPI)
     rl_bridge_node = Node(
         package="controller",
         executable="rl_ocp_policy_bridge.py",
@@ -128,6 +128,9 @@ def generate_launch_description():
                 "map_topic": "/map",
                 "cmd_topic": "/diff_cont/cmd_vel",
                 "planner_service": "/ocp_plann",
+                "follow_path_action": "/follow_path",
+                "controller_id": "FollowPath",
+                "goal_checker_id": "general_goal_checker",
                 "planner_half_width": 5.8,
                 "planner_half_height": 9.8,
                 "auto_relax_constraints": False,
@@ -204,7 +207,7 @@ def generate_launch_description():
         astar_local_map_topic_arg,
         
         nav2_group,
-        # ampcc_node,
+        ampcc_node,
         rl_bridge_node,
         rviz_visualizer_node,
     ])
