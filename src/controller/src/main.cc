@@ -492,6 +492,14 @@ void PlannSrvCallback(
 
   nav_msgs::msg::Path refline_line = _planner->GetAStarSmoothPath();
   refline_line.header.stamp = _node->now();
+  
+  for (const auto &pose : refline_line.poses) {
+    interfaces::msg::Point pt;
+    pt.x = pose.pose.position.x;
+    pt.y = pose.pose.position.y;
+    res->astar_path.push_back(pt);
+  }
+
   if (astar_path_pub && !refline_line.poses.empty()) {
     astar_path_pub->publish(refline_line);
   }
@@ -622,16 +630,15 @@ int main(int argc, char **argv) {
       robot_plann::mpc_callback_group = robot_plann::_node->create_callback_group(
         rclcpp::CallbackGroupType::MutuallyExclusive);
 
+      /*
       robot_plann::mpc_solve_timer = robot_plann::_node->create_wall_timer(
         std::chrono::duration<double>(robot_plann::_mpc_solve_period),
         robot_plann::MpcExecTimerCallback,
         robot_plann::mpc_callback_group);
+      */
       RCLCPP_INFO(
         robot_plann::_node->get_logger(),
-        "Zero-latency pipeline: reference via service, MPC solve %.2f Hz, cmd TwistStamped topic %s, cmd Twist topic %s",
-        1.0 / robot_plann::_mpc_solve_period,
-        cmd_topic.c_str(),
-        cmd_unstamped_topic.c_str());
+        "Planner node is running in reference-only mode; Nav2 FollowPath/MPPI will track the returned A* path.");
       RCLCPP_INFO(
         robot_plann::_node->get_logger(),
         "Goal stop distance enabled: %.3f m",

@@ -9,11 +9,13 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import rclpy
+from rclpy.action import ActionClient
 from interfaces.msg import ObstacleState, WallState, PolyState, HumanState
 from interfaces.msg import JointState as InterfaceJointState
 from interfaces.srv import OcpLocalPlann
 from geometry_msgs.msg import PoseStamped
-from nav_msgs.msg import OccupancyGrid, Odometry
+from nav2_msgs.action import FollowPath
+from nav_msgs.msg import OccupancyGrid, Odometry, Path
 from rcl_interfaces.msg import SetParametersResult
 from rclpy.duration import Duration
 from rclpy.node import Node
@@ -59,9 +61,6 @@ class RlOcpPolicyBridge(Node):
         self.declare_parameter("goal_source_mode", self._GOAL_SOURCE_RL)
         self.declare_parameter("policy_period", 0.2)
         self.declare_parameter("mpc_period", 0.05)
-        self.declare_parameter("control_dt", 0.25)
-        self.declare_parameter("mpc_horizon_steps", 10)
-        self.declare_parameter("mpc_stability_warn_threshold", 0.35)
 
         self.declare_parameter("planner_half_width", 5.8)
         self.declare_parameter("planner_half_height", 9.8)
@@ -98,6 +97,11 @@ class RlOcpPolicyBridge(Node):
         self.declare_parameter("map_topic", "/map")
         self.declare_parameter("map_frame", "map")
         self.declare_parameter("planner_service", "/ocp_plann")
+        self.declare_parameter("follow_path_action", "/follow_path")
+        self.declare_parameter("controller_id", "FollowPath")
+        self.declare_parameter("goal_checker_id", "general_goal_checker")
+        self.declare_parameter("local_goal_topic", "/rl/local_goal")
+        self.declare_parameter("local_path_topic", "/rl/local_path")
 
         self.policy_env_name = self.get_parameter("policy_env_name").get_parameter_value().string_value
         self.halo_drl_dir = self.get_parameter("halo_drl_dir").get_parameter_value().string_value
@@ -128,12 +132,6 @@ class RlOcpPolicyBridge(Node):
         )
         self.policy_period = 1.0 / self.policy_hz
         self.mpc_period = 1.0 / self.service_hz
-        self.control_dt = self.get_parameter("control_dt").get_parameter_value().double_value
-        self.mpc_horizon_steps = max(1, self.get_parameter("mpc_horizon_steps").get_parameter_value().integer_value)
-        self.mpc_stability_warn_threshold = max(
-            0.0,
-            self.get_parameter("mpc_stability_warn_threshold").get_parameter_value().double_value,
-        )
         self.planner_half_width = self.get_parameter("planner_half_width").get_parameter_value().double_value
         self.planner_half_height = self.get_parameter("planner_half_height").get_parameter_value().double_value
         self.planner_hard_half_width = self.get_parameter("planner_hard_half_width").get_parameter_value().double_value
@@ -192,6 +190,11 @@ class RlOcpPolicyBridge(Node):
         self.map_topic = self.get_parameter("map_topic").get_parameter_value().string_value
         self.map_frame = self.get_parameter("map_frame").get_parameter_value().string_value
         self.planner_service = self.get_parameter("planner_service").get_parameter_value().string_value
+        self.follow_path_action = self.get_parameter("follow_path_action").get_parameter_value().string_value
+        self.controller_id = self.get_parameter("controller_id").get_parameter_value().string_value
+        self.goal_checker_id = self.get_parameter("goal_checker_id").get_parameter_value().string_value
+        self.local_goal_topic = self.get_parameter("local_goal_topic").get_parameter_value().string_value
+        self.local_path_topic = self.get_parameter("local_path_topic").get_parameter_value().string_value
 
         self.current_pose: Optional[Tuple[float, float, float]] = None
         self.current_twist: Optional[Tuple[float, float]] = None
@@ -221,19 +224,20 @@ class RlOcpPolicyBridge(Node):
         self.planner_y_limit = 9.8
 
         self.pending_future = None
+        self.follow_path_goal_future = None
+        self.follow_path_result_future = None
+        self.follow_path_cancel_future = None
+        self.active_follow_path_goal_handle = None
         self.last_wheel_speed: Optional[Tuple[float, float]] = None
         self.latest_sub_goal: Optional[Tuple[float, float]] = None
         self.latest_sub_goal_seq = 0
         self.last_requested_sub_goal_seq = -1
         self.worker: Optional[subprocess.Popen] = None
         self.last_request_for_viz: Optional[OcpLocalPlann.Request] = None
-        self.last_pose_for_viz: Optional[Tuple[float, float, float]] = None
-        self.last_wheels_for_viz: Optional[Tuple[float, float]] = None
         self.consecutive_planner_failures = 0
         self.success_streak = 0
         self.goal_reached = False
-        self.prev_predicted_traj: Optional[List[Tuple[float, float]]] = None
-        self.last_stability_delta_rms = 0.0
+        self.last_astar_path_for_viz: List[Tuple[float, float]] = []
         self.last_mask_applied = False
         self.last_mask_snap_distance = 0.0
         self.tf_buffer = Buffer()
@@ -255,23 +259,26 @@ class RlOcpPolicyBridge(Node):
         self.policy_debug_status_pub = self.create_publisher(String, self.policy_debug_status_topic, 10)
         self.action_debug_pub = self.create_publisher(String, self.action_debug_topic, 10)
         self.planner_scene_debug_pub = self.create_publisher(String, self.planner_scene_debug_topic, 10)
+        self.local_goal_pub = self.create_publisher(PoseStamped, self.local_goal_topic, 10)
+        self.local_path_pub = self.create_publisher(Path, self.local_path_topic, 10)
         self.ocp_client = self.create_client(OcpLocalPlann, self.planner_service)
+        self.follow_path_client = ActionClient(self, FollowPath, self.follow_path_action)
         self.add_on_set_parameters_callback(self._on_parameters_changed)
 
         # Keep legacy timer_period declared for backward compatibility,
-        # but run policy and MPC loops on dedicated timers.
+        # but run policy and planner/service loops on dedicated timers.
         self.create_timer(self.policy_period, self._policy_loop)
         self.create_timer(self.mpc_period, self._planner_loop)
 
         self.get_logger().info("RL OCP policy bridge started")
         self.get_logger().info(f"Model: {self.model_path}")
         self.get_logger().info(f"Service: {self.planner_service}")
+        self.get_logger().info(f"FollowPath action: {self.follow_path_action}")
         self.get_logger().info(
             f"Loop rates: RL={1.0 / self.policy_period:.2f} Hz, service={1.0 / self.mpc_period:.2f} Hz"
         )
         self.get_logger().info(f"Goal source mode: {self.goal_source_mode}")
-        self.get_logger().info("Pipeline mode: cascaded (runtime-selectable goal source)")
-        self.get_logger().info("Sync MPC requests to policy updates: True")
+        self.get_logger().info("Pipeline mode: RL/RViz local goal -> A* service -> MPPI FollowPath")
         self.get_logger().info(f"Auto relax constraints: {self.auto_relax_constraints}")
         self.get_logger().info(f"Action visualization: {self.visualize_actions} ({self.action_marker_topic})")
         self.get_logger().info(
@@ -336,10 +343,6 @@ class RlOcpPolicyBridge(Node):
             elif p.name == "planner_hard_half_height":
                 self.planner_hard_half_height = float(p.value)
                 update_effective_bounds = True
-            elif p.name == "mpc_horizon_steps":
-                self.mpc_horizon_steps = max(1, int(p.value))
-            elif p.name == "mpc_stability_warn_threshold":
-                self.mpc_stability_warn_threshold = max(0.0, float(p.value))
             elif p.name == "map_geometry_obstacle_threshold":
                 self.map_geometry_obstacle_threshold = int(p.value)
             elif p.name == "map_geometry_poly_epsilon_ratio":
@@ -438,6 +441,84 @@ class RlOcpPolicyBridge(Node):
             return None
 
         return float(sub_goal[0]), float(sub_goal[1])
+
+    def _publish_local_goal(self, sub_goal: Tuple[float, float]) -> None:
+        msg = PoseStamped()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.frame_id = self.map_frame
+        msg.pose.position.x = float(sub_goal[0])
+        msg.pose.position.y = float(sub_goal[1])
+        msg.pose.orientation.w = 1.0
+        self.local_goal_pub.publish(msg)
+
+    def _build_path_msg(self, path_points, frame_id: str) -> Path:
+        path_msg = Path()
+        path_msg.header.stamp = self.get_clock().now().to_msg()
+        path_msg.header.frame_id = frame_id if frame_id else self.map_frame
+        for pt in path_points:
+            pose = PoseStamped()
+            pose.header = path_msg.header
+            pose.pose.position.x = float(pt.x)
+            pose.pose.position.y = float(pt.y)
+            pose.pose.orientation.w = 1.0
+            path_msg.poses.append(pose)
+        return path_msg
+
+    def _cancel_follow_path_goal(self) -> None:
+        if self.active_follow_path_goal_handle is None:
+            return
+        if self.follow_path_cancel_future is not None and not self.follow_path_cancel_future.done():
+            return
+        self.follow_path_cancel_future = self.active_follow_path_goal_handle.cancel_goal_async()
+
+    def _send_follow_path_goal(self, path_msg: Path) -> None:
+        if len(path_msg.poses) < 2:
+            self.get_logger().warn("Skip FollowPath goal because A* path has fewer than 2 poses")
+            return
+        if not self.follow_path_client.wait_for_server(timeout_sec=0.05):
+            self.get_logger().warn(f"FollowPath action {self.follow_path_action} not available")
+            return
+
+        goal_msg = FollowPath.Goal()
+        goal_msg.path = path_msg
+        goal_msg.controller_id = self.controller_id
+        goal_msg.goal_checker_id = self.goal_checker_id
+
+        if self.active_follow_path_goal_handle is not None:
+            self._cancel_follow_path_goal()
+
+        self.follow_path_goal_future = self.follow_path_client.send_goal_async(goal_msg)
+        self.follow_path_goal_future.add_done_callback(self._on_follow_path_goal_response)
+
+    def _on_follow_path_goal_response(self, future) -> None:
+        try:
+            goal_handle = future.result()
+        except Exception as exc:
+            self.get_logger().error(f"FollowPath goal send failed: {exc}")
+            return
+
+        if goal_handle is None or not goal_handle.accepted:
+            self.get_logger().warn("FollowPath goal was rejected by controller_server")
+            return
+
+        self.active_follow_path_goal_handle = goal_handle
+        self.follow_path_result_future = goal_handle.get_result_async()
+        self.follow_path_result_future.add_done_callback(self._on_follow_path_result)
+
+    def _on_follow_path_result(self, future) -> None:
+        try:
+            result = future.result()
+        except Exception as exc:
+            self.get_logger().error(f"FollowPath result failed: {exc}")
+            return
+
+        self.active_follow_path_goal_handle = None
+        if result is None:
+            return
+
+    @staticmethod
+    def _path_points_from_response(res) -> List[Tuple[float, float]]:
+        return [(float(pt.x), float(pt.y)) for pt in res.astar_path]
 
     @staticmethod
     def _yaw_from_quaternion(x: float, y: float, z: float, w: float) -> float:
@@ -1060,7 +1141,7 @@ class RlOcpPolicyBridge(Node):
                 "map_local_polygons_count": int(self.last_sent_map_polygons_count),
                 "planner_fail_streak": int(self.consecutive_planner_failures),
                 "policy_hz": float(1.0 / self.policy_period),
-                "mpc_hz": float(1.0 / self.mpc_period),
+                "planner_service_hz": float(1.0 / self.mpc_period),
                 "goal_source_mode": str(self.goal_source_mode),
                 "selected_sub_goal": list(selected_sub_goal) if selected_sub_goal is not None else None,
                 "cached_sub_goal": list(self.latest_sub_goal) if self.latest_sub_goal is not None else None,
@@ -1226,91 +1307,18 @@ class RlOcpPolicyBridge(Node):
         req.sub_goal.x = float(sub_goal[0])
         req.sub_goal.y = float(sub_goal[1])
 
+        self._publish_local_goal(sub_goal)
         self.last_wheel_speed = (v_left, v_right)
         self.last_request_for_viz = req
-        self.last_pose_for_viz = (px, py, yaw)
-        self.last_wheels_for_viz = (v_left, v_right)
 
         future = self.ocp_client.call_async(req)
         future.add_done_callback(self._on_planner_response)
         self.pending_future = future
 
-    def _predict_mpc_trajectory(
-        self,
-        start_pose: Tuple[float, float, float],
-        start_wheels: Tuple[float, float],
-        control_vars,
-    ) -> Tuple[List[Tuple[float, float]], Dict[str, float]]:
-        px, py, yaw = start_pose
-        vl, vr = start_wheels
-        dt = float(self.control_dt)
-        horizon_steps = max(1, int(self.mpc_horizon_steps))
-        received_steps = len(control_vars)
-
-        points: List[Tuple[float, float]] = [(float(px), float(py))]
-        # Force exactly horizon_steps predictions so RViz length reflects MPC horizon.
-        for i in range(horizon_steps):
-            if i < received_steps:
-                al = float(control_vars[i].al)
-                ar = float(control_vars[i].ar)
-            else:
-                # If solver returned fewer controls than expected, keep current wheel speed.
-                al = 0.0
-                ar = 0.0
-
-            vl += al * dt
-            vr += ar * dt
-            v = 0.5 * (vl + vr)
-            w = (vr - vl) / (2.0 * self.axle_half_width)
-
-            yaw += w * dt
-            px += v * math.cos(yaw) * dt
-            py += v * math.sin(yaw) * dt
-            points.append((float(px), float(py)))
-
-        debug = {
-            "expected_horizon_steps": float(horizon_steps),
-            "received_control_steps": float(received_steps),
-            "predicted_points": float(len(points)),
-            "horizon_coverage": float(min(received_steps, horizon_steps)) / float(horizon_steps),
-        }
-        return points, debug
-
-    @staticmethod
-    def _trajectory_length(points: List[Tuple[float, float]]) -> float:
-        if len(points) < 2:
-            return 0.0
-        length = 0.0
-        for i in range(1, len(points)):
-            dx = points[i][0] - points[i - 1][0]
-            dy = points[i][1] - points[i - 1][1]
-            length += math.hypot(dx, dy)
-        return float(length)
-
-    @staticmethod
-    def _trajectory_delta_rms(
-        current: List[Tuple[float, float]],
-        previous: Optional[List[Tuple[float, float]]],
-    ) -> float:
-        if previous is None:
-            return 0.0
-        n = min(len(current), len(previous))
-        if n <= 1:
-            return 0.0
-
-        acc = 0.0
-        # Skip index 0 because both trajectories start from the current robot pose.
-        for i in range(1, n):
-            dx = current[i][0] - previous[i][0]
-            dy = current[i][1] - previous[i][1]
-            acc += (dx * dx) + (dy * dy)
-        return float(math.sqrt(acc / float(n - 1)))
-
     def _publish_planner_scene_debug(
         self,
         req: OcpLocalPlann.Request,
-        predicted_traj: List[Tuple[float, float]],
-        mpc_debug: Dict[str, float],
+        astar_path: List[Tuple[float, float]],
     ) -> None:
         x_lim = min(self.effective_half_width, self.planner_x_limit)
         y_lim = min(self.effective_half_height, self.planner_y_limit)
@@ -1356,8 +1364,12 @@ class RlOcpPolicyBridge(Node):
                 }
                 for h in req.ob.human_states
             ],
-            "trajectory": [[float(px), float(py)] for px, py in predicted_traj],
-            "mpc_debug": mpc_debug,
+            "trajectory": [[float(px), float(py)] for px, py in astar_path],
+            "path_debug": {
+                "astar_points": int(len(astar_path)),
+                "goal_source_mode": str(self.goal_source_mode),
+                "tracking_controller": "nav2_mppi_controller::MPPIController",
+            },
         }
         msg = String()
         msg.data = json.dumps(payload)
@@ -1384,44 +1396,18 @@ class RlOcpPolicyBridge(Node):
                         int(self.consecutive_planner_failures),
                         int(len(self.map_geometry_walls)),
                         int(len(self.map_geometry_polygons)),
-                    )
+                )
                 )
 
-        if self.last_request_for_viz is not None and self.last_pose_for_viz is not None and self.last_wheels_for_viz is not None:
-            predicted_traj, mpc_debug = self._predict_mpc_trajectory(
-                self.last_pose_for_viz,
-                self.last_wheels_for_viz,
-                res.control_vars,
-            )
-            traj_len = self._trajectory_length(predicted_traj)
-            delta_rms = self._trajectory_delta_rms(predicted_traj, self.prev_predicted_traj)
-            self.last_stability_delta_rms = float(delta_rms)
-            self.prev_predicted_traj = list(predicted_traj)
+        astar_path = self._path_points_from_response(res)
+        self.last_astar_path_for_viz = list(astar_path)
+        if self.last_request_for_viz is not None:
+            self._publish_planner_scene_debug(self.last_request_for_viz, astar_path)
 
-            is_stable = bool(delta_rms <= self.mpc_stability_warn_threshold)
-            mpc_debug.update(
-                {
-                    "trajectory_length_m": float(traj_len),
-                    "stability_delta_rms_m": float(delta_rms),
-                    "stability_warn_threshold_m": float(self.mpc_stability_warn_threshold),
-                    "stable": 1.0 if is_stable else 0.0,
-                }
-            )
-
-            # In the async reference-only architecture, planner can intentionally
-            # return an empty control sequence. Warn only when a non-empty sequence
-            # is returned but still shorter than expected.
-            if int(mpc_debug["received_control_steps"]) > 0 and mpc_debug["horizon_coverage"] < 0.99:
-                self.get_logger().warn(
-                    f"MPC returned {int(mpc_debug['received_control_steps'])}/{int(mpc_debug['expected_horizon_steps'])} control steps"
-                )
-
-            if not is_stable:
-                self.get_logger().warn(
-                    f"MPC trajectory jitter detected (delta_rms={delta_rms:.3f} m, threshold={self.mpc_stability_warn_threshold:.3f} m)"
-                )
-
-            self._publish_planner_scene_debug(self.last_request_for_viz, predicted_traj, mpc_debug)
+        if res.success:
+            path_msg = self._build_path_msg(res.astar_path, self.map_frame)
+            self.local_path_pub.publish(path_msg)
+            self._send_follow_path_goal(path_msg)
 
     def _policy_loop(self) -> None:
         if self.goal_source_mode == self._GOAL_SOURCE_RL and self.worker is None:
@@ -1460,8 +1446,8 @@ class RlOcpPolicyBridge(Node):
         if math.hypot(gx - px, gy - py) < self.goal_tolerance:
             self.goal_reached = True
             self.latest_sub_goal = None
-            self.prev_predicted_traj = None
-            self.last_stability_delta_rms = 0.0
+            self.last_astar_path_for_viz = []
+            self._cancel_follow_path_goal()
             self._publish_action_visualization(None)
             return
 
