@@ -89,8 +89,6 @@ Visualization Manager:
           Value: true
         chassis:
           Value: true
-        imu_link:
-          Value: true
         laser:
           Value: true
         layer_middle:
@@ -165,8 +163,6 @@ Visualization Manager:
                   {}
                 right_wheel:
                   {}
-              imu_link:
-                {}
       Update Interval: 0
       Value: true
     - Alpha: 1
@@ -350,7 +346,7 @@ Visualization Manager:
       Use rainbow: true
       Value: true
     - Class: rviz_default_plugins/Image
-      Enabled: false
+      Enabled: true
       Max Value: 1
       Median window: 5
       Min Value: 0
@@ -366,7 +362,7 @@ Visualization Manager:
     - Alpha: 1
       Class: nav2_rviz_plugins/ParticleCloud
       Color: 255; 25; 0
-      Enabled: false
+      Enabled: true
       Max Arrow Length: 0.30000001192092896
       Min Arrow Length: 0.019999999552965164
       Name: ParticleCloud
@@ -395,7 +391,7 @@ Visualization Manager:
       Class: rviz_default_plugins/Map
       Color Scheme: map
       Draw Behind: false
-      Enabled: false
+      Enabled: true
       Name: Map
       Topic:
         Depth: 5
@@ -444,7 +440,7 @@ Visualization Manager:
       Enabled: true
       Name: MarkerArray
       Namespaces:
-        planner_scene: true
+        {}
       Topic:
         Depth: 5
         Durability Policy: Volatile
@@ -474,7 +470,7 @@ Visualization Manager:
       Use Timestamp: false
       Value: true
     - Class: rviz_default_plugins/MarkerArray
-      Enabled: false
+      Enabled: true
       Name: MarkerArray
       Namespaces:
         {}

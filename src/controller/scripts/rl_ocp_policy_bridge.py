@@ -11,7 +11,7 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import rclpy
 from rclpy.action import ActionClient
-from interfaces.msg import ObstacleState, WallState, PolyState, HumanState
+from interfaces.msg import ObstacleState, WallState, PolyState, HumanState, HumanArray
 from interfaces.msg import JointState as InterfaceJointState
 from interfaces.srv import OcpLocalPlann
 from geometry_msgs.msg import PoseStamped
@@ -98,6 +98,7 @@ class RlOcpPolicyBridge(Node):
         self.declare_parameter("scan_topic", "/scan")
         self.declare_parameter("goal_topic", "/goal_pose")
         self.declare_parameter("map_topic", "/map")
+        self.declare_parameter("human_topic", "/tracking/humans")
         self.declare_parameter("map_frame", "map")
         self.declare_parameter("planner_service", "/ocp_plann")
         self.declare_parameter("follow_path_action", "/follow_path")
@@ -193,6 +194,7 @@ class RlOcpPolicyBridge(Node):
         self.scan_topic = self.get_parameter("scan_topic").get_parameter_value().string_value
         self.goal_topic = self.get_parameter("goal_topic").get_parameter_value().string_value
         self.map_topic = self.get_parameter("map_topic").get_parameter_value().string_value
+        self.human_topic = self.get_parameter("human_topic").get_parameter_value().string_value
         self.map_frame = self.get_parameter("map_frame").get_parameter_value().string_value
         self.planner_service = self.get_parameter("planner_service").get_parameter_value().string_value
         self.follow_path_action = self.get_parameter("follow_path_action").get_parameter_value().string_value
@@ -214,6 +216,7 @@ class RlOcpPolicyBridge(Node):
         self.current_goal: Optional[Tuple[float, float]] = None
         self.current_goal_frame: str = ""
         self.latest_scan: Optional[LaserScan] = None
+        self.latest_humans: Optional[HumanArray] = None
         self.map_bounds: Optional[Tuple[float, float, float, float]] = None
         self.map_resolution: Optional[float] = None
         self.map_width: int = 0
@@ -276,6 +279,7 @@ class RlOcpPolicyBridge(Node):
         self.create_subscription(Odometry, self.odom_topic, self._odom_callback, 10)
         self.create_subscription(LaserScan, self.scan_topic, self._scan_callback, 10)
         self.create_subscription(PoseStamped, self.goal_topic, self._goal_callback, 10)
+        self.create_subscription(HumanArray, self.human_topic, self._human_callback, 10)
         map_qos = QoSProfile(
             history=HistoryPolicy.KEEP_LAST,
             depth=1,
@@ -709,6 +713,9 @@ class RlOcpPolicyBridge(Node):
         self.current_goal = (msg.pose.position.x, msg.pose.position.y)
         self.current_goal_frame = msg.header.frame_id if msg.header.frame_id else self.current_goal_frame
 
+    def _human_callback(self, msg: HumanArray) -> None:
+        self.latest_humans = msg
+
     def _map_callback(self, msg: OccupancyGrid) -> None:
         if msg.header.frame_id:
             self.map_frame = msg.header.frame_id
@@ -979,6 +986,57 @@ class RlOcpPolicyBridge(Node):
     def _point_to_map_frame(self, x: float, y: float) -> Optional[Tuple[float, float]]:
         source_frame = self.pose_frame if self.pose_frame else self.map_frame
         return self._transform_point_2d(x, y, source_frame, self.map_frame)
+
+    def _process_human_msgs(self) -> List[HumanState]:
+        if self.latest_humans is None or not self.latest_humans.humans:
+            return []
+
+        source_frame = self.latest_humans.header.frame_id if self.latest_humans.header.frame_id else self.map_frame
+        humans_map: List[HumanState] = []
+
+        tf_yaw = 0.0
+        if source_frame != self.map_frame:
+            try:
+                tf_msg = self.tf_buffer.lookup_transform(
+                    self.map_frame,
+                    source_frame,
+                    Time(),
+                    timeout=Duration(seconds=0.05),
+                )
+            except TransformException as exc:
+                self._throttled_log(
+                    "_last_human_tf_warn_ns",
+                    2.0,
+                    "[human_tracking] waiting TF %s -> %s: %s"
+                    % (str(source_frame), str(self.map_frame), str(exc)),
+                )
+                return []
+
+            r = tf_msg.transform.rotation
+            tf_yaw = self._yaw_from_quaternion(r.x, r.y, r.z, r.w)
+
+        for src_human in self.latest_humans.humans:
+            map_xy = self._transform_point_2d(src_human.px, src_human.py, source_frame, self.map_frame)
+            if map_xy is None:
+                continue
+
+            cos_yaw = math.cos(tf_yaw)
+            sin_yaw = math.sin(tf_yaw)
+            vx_map = float(src_human.vx) * cos_yaw - float(src_human.vy) * sin_yaw
+            vy_map = float(src_human.vx) * sin_yaw + float(src_human.vy) * cos_yaw
+
+            human_state = HumanState()
+            human_state.id = int(src_human.id)
+            human_state.px = float(map_xy[0])
+            human_state.py = float(map_xy[1])
+            human_state.vx = float(vx_map)
+            human_state.vy = float(vy_map)
+            human_state.radius = float(src_human.radius)
+            if hasattr(src_human, "trajectory"):
+                human_state.trajectory = src_human.trajectory
+            humans_map.append(human_state)
+
+        return humans_map
 
     def _current_pose_in_map_frame(self) -> Optional[Tuple[float, float]]:
         if self.current_pose is None:
@@ -1456,7 +1514,7 @@ class RlOcpPolicyBridge(Node):
         poly_states, walls = self._get_map_geometry_msgs()
         req.ob.walls = walls
         req.ob.poly_states = poly_states
-        req.ob.human_states = self._build_human_fallback_msgs(req.ob.obstacle_states) if self.enforce_scene_entities else []
+        req.ob.human_states = self._process_human_msgs() if self.enforce_scene_entities else []
         req.ob.header.stamp = self.get_clock().now().to_msg()
         req.ob.header.frame_id = "map"
 

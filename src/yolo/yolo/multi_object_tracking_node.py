@@ -22,7 +22,6 @@ import message_filters
 from visualization_msgs.msg import Marker, MarkerArray
 
 from sensor_msgs.msg import Image, CameraInfo, CompressedImage
-from std_msgs.msg import Header
 from geometry_msgs.msg import PoseStamped, Point
 from interfaces.msg import HumanState, HumanArray
 from ament_index_python.packages import get_package_share_directory
@@ -44,7 +43,7 @@ class MultiObjectTrackingNode(Node):
                          allow_undeclared_parameters=True,
                          automatically_declare_parameters_from_overrides=True)
 
-        self.human_pub = self.create_publisher(HumanArray, 'tracked_humans', 10)
+        self.human_pub = self.create_publisher(HumanArray, '/tracking/humans', 10)
         # Publisher cho RViz Debug
         self.marker_pub = self.create_publisher(MarkerArray, 'human_markers', 10)
 
@@ -125,8 +124,6 @@ class MultiObjectTrackingNode(Node):
         # QoS profiles from config
         qos_pub = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT, history=HistoryPolicy.KEEP_LAST, depth=pub_depth)
         qos_sub = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT, history=HistoryPolicy.KEEP_LAST, depth=sub_depth)
-        
-        self._pub_humans = self.create_publisher(HumanArray, '/tracking/humans', qos_profile=qos_pub)
         
         # Publisher cho debug - Sử dụng CompressedImage để nhẹ nhất có thể
         self._pub_debug_img = self.create_publisher(
@@ -260,40 +257,6 @@ class MultiObjectTrackingNode(Node):
         # 7. DỌN DẸP BỘ NHỚ VÀ DEBUG IMAGE
         self._publish_debug_visual(frame, tracks_np)
         self._cleanup_memory(ts_now)
-
-    def _publish_data(self, tracks_np, h, w, ts_now):
-        # Tạo message mảng người động
-        human_msg = HumanArray()
-        human_msg.header = Header(stamp=self.get_clock().now().to_msg(), frame_id="camera_link")
-
-        for i, track in enumerate(tracks_np):
-            tid = int(track[4])
-            bbox = track[:4]
-            self.track_last_seen_time[tid] = ts_now
-
-            depth = self._get_depth(bbox, h, w)
-            if depth is None: continue
-
-            # Tọa độ tương đối so với camera (X hướng tới, Y hướng trái)
-            px = float(depth)
-            py = float(-(( (bbox[0]+bbox[2])/2 - self.cx ) * depth / self.fx))
-            radius = float(abs(bbox[2] - bbox[0]) * depth / self.fx / 2.0 * 0.85)
-
-            # Cập nhật EKF và lấy thẳng vx, vy
-            vx, vy = self._update_ekf_velocity(tid, px, py, ts_now)
-            
-            # Gói vào HumanState
-            human = HumanState()
-            human.px = px
-            human.py = py
-            human.vx = float(vx)
-            human.vy = float(vy)
-            human.radius = radius
-            
-            human_msg.humans.append(human)
-
-        # Bắn dữ liệu sang cho Controller
-        self._pub_humans.publish(human_msg)
 
     def _get_depth(self, bbox, h, w):
         x1, y1, x2, y2 = map(int, bbox)
@@ -475,4 +438,3 @@ def main(args=None):
 
 if __name__ == '__main__':
     main()
-
