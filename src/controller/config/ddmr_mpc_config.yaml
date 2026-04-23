@@ -22,8 +22,8 @@ opt_planner:
     cost_weights.w_r_e: 1.0
 
     # Runtime constraints
-    constraints.max_linear_vel: 1.0
-    constraints.max_angular_vel: 1.0
+    constraints.max_linear_vel: 0.3
+    constraints.max_angular_vel: 0.3
     constraints.max_linear_acc: 1.0
     constraints.max_angular_acc: 1.0
 
@@ -41,10 +41,11 @@ opt_planner:
     # - astar_subgoal: build A* path from robot pose to RL local goal
     # - direct_goal_xref: debug mode only
     planner.reference_mode: astar_subgoal
-    planner.debug_xref_v_max: 0.6
+    planner.debug_xref_v_max: 0.3
     planner.debug_xref_v_min: 0.05
     planner.debug_xref_slowdown_distance: 1.5
     planner.debug_xref_kp_dist: 0.8
+    planner.goal_stop_distance: 0.18
 
 rl_ocp_policy_bridge:
   ros__parameters:
@@ -62,8 +63,8 @@ rl_ocp_policy_bridge:
     timer_period: 0.1
     policy_period: 0.1
     mpc_period: 0.1
-    # Treat goal as reached only when very close, to avoid premature stop.
-    goal_tolerance: 0.08
+    # Match Nav2 goal checker so bridge/planner/controller stop in the same zone.
+    goal_tolerance: 0.18
     # Keep wall/poly constraints always active unless explicitly enabled
     auto_relax_constraints: false
     # Include occupied cells from /map as static obstacles for RL mask/planner debug
