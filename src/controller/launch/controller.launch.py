@@ -1,9 +1,13 @@
+import os
+from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+# ĐÃ BỔ SUNG GroupAction ở dòng dưới:
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, GroupAction
+from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
-from launch_ros.actions import Node
+# ĐÃ BỔ SUNG SetParameter, SetRemap ở dòng dưới:
+from launch_ros.actions import Node, SetParameter, SetRemap
 from launch_ros.substitutions import FindPackageShare
-
 
 def generate_launch_description():
     use_sim_time = LaunchConfiguration("use_sim_time")
@@ -14,18 +18,11 @@ def generate_launch_description():
     config = LaunchConfiguration("config")
     model_path = LaunchConfiguration("model_path")
     policy_env_name = LaunchConfiguration("policy_env_name")
+    
+    # [GIỮ NGUYÊN] Các cấu hình phục vụ Visualization
     visualize_actions = LaunchConfiguration("visualize_actions")
     action_marker_topic = LaunchConfiguration("action_marker_topic")
     action_marker_frame = LaunchConfiguration("action_marker_frame")
-    publish_debug_joint_state = LaunchConfiguration("publish_debug_joint_state")
-    debug_joint_state_topic = LaunchConfiguration("debug_joint_state_topic")
-    publish_policy_debug_status = LaunchConfiguration("publish_policy_debug_status")
-    policy_debug_status_topic = LaunchConfiguration("policy_debug_status_topic")
-    planner_scene_marker_topic = LaunchConfiguration("planner_scene_marker_topic")
-    planner_scene_frame = LaunchConfiguration("planner_scene_frame")
-    visualize_local_costmap = LaunchConfiguration("visualize_local_costmap")
-    local_costmap_topic = LaunchConfiguration("local_costmap_topic")
-    astar_local_map_topic = LaunchConfiguration("astar_local_map_topic")
 
     use_sim_time_arg = DeclareLaunchArgument(
         "use_sim_time",
@@ -45,6 +42,7 @@ def generate_launch_description():
         description="Logging level: debug, info, warn, error, fatal",
     )
 
+    # File cấu hình chung cho hệ thống
     tuning_config_arg = DeclareLaunchArgument(
         "tuning_config",
         default_value=PathJoinSubstitution([
@@ -52,8 +50,22 @@ def generate_launch_description():
             "config",
             "ddmr_mpc_config.yaml",
         ]),
-        description="YAML file containing MPC and policy tuning parameters",
+        description="YAML file containing system tuning parameters",
     )
+    
+    # -------------------------------------------------------------
+    # FILE CẤU HÌNH NAV2
+    # -------------------------------------------------------------
+    mppi_params_file_arg = DeclareLaunchArgument(
+        "mppi_params_file",
+        default_value=PathJoinSubstitution([
+            FindPackageShare("controller"),
+            "config",
+            "mppi_params.yaml", 
+        ]),
+        description="YAML file containing Nav2 MPPI configuration",
+    )
+    mppi_params_file = LaunchConfiguration("mppi_params_file")
 
     halo_drl_dir_arg = DeclareLaunchArgument(
         "halo_drl_dir",
@@ -83,88 +95,33 @@ def generate_launch_description():
         description="Conda env name used by policy worker",
     )
 
-    visualize_actions_arg = DeclareLaunchArgument(
-        "visualize_actions",
-        default_value="true",
-        description="Publish action candidates and masks as RViz markers",
+    # -------------------------------------------------------------
+    # 1. GỌI NAV2 BRINGUP (CHỈ CHẠY CONTROLLER SERVER)
+    # -------------------------------------------------------------
+    nav2_bringup_dir = get_package_share_directory('nav2_bringup')
+    nav2_cmd = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(os.path.join(nav2_bringup_dir, 'launch', 'navigation_launch.py')),
+        launch_arguments={
+            'use_sim_time': use_sim_time,
+            'params_file': mppi_params_file,
+            'autostart': 'true'
+        }.items()
     )
 
-    action_marker_topic_arg = DeclareLaunchArgument(
-        "action_marker_topic",
-        default_value="/policy/action_markers",
-        description="MarkerArray topic for action visualization",
-    )
+    # BỌC NAV2 LẠI, ÉP DÙNG SIM TIME VÀ BẺ LÁI VẬN TỐC
+    # diff_drive_controller đang dùng Twist (use_stamped_vel: false),
+    # nên phải đẩy lệnh vào /diff_cont/cmd_vel_unstamped.
+    nav2_group = GroupAction([
+        # Ép mọi node trong group này dùng chung biến use_sim_time
+        SetParameter(name='use_sim_time', value=use_sim_time),
+        SetRemap(src='cmd_vel', dst='/diff_cont/cmd_vel_unstamped'),
+        SetRemap(src='cmd_vel_nav', dst='/diff_cont/cmd_vel_unstamped'),
+        nav2_cmd
+    ])
 
-    action_marker_frame_arg = DeclareLaunchArgument(
-        "action_marker_frame",
-        default_value="odom",
-        description="Frame id used for action visualization markers",
-    )
-
-    publish_debug_joint_state_arg = DeclareLaunchArgument(
-        "publish_debug_joint_state",
-        default_value="true",
-        description="Publish service request JointState for debugging",
-    )
-
-    debug_joint_state_topic_arg = DeclareLaunchArgument(
-        "debug_joint_state_topic",
-        default_value="/debug/joint_state_req",
-        description="Topic name for debug JointState messages",
-    )
-
-    publish_policy_debug_status_arg = DeclareLaunchArgument(
-        "publish_policy_debug_status",
-        default_value="true",
-        description="Publish compact policy status JSON for runtime verification",
-    )
-
-    policy_debug_status_topic_arg = DeclareLaunchArgument(
-        "policy_debug_status_topic",
-        default_value="/debug/policy_status",
-        description="Topic for policy status JSON debug messages",
-    )
-
-    planner_scene_marker_topic_arg = DeclareLaunchArgument(
-        "planner_scene_marker_topic",
-        default_value="/planner/debug_markers",
-        description="MarkerArray topic for planner scene visualization",
-    )
-
-    planner_scene_frame_arg = DeclareLaunchArgument(
-        "planner_scene_frame",
-        default_value="map",
-        description="Frame id for planner scene markers",
-    )
-
-    visualize_local_costmap_arg = DeclareLaunchArgument(
-        "visualize_local_costmap",
-        default_value="true",
-        description="Render local OccupancyGrid costmap as Marker cubes",
-    )
-
-    local_costmap_topic_arg = DeclareLaunchArgument(
-        "local_costmap_topic",
-        default_value="/a_star/local_costmap",
-        description="Local costmap OccupancyGrid topic consumed by RViz visualizer",
-    )
-
-    astar_local_map_topic_arg = DeclareLaunchArgument(
-        "astar_local_map_topic",
-        default_value="/map",
-        description="OccupancyGrid topic used as A* local-map overlay in RViz visualizer",
-    )
-
-    ampcc_node = Node(
-        package="controller",
-        executable="ampcc_node",
-        name="opt_planner",
-        output="screen",
-        parameters=[tuning_config, {"use_sim_time": use_sim_time}],
-        respawn=respawn,
-        arguments=["--ros-args", "--log-level", log_level],
-    )
-
+    # -------------------------------------------------------------
+    # 2. NODE PYTHON BRIDGE CỦA BẠN (MẠNG RL CAO CẤP)
+    # -------------------------------------------------------------
     rl_bridge_node = Node(
         package="controller",
         executable="rl_ocp_policy_bridge.py",
@@ -183,50 +140,9 @@ def generate_launch_description():
                 "goal_topic": "/goal_pose",
                 "map_topic": "/map",
                 "cmd_topic": "/diff_cont/cmd_vel",
-                "planner_service": "/ocp_plann",
+                "use_nav2_action": True, 
                 "planner_half_width": 5.8,
                 "planner_half_height": 9.8,
-                "auto_relax_constraints": False,
-                "visualize_actions": visualize_actions,
-                "action_marker_topic": action_marker_topic,
-                "action_marker_frame": action_marker_frame,
-                "publish_debug_joint_state": publish_debug_joint_state,
-                "debug_joint_state_topic": debug_joint_state_topic,
-                "publish_policy_debug_status": publish_policy_debug_status,
-                "policy_debug_status_topic": policy_debug_status_topic,
-                "planner_scene_marker_topic": planner_scene_marker_topic,
-                "planner_scene_frame": planner_scene_frame,
-            }
-        ],
-        respawn=respawn,
-        arguments=["--ros-args", "--log-level", log_level],
-    )
-
-    rviz_visualizer_node = Node(
-        package="controller",
-        executable="ampcc_rviz_visualizer.py",
-        name="ampcc_rviz_visualizer",
-        output="screen",
-        parameters=[
-            {
-                "use_sim_time": use_sim_time,
-                "visualize_actions": visualize_actions,
-                "visualize_planner_scene": True,
-                "visualize_local_costmap": visualize_local_costmap,
-                "visualize_scan_obstacles": True,
-                "visualize_joint_state_geometry": True,
-                "visualize_astar_path": True,
-                "visualize_astar_local_map": True,
-                "action_marker_topic": action_marker_topic,
-                "action_marker_frame": action_marker_frame,
-                "planner_scene_marker_topic": planner_scene_marker_topic,
-                "planner_scene_frame": planner_scene_frame,
-                "map_topic": "/map",
-                "scan_topic": "/scan",
-                "joint_state_topic": debug_joint_state_topic,
-                "astar_path_topic": "/a_star_path",
-                "astar_local_map_topic": astar_local_map_topic,
-                "local_costmap_topic": local_costmap_topic,
             }
         ],
         respawn=respawn,
@@ -238,23 +154,13 @@ def generate_launch_description():
         respawn_arg,
         log_level_arg,
         tuning_config_arg,
+        mppi_params_file_arg,
         halo_drl_dir_arg,
         config_arg,
         model_path_arg,
         policy_env_name_arg,
-        visualize_actions_arg,
-        action_marker_topic_arg,
-        action_marker_frame_arg,
-        publish_debug_joint_state_arg,
-        debug_joint_state_topic_arg,
-        publish_policy_debug_status_arg,
-        policy_debug_status_topic_arg,
-        planner_scene_marker_topic_arg,
-        planner_scene_frame_arg,
-        visualize_local_costmap_arg,
-        local_costmap_topic_arg,
-        astar_local_map_topic_arg,
-        ampcc_node,
-        rl_bridge_node,
-        rviz_visualizer_node,
+        
+        # CHỈ GỌI nav2_group (đã chứa sẵn nav2_cmd bên trong rồi)
+        nav2_group,
+        # rl_bridge_node,
     ])
