@@ -5,6 +5,7 @@ import os
 import shlex
 import subprocess
 import sys
+import threading
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
@@ -248,6 +249,19 @@ class RlOcpPolicyBridge(Node):
         self.latest_sub_goal_seq = 0
         self.last_requested_sub_goal_seq = -1
         self.worker: Optional[subprocess.Popen] = None
+        self.worker_stop_event = threading.Event()
+        self.worker_state_lock = threading.Lock()
+        self.worker_request_cond = threading.Condition(self.worker_state_lock)
+        self.policy_worker_thread: Optional[threading.Thread] = None
+        self.policy_worker_stderr_thread: Optional[threading.Thread] = None
+        self.pending_policy_request: Optional[dict] = None
+        self.pending_policy_request_seq = 0
+        self.latest_policy_result: Optional[Tuple[float, float]] = None
+        self.latest_policy_result_seq = -1
+        self.last_applied_policy_result_seq = -1
+        self.policy_worker_busy = False
+        self.policy_worker_ready = False
+        self.policy_worker_last_error = ""
         self.last_request_for_viz: Optional[OcpLocalPlann.Request] = None
         self.consecutive_planner_failures = 0
         self.success_streak = 0
@@ -427,14 +441,79 @@ class RlOcpPolicyBridge(Node):
             text=True,
             bufsize=1,
         )
+        self.policy_worker_thread = threading.Thread(
+            target=self._policy_worker_loop,
+            name="rl_policy_worker_loop",
+            daemon=True,
+        )
+        self.policy_worker_thread.start()
+        self.policy_worker_stderr_thread = threading.Thread(
+            target=self._policy_worker_stderr_loop,
+            name="rl_policy_worker_stderr",
+            daemon=True,
+        )
+        self.policy_worker_stderr_thread.start()
+
+    def _policy_worker_stderr_loop(self) -> None:
+        if self.worker is None or self.worker.stderr is None:
+            return
+        for line in self.worker.stderr:
+            if self.worker_stop_event.is_set():
+                break
+            msg = line.strip()
+            if not msg:
+                continue
+            with self.worker_state_lock:
+                self.policy_worker_last_error = msg
+
+    def _submit_policy_request(self, subgoal_req: dict) -> None:
+        with self.worker_request_cond:
+            self.pending_policy_request_seq += 1
+            self.pending_policy_request = {
+                "seq": int(self.pending_policy_request_seq),
+                "payload": subgoal_req,
+            }
+            self.worker_request_cond.notify()
+
+    def _take_latest_policy_result(self) -> Optional[Tuple[Tuple[float, float], int]]:
+        with self.worker_state_lock:
+            if self.latest_policy_result is None:
+                return None
+            if self.latest_policy_result_seq <= self.last_applied_policy_result_seq:
+                return None
+            self.last_applied_policy_result_seq = int(self.latest_policy_result_seq)
+            return self.latest_policy_result, int(self.latest_policy_result_seq)
+
+    def _policy_worker_loop(self) -> None:
+        while not self.worker_stop_event.is_set():
+            request = None
+            with self.worker_request_cond:
+                while self.pending_policy_request is None and not self.worker_stop_event.is_set():
+                    self.worker_request_cond.wait(timeout=0.1)
+                if self.worker_stop_event.is_set():
+                    return
+                request = self.pending_policy_request
+                self.pending_policy_request = None
+                self.policy_worker_busy = True
+
+            if request is None:
+                continue
+
+            sub_goal = self._query_policy_worker(request["payload"])
+
+            with self.worker_state_lock:
+                self.policy_worker_busy = False
+                if sub_goal is None:
+                    continue
+                self.policy_worker_ready = True
+                self.latest_policy_result = (float(sub_goal[0]), float(sub_goal[1]))
+                self.latest_policy_result_seq = int(request["seq"])
 
     def _query_policy_worker(self, subgoal_req: dict) -> Optional[Tuple[float, float]]:
         if self.worker is None:
             return None
         if self.worker.poll() is not None:
-            err = ""
-            if self.worker.stderr is not None:
-                err = self.worker.stderr.read().strip()
+            err = self.policy_worker_last_error
             self.get_logger().error(f"Policy worker exited unexpectedly: {err}")
             return None
 
@@ -1307,7 +1386,7 @@ class RlOcpPolicyBridge(Node):
         v_right = v + self.axle_half_width * w
         return v_left, v_right
 
-    def _get_sub_goal_from_policy(self) -> Optional[Tuple[float, float]]:
+    def _build_policy_worker_request(self) -> Optional[dict]:
         if self.current_pose is None or self.current_twist is None or self.current_goal is None:
             return None
 
@@ -1324,7 +1403,7 @@ class RlOcpPolicyBridge(Node):
             return None
         v_left, v_right = wheel_speeds
 
-        worker_req = {
+        return {
             "px": px,
             "py": py,
             "yaw": yaw,
@@ -1335,7 +1414,6 @@ class RlOcpPolicyBridge(Node):
             "obstacles": self._scan_to_obstacle_tuples(),
             "walls": [],
         }
-        return self._query_policy_worker(worker_req)
 
     def _send_planner_request(self, sub_goal: Tuple[float, float]) -> None:
         if self.current_pose is None or self.current_twist is None or self.current_goal is None:
@@ -1543,10 +1621,22 @@ class RlOcpPolicyBridge(Node):
             return
 
         try:
-            sub_goal = self._get_sub_goal_from_policy()
-            if sub_goal is None:
+            worker_req = self._build_policy_worker_request()
+            if worker_req is None:
                 self._publish_action_visualization(None)
                 return
+            self._submit_policy_request(worker_req)
+            latest_policy_result = self._take_latest_policy_result()
+            if latest_policy_result is None:
+                if self.latest_sub_goal is not None:
+                    self._publish_action_visualization(self.latest_sub_goal)
+                self._throttled_log(
+                    "_last_policy_worker_wait_result_log_ns",
+                    2.0,
+                    "[policy_loop] waiting non-blocking response from policy worker",
+                )
+                return
+            sub_goal, _ = latest_policy_result
             masked_sub_goal, mask_applied, snap_dist = self._apply_action_mask_to_sub_goal(sub_goal)
             self.last_mask_applied = bool(mask_applied)
             self.last_mask_snap_distance = float(snap_dist)
@@ -1620,9 +1710,6 @@ class RlOcpPolicyBridge(Node):
             )
             return
 
-        if self.last_requested_sub_goal_seq >= self.latest_sub_goal_seq:
-            return
-
         try:
             self._send_planner_request(self.latest_sub_goal)
             self.last_requested_sub_goal_seq = self.latest_sub_goal_seq
@@ -1638,6 +1725,9 @@ def main(args=None):
     except KeyboardInterrupt:
         pass
     finally:
+        node.worker_stop_event.set()
+        with node.worker_request_cond:
+            node.worker_request_cond.notify_all()
         if node.worker is not None and node.worker.poll() is None:
             node.worker.terminate()
             try:

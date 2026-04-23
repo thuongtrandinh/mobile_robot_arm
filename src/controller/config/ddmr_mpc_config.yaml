@@ -65,11 +65,14 @@ rl_ocp_policy_bridge:
     mpc_period: 0.1
     # Match Nav2 goal checker so bridge/planner/controller stop in the same zone.
     goal_tolerance: 0.18
+    robot_radius: 0.25
+    obstacle_radius: 0.25
+    action_mask_clearance: 0.10
     # Keep wall/poly constraints always active unless explicitly enabled
     auto_relax_constraints: false
     # Include occupied cells from /map as static obstacles for RL mask/planner debug
     use_map_static_obstacles: true
-    map_static_obstacle_radius: 0.2
+    map_static_obstacle_radius: 0.25
     map_static_sample_step_m: 0.3
     map_static_obstacle_limit: 40
     # Always populate JointState with walls/poly/obstacles/humans fallback
@@ -78,4 +81,4 @@ rl_ocp_policy_bridge:
     map_geometry_boundary_area_ratio: 1.0 # Ép nó không nhận diện tường
     map_geometry_wall_linearity_ratio: 100.0 # Ép nó không nhận diện tường
     human_fallback_limit: 20
-    human_fallback_radius: 0.25
+    human_fallback_radius: 0.30
