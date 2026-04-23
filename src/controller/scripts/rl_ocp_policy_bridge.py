@@ -10,12 +10,11 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import rclpy
+from rclpy.action import ActionClient
 from interfaces.msg import ObstacleState, WallState, PolyState, HumanState
 from interfaces.msg import JointState as InterfaceJointState
 from interfaces.srv import OcpLocalPlann
 from geometry_msgs.msg import PoseStamped
-from nav2_msgs.action import FollowPath
-from nav_msgs.msg import OccupancyGrid, Odometry, Path
 from nav2_msgs.action import FollowPath
 from nav_msgs.msg import OccupancyGrid, Odometry, Path
 from rcl_interfaces.msg import SetParametersResult
@@ -105,8 +104,6 @@ class RlOcpPolicyBridge(Node):
         self.declare_parameter("goal_checker_id", "general_goal_checker")
         self.declare_parameter("local_goal_topic", "/rl/local_goal")
         self.declare_parameter("local_path_topic", "/rl/local_path")
-        self.declare_parameter("follow_path_replan_min_interval_sec", 0.35)
-        self.declare_parameter("follow_path_replan_path_delta", 0.20)
 
         self.policy_env_name = self.get_parameter("policy_env_name").get_parameter_value().string_value
         self.halo_drl_dir = self.get_parameter("halo_drl_dir").get_parameter_value().string_value
@@ -201,14 +198,6 @@ class RlOcpPolicyBridge(Node):
         self.goal_checker_id = self.get_parameter("goal_checker_id").get_parameter_value().string_value
         self.local_goal_topic = self.get_parameter("local_goal_topic").get_parameter_value().string_value
         self.local_path_topic = self.get_parameter("local_path_topic").get_parameter_value().string_value
-        self.follow_path_replan_min_interval_sec = max(
-            0.0,
-            self.get_parameter("follow_path_replan_min_interval_sec").get_parameter_value().double_value,
-        )
-        self.follow_path_replan_path_delta = max(
-            0.01,
-            self.get_parameter("follow_path_replan_path_delta").get_parameter_value().double_value,
-        )
 
         self.current_pose: Optional[Tuple[float, float, float]] = None
         self.current_twist: Optional[Tuple[float, float]] = None
@@ -243,9 +232,6 @@ class RlOcpPolicyBridge(Node):
         self.follow_path_result_future = None
         self.follow_path_cancel_future = None
         self.active_follow_path_goal_handle = None
-        self.pending_follow_path_msg: Optional[Path] = None
-        self.last_sent_follow_path: Optional[Path] = None
-        self.last_follow_path_send_ns: int = 0
         self.last_wheel_speed: Optional[Tuple[float, float]] = None
         self.latest_sub_goal: Optional[Tuple[float, float]] = None
         self.latest_sub_goal_seq = 0
@@ -571,62 +557,6 @@ class RlOcpPolicyBridge(Node):
         if self.follow_path_cancel_future is not None and not self.follow_path_cancel_future.done():
             return
         self.follow_path_cancel_future = self.active_follow_path_goal_handle.cancel_goal_async()
-        self.follow_path_cancel_future.add_done_callback(self._on_follow_path_cancel_done)
-
-    def _path_distance(self, a: Path, b: Path) -> float:
-        if len(a.poses) == 0 or len(b.poses) == 0:
-            return float("inf")
-        count = min(len(a.poses), len(b.poses))
-        if count <= 0:
-            return float("inf")
-        stride = max(1, count // 20)
-        max_dist = 0.0
-        for i in range(0, count, stride):
-            pa = a.poses[i].pose.position
-            pb = b.poses[i].pose.position
-            dist = math.hypot(float(pa.x) - float(pb.x), float(pa.y) - float(pb.y))
-            max_dist = max(max_dist, dist)
-
-        a_end = a.poses[-1].pose.position
-        b_end = b.poses[-1].pose.position
-        end_dist = math.hypot(float(a_end.x) - float(b_end.x), float(a_end.y) - float(b_end.y))
-        return max(max_dist, end_dist)
-
-    def _should_replan_follow_path(self, path_msg: Path) -> bool:
-        if self.last_sent_follow_path is None:
-            return True
-        path_delta = self._path_distance(path_msg, self.last_sent_follow_path)
-        if path_delta < self.follow_path_replan_path_delta:
-            return False
-
-        now_ns = int(self.get_clock().now().nanoseconds)
-        elapsed = (now_ns - int(self.last_follow_path_send_ns)) / 1e9
-        return elapsed >= self.follow_path_replan_min_interval_sec
-
-    def _send_new_follow_path_goal(self, goal_msg: FollowPath.Goal) -> None:
-        sent_path = goal_msg.path
-        self.follow_path_goal_future = self.follow_path_client.send_goal_async(goal_msg)
-        self.follow_path_goal_future.add_done_callback(
-            lambda future, path=sent_path: self._on_follow_path_goal_response(future, path)
-        )
-
-    def _on_follow_path_cancel_done(self, future) -> None:
-        try:
-            _ = future.result()
-        except Exception as exc:
-            self.get_logger().warn(f"FollowPath cancel failed: {exc}")
-        finally:
-            self.follow_path_cancel_future = None
-            self.active_follow_path_goal_handle = None
-
-        if self.pending_follow_path_msg is None:
-            return
-        goal_msg = FollowPath.Goal()
-        goal_msg.path = self.pending_follow_path_msg
-        goal_msg.controller_id = self.controller_id
-        goal_msg.goal_checker_id = self.goal_checker_id
-        self.pending_follow_path_msg = None
-        self._send_new_follow_path_goal(goal_msg)
 
     def _send_follow_path_goal(self, path_msg: Path) -> None:
         if len(path_msg.poses) < 2:
@@ -642,16 +572,12 @@ class RlOcpPolicyBridge(Node):
         goal_msg.goal_checker_id = self.goal_checker_id
 
         if self.active_follow_path_goal_handle is not None:
-            if not self._should_replan_follow_path(path_msg):
-                return
-            self.pending_follow_path_msg = path_msg
             self._cancel_follow_path_goal()
-            return
 
-        self._send_new_follow_path_goal(goal_msg)
+        self.follow_path_goal_future = self.follow_path_client.send_goal_async(goal_msg)
+        self.follow_path_goal_future.add_done_callback(self._on_follow_path_goal_response)
 
-    def _on_follow_path_goal_response(self, future, sent_path: Path) -> None:
-        self.follow_path_goal_future = None
+    def _on_follow_path_goal_response(self, future) -> None:
         try:
             goal_handle = future.result()
         except Exception as exc:
@@ -663,8 +589,6 @@ class RlOcpPolicyBridge(Node):
             return
 
         self.active_follow_path_goal_handle = goal_handle
-        self.last_sent_follow_path = sent_path
-        self.last_follow_path_send_ns = int(self.get_clock().now().nanoseconds)
         self.follow_path_result_future = goal_handle.get_result_async()
         self.follow_path_result_future.add_done_callback(self._on_follow_path_result)
 
