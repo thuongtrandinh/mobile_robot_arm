@@ -1,4 +1,5 @@
 #!/usr/bin/python3
+import cv2
 import json
 import math
 import os
@@ -11,7 +12,7 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import rclpy
 from rclpy.action import ActionClient
-from interfaces.msg import ObstacleState, WallState, PolyState, HumanState
+from interfaces.msg import ObstacleState, WallState, PolyState, HumanState, HumanArray, Point
 from interfaces.msg import JointState as InterfaceJointState
 from interfaces.srv import OcpLocalPlann
 from geometry_msgs.msg import PoseStamped
@@ -80,7 +81,7 @@ class RlOcpPolicyBridge(Node):
         self.declare_parameter("map_geometry_debug_period_sec", 2.0)
         self.declare_parameter("visualize_actions", True)
         self.declare_parameter("action_marker_topic", "/policy/action_markers")
-        self.declare_parameter("action_marker_frame", "odom")
+        self.declare_parameter("action_marker_frame", "base_link")
         self.declare_parameter("action_mask_clearance", 0.05)
         self.declare_parameter("publish_debug_joint_state", True)
         self.declare_parameter("debug_joint_state_topic", "/debug/joint_state_req")
@@ -270,6 +271,7 @@ class RlOcpPolicyBridge(Node):
         self.last_astar_path_for_viz: List[Tuple[float, float]] = []
         self.last_mask_applied = False
         self.last_mask_snap_distance = 0.0
+        self.cv2 = cv2
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
         self._start_policy_worker()
@@ -749,17 +751,72 @@ class RlOcpPolicyBridge(Node):
             self.map_static_circles = []
             return
 
-        # Grid-based circle sampling mode: disable contour/polygon/wall extraction entirely.
         self.map_geometry_polygons = []
         self.map_geometry_walls = []
-        self.map_static_circles = []
 
-        if self.map_geometry_debug_log:
-            self._throttled_log(
-                "_last_map_geometry_log_ns",
-                self.map_geometry_debug_period_sec,
-                "[map_geometry/grid] map updated; walls=0 polygons=0 (using OccupancyGrid sampling)",
+        try:
+            grid = np.array(msg.data, dtype=np.int8).reshape((self.map_height, self.map_width))
+            # OccupancyGrid rows are indexed from map origin upward, while OpenCV images
+            # expect row 0 at the top. Flip vertically before contour extraction so the
+            # resulting contour pixels map back correctly into ROS world coordinates.
+            img = np.zeros((self.map_height, self.map_width), dtype=np.uint8)
+            img[grid >= self.map_occupancy_threshold] = 255
+            img_for_cv = np.flipud(img)
+
+            contours, _ = self.cv2.findContours(
+                img_for_cv,
+                self.cv2.RETR_EXTERNAL,
+                self.cv2.CHAIN_APPROX_SIMPLE,
             )
+
+            walls: List[Tuple[float, float, float, float]] = []
+            polygons: List[List[Tuple[float, float]]] = []
+            map_area_px = float(max(1, self.map_width * self.map_height))
+
+            for contour in contours:
+                if contour is None or len(contour) < 2:
+                    continue
+
+                area_px = float(self.cv2.contourArea(contour))
+                if area_px < 5.0:
+                    continue
+
+                area_ratio = area_px / map_area_px
+                if self._is_map_boundary_contour(contour, area_ratio):
+                    continue
+
+                epsilon = max(
+                    1.0,
+                    float(self.map_geometry_poly_epsilon_ratio) * self.cv2.arcLength(contour, True),
+                )
+                approx = self.cv2.approxPolyDP(contour, epsilon, True)
+                if approx is None or len(approx) < 2:
+                    continue
+
+                pts: List[Tuple[float, float]] = []
+                for p in approx:
+                    wx, wy = self._pixel_to_meter(int(p[0][0]), int(p[0][1]))
+                    pts.append((float(wx), float(wy)))
+
+                if self._is_wall_like_geometry(pts):
+                    walls.extend(self._simplify_wall_loop(pts))
+                else:
+                    polygons.append(pts)
+
+            self.map_geometry_walls = walls
+            self.map_geometry_polygons = polygons
+
+            if self.map_geometry_debug_log:
+                self._throttled_log(
+                    "_last_map_geometry_log_ns",
+                    self.map_geometry_debug_period_sec,
+                    "[map_geometry/contours] map updated; walls=%d polygons=%d"
+                    % (int(len(self.map_geometry_walls)), int(len(self.map_geometry_polygons))),
+                )
+        except Exception as exc:
+            self.map_geometry_polygons = []
+            self.map_geometry_walls = []
+            self.get_logger().error(f"Loi trich xuat Wall/Polygon tu map: {exc}")
 
     def _pixel_to_meter(self, u: int, v: int) -> Tuple[float, float]:
         row_occ = self.map_height - 1 - v
@@ -935,9 +992,30 @@ class RlOcpPolicyBridge(Node):
         return walls
 
     def _get_map_geometry_msgs(self) -> Tuple[List[PolyState], List[WallState]]:
-        self.last_sent_map_polygons_count = 0
-        self.last_sent_map_walls_count = 0
-        return [], []
+        poly_msgs: List[PolyState] = []
+        for poly in self.map_geometry_polygons:
+            if len(poly) < 2:
+                continue
+            msg = PolyState()
+            for px, py in poly:
+                pt = Point()
+                pt.x = float(px)
+                pt.y = float(py)
+                msg.vertices.append(pt)
+            poly_msgs.append(msg)
+
+        wall_msgs: List[WallState] = []
+        for sx, sy, ex, ey in self.map_geometry_walls:
+            msg = WallState()
+            msg.sx = float(sx)
+            msg.sy = float(sy)
+            msg.ex = float(ex)
+            msg.ey = float(ey)
+            wall_msgs.append(msg)
+
+        self.last_sent_map_polygons_count = len(poly_msgs)
+        self.last_sent_map_walls_count = len(wall_msgs)
+        return poly_msgs, wall_msgs
 
     def _throttled_log(self, stamp_attr: str, period_sec: float, message: str) -> None:
         now_ns = int(self.get_clock().now().nanoseconds)
@@ -1326,21 +1404,30 @@ class RlOcpPolicyBridge(Node):
         masked_points: List[Tuple[float, float]] = []
         closest_selected: Optional[Tuple[float, float]] = None
         best_dist = float("inf")
+        current_pose_map = self._current_pose_with_yaw_in_map_frame()
+        marker_frame = str(self.action_marker_frame).strip()
+        use_local_marker_frame = marker_frame in ("base_link", "base_footprint")
 
         for lx, ly, wx, wy in candidates:
-            if self._is_action_masked(lx, ly, wx, wy, obstacles):
-                masked_points.append((float(wx), float(wy)))
+            cand_map = self._point_to_map_frame(wx, wy)
+            if cand_map is None:
+                continue
+
+            if use_local_marker_frame:
+                display_point = (float(lx), float(ly))
             else:
-                valid_points.append((float(wx), float(wy)))
+                display_point = (float(cand_map[0]), float(cand_map[1]))
+
+            if self._is_action_masked(lx, ly, wx, wy, obstacles):
+                masked_points.append(display_point)
+            else:
+                valid_points.append(display_point)
 
             if selected_sub_goal is not None:
-                cand_map = self._point_to_map_frame(wx, wy)
-                if cand_map is None:
-                    continue
                 dist = math.hypot(selected_sub_goal[0] - cand_map[0], selected_sub_goal[1] - cand_map[1])
                 if dist < best_dist:
                     best_dist = dist
-                    closest_selected = (wx, wy)
+                    closest_selected = display_point
 
         if self.publish_policy_debug_status:
             status = {
@@ -1371,9 +1458,19 @@ class RlOcpPolicyBridge(Node):
             self.policy_debug_status_pub.publish(msg)
 
         action_payload = {
-            "frame_id": self.action_marker_frame,
+            "frame_id": marker_frame,
             "goal_reached": bool(self.goal_reached),
-            "current_pose": [float(self.current_pose[0]), float(self.current_pose[1]), float(self.current_pose[2])],
+            "current_pose": [
+                0.0 if use_local_marker_frame else (
+                    float(current_pose_map[0]) if current_pose_map is not None else float(self.current_pose[0])
+                ),
+                0.0 if use_local_marker_frame else (
+                    float(current_pose_map[1]) if current_pose_map is not None else float(self.current_pose[1])
+                ),
+                0.0 if use_local_marker_frame else (
+                    float(current_pose_map[2]) if current_pose_map is not None else float(self.current_pose[2])
+                ),
+            ],
             "valid_points": valid_points,
             "masked_points": masked_points,
             "selected_point": [float(closest_selected[0]), float(closest_selected[1])] if closest_selected is not None else None,

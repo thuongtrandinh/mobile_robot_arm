@@ -32,7 +32,7 @@ class AmpccRvizVisualizer(Node):
         self.declare_parameter("visualize_astar_local_map", True)
 
         self.declare_parameter("action_marker_topic", "/policy/action_markers")
-        self.declare_parameter("action_marker_frame", "odom")
+        self.declare_parameter("action_marker_frame", "base_link")
         self.declare_parameter("planner_scene_marker_topic", "/planner/debug_markers")
         self.declare_parameter("planner_scene_frame", "map")
         self.declare_parameter("map_topic", "/map")

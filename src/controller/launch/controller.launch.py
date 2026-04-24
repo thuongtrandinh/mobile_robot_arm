@@ -65,7 +65,7 @@ def generate_launch_description():
 
     visualize_actions_arg = DeclareLaunchArgument("visualize_actions", default_value="true")
     action_marker_topic_arg = DeclareLaunchArgument("action_marker_topic", default_value="/policy/action_markers")
-    action_marker_frame_arg = DeclareLaunchArgument("action_marker_frame", default_value="odom")
+    action_marker_frame_arg = DeclareLaunchArgument("action_marker_frame", default_value="base_link")
     publish_debug_joint_state_arg = DeclareLaunchArgument("publish_debug_joint_state", default_value="true")
     debug_joint_state_topic_arg = DeclareLaunchArgument("debug_joint_state_topic", default_value="/debug/joint_state_req")
     publish_policy_debug_status_arg = DeclareLaunchArgument("publish_policy_debug_status", default_value="true")

@@ -12,6 +12,9 @@ def generate_launch_description():
     use_sim_time = LaunchConfiguration("use_sim_time")
     launch_rviz = LaunchConfiguration("launch_rviz")
     world = LaunchConfiguration("world")
+    x_pos = LaunchConfiguration("x_pos")
+    y_pos = LaunchConfiguration("y_pos")
+    yaw = LaunchConfiguration("yaw")
     localization_ekf_config = LaunchConfiguration("localization_ekf_config")
     localization_cfg = LaunchConfiguration("localization_cfg")
     localization_database_path = LaunchConfiguration("localization_database_path")
@@ -36,6 +39,21 @@ def generate_launch_description():
         "world",
         default_value="room_20x20.world",
         description="Gazebo world used when use_sim_time=true",
+    )
+    x_pos_arg = DeclareLaunchArgument(
+        "x_pos",
+        default_value="0.0",
+        description="Initial robot X pose in simulation",
+    )
+    y_pos_arg = DeclareLaunchArgument(
+        "y_pos",
+        default_value="0.0",
+        description="Initial robot Y pose in simulation",
+    )
+    yaw_arg = DeclareLaunchArgument(
+        "yaw",
+        default_value="0.0",
+        description="Initial robot yaw in simulation",
     )
     localization_ekf_config_arg = DeclareLaunchArgument(
         "localization_ekf_config",
@@ -128,6 +146,9 @@ def generate_launch_description():
         use_sim_time_arg,
         launch_rviz_arg,
         world_arg,
+        x_pos_arg,
+        y_pos_arg,
+        yaw_arg,
         localization_ekf_config_arg,
         localization_cfg_arg,
         localization_database_path_arg,
