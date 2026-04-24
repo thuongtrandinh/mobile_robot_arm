@@ -50,7 +50,7 @@ def generate_launch_description():
     
     use_camera_arg = DeclareLaunchArgument("use_camera", default_value="true")
     rgb_topic_arg = DeclareLaunchArgument("rgb_topic", default_value="/camera/color/image_raw")
-    depth_topic_arg = DeclareLaunchArgument("depth_topic", default_value="/camera/aligned_depth_to_color/image_raw")
+    depth_topic_arg = DeclareLaunchArgument("depth_topic", default_value="/camera/depth/image_rect_raw")
     camera_info_topic_arg = DeclareLaunchArgument("camera_info_topic", default_value="/camera/color/camera_info")
 
     ekf_filter_node = Node(

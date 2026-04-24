@@ -12,6 +12,9 @@ def generate_launch_description():
     use_sim_time = LaunchConfiguration("use_sim_time")
     launch_rviz = LaunchConfiguration("launch_rviz")
     world = LaunchConfiguration("world")
+    x_pos = LaunchConfiguration("x_pos")
+    y_pos = LaunchConfiguration("y_pos")
+    yaw = LaunchConfiguration("yaw")
     localization_cfg = LaunchConfiguration("localization_cfg")
     localization_database_path = LaunchConfiguration("localization_database_path")
     localization_namespace = LaunchConfiguration("localization_namespace")
@@ -35,6 +38,21 @@ def generate_launch_description():
         "world",
         default_value="room_20x20.world",
         description="Gazebo world used when use_sim_time=true",
+    )
+    x_pos_arg = DeclareLaunchArgument(
+        "x_pos",
+        default_value="0.0",
+        description="Initial robot x position in the map/Gazebo frame",
+    )
+    y_pos_arg = DeclareLaunchArgument(
+        "y_pos",
+        default_value="0.0",
+        description="Initial robot y position in the map/Gazebo frame",
+    )
+    yaw_arg = DeclareLaunchArgument(
+        "yaw",
+        default_value="0.0",
+        description="Initial robot yaw in radians in the map/Gazebo frame",
     )
     localization_cfg_arg = DeclareLaunchArgument(
         "localization_cfg",
@@ -84,6 +102,9 @@ def generate_launch_description():
             "use_sim_time": use_sim_time,
             "launch_rviz": launch_rviz,
             "world": world,
+            "x_pos": x_pos,
+            "y_pos": y_pos,
+            "yaw": yaw,
         }.items(),
     )
 
@@ -103,6 +124,10 @@ def generate_launch_description():
             "map_name": localization_map_name,
             "map_yaml": localization_map_yaml,
             "use_map_server": localization_use_map_server,
+            "initial_x": x_pos,
+            "initial_y": y_pos,
+            "initial_yaw": yaw,
+            "launch_rviz": "false",
         }.items(),
     )
 
@@ -110,6 +135,9 @@ def generate_launch_description():
         use_sim_time_arg,
         launch_rviz_arg,
         world_arg,
+        x_pos_arg,
+        y_pos_arg,
+        yaw_arg,
         localization_cfg_arg,
         localization_database_path_arg,
         localization_namespace_arg,

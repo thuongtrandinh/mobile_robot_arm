@@ -10,10 +10,37 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # ---------- ACADOS integration ----------
 option(CONTROLLER_ENABLE_ACADOS "Enable ACADOS generated solver integration" ON)
-set(ACADOS_INSTALL_DIR "/home/hdt/LVTN/acados")
+set(ACADOS_INSTALL_DIR "" CACHE PATH "Path to the ACADOS installation root")
 set(ACADOS_GENERATED_CODE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/c_generated_code")
 
 if(CONTROLLER_ENABLE_ACADOS)
+  if(NOT ACADOS_INSTALL_DIR)
+    set(_acados_candidates)
+    if(DEFINED ENV{ACADOS_SOURCE_DIR} AND IS_DIRECTORY "$ENV{ACADOS_SOURCE_DIR}")
+      list(APPEND _acados_candidates "$ENV{ACADOS_SOURCE_DIR}")
+    endif()
+    if(DEFINED ENV{ACADOS_INSTALL_DIR} AND IS_DIRECTORY "$ENV{ACADOS_INSTALL_DIR}")
+      list(APPEND _acados_candidates "$ENV{ACADOS_INSTALL_DIR}")
+    endif()
+    list(APPEND _acados_candidates
+      "/home/thuong/acados"
+      "/home/hdt/LVTN/acados"
+    )
+
+    foreach(_candidate IN LISTS _acados_candidates)
+      if(EXISTS "${_candidate}/include/acados_c/ocp_nlp_interface.h")
+        set(ACADOS_INSTALL_DIR "${_candidate}")
+        break()
+      endif()
+    endforeach()
+  endif()
+
+  if(NOT ACADOS_INSTALL_DIR OR NOT EXISTS "${ACADOS_INSTALL_DIR}/include/acados_c/ocp_nlp_interface.h")
+    message(FATAL_ERROR
+      "ACADOS is enabled but was not found. Set ACADOS_INSTALL_DIR or ACADOS_SOURCE_DIR "
+      "to the ACADOS root that contains include/acados_c/ocp_nlp_interface.h")
+  endif()
+
   set(ACADOS_INCLUDE_DIRS
     ${ACADOS_INSTALL_DIR}/include
     ${ACADOS_INSTALL_DIR}/include/acados
@@ -24,6 +51,7 @@ if(CONTROLLER_ENABLE_ACADOS)
   )
 
   include_directories(${ACADOS_INCLUDE_DIRS})
+  message(STATUS "Using ACADOS from: ${ACADOS_INSTALL_DIR}")
 
   if(EXISTS "${ACADOS_INSTALL_DIR}/lib")
     link_directories(${ACADOS_INSTALL_DIR}/lib)

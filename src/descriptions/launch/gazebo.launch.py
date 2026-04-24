@@ -4,7 +4,7 @@ import os
 import xacro
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument, OpaqueFunction, RegisterEventHandler
+from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument, OpaqueFunction, RegisterEventHandler, SetEnvironmentVariable
 from launch.event_handlers import OnProcessExit
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import PathJoinSubstitution
@@ -18,6 +18,7 @@ def launch_setup(context, *args, **kwargs):
     use_sim_time = use_sim_time_str.lower() == 'true'
     init_x = context.launch_configurations.get('x_pos', '0.0')
     init_y = context.launch_configurations.get('y_pos', '0.0')
+    init_yaw = context.launch_configurations.get('yaw', '0.0')
     init_height = context.launch_configurations.get('height', '0.1')
     world_name = context.launch_configurations.get('world', 'parallel_hallways.world')
     launch_rviz_str = context.launch_configurations.get('launch_rviz', 'true')
@@ -26,12 +27,16 @@ def launch_setup(context, *args, **kwargs):
     spawn_controllers = context.launch_configurations.get('spawn_controllers', 'true').lower() == 'true'
 
     pkg_path = get_package_share_directory(package_name)
+    realsense_desc_share = get_package_share_directory('realsense2_description')
     xacro_file = os.path.join(pkg_path, 'model', 'wheeled', 'urdf', 'mobile_robot.urdf.xacro')
 
-    # Set Gazebo resource paths
-    models_path = os.path.join(pkg_path, 'model')
-    os.environ['GZ_SIM_RESOURCE_PATH'] = models_path + ':' + os.environ.get('GZ_SIM_RESOURCE_PATH', '')
-    os.environ['IGN_GAZEBO_RESOURCE_PATH'] = models_path + ':' + os.environ.get('IGN_GAZEBO_RESOURCE_PATH', '')
+    # Gazebo must search in the parent of package share for model://<package_name>/...
+    resource_roots = [
+        pkg_path,
+        os.path.dirname(pkg_path),
+        os.path.dirname(realsense_desc_share),
+    ]
+    resource_path = ':'.join(resource_roots)
 
     # World file
     world_file = os.path.join(pkg_path, 'worlds', world_name)
@@ -78,7 +83,7 @@ def launch_setup(context, *args, **kwargs):
         executable='create',
         output='screen',
         arguments=['-topic', 'robot_description', '-entity', 'mobile_robot',
-                   '-x', init_x, '-y', init_y, '-z', init_height],
+                   '-x', init_x, '-y', init_y, '-z', init_height, '-Y', init_yaw],
         parameters=[{'use_sim_time': use_sim_time}],
     )
 
@@ -125,6 +130,19 @@ def launch_setup(context, *args, **kwargs):
         output='screen'
     )
 
+    aligned_depth_bridge = Node(
+        package='ros_gz_bridge',
+        executable='parameter_bridge',
+        arguments=[
+            '/camera/depth_image@sensor_msgs/msg/Image[ignition.msgs.Image',
+        ],
+        remappings=[
+            ('/camera/depth_image', '/camera/aligned_depth_to_color/image_raw'),
+        ],
+        parameters=[{'use_sim_time': use_sim_time}],
+        output='screen'
+    )
+
     # Gazebo launch
     gz_args = ('-r -s -v 4 ' if headless else '-r -v 4 ') + world_file
     gazebo_launch = IncludeLaunchDescription(
@@ -143,8 +161,17 @@ def launch_setup(context, *args, **kwargs):
 
     # Build launch list
     nodes_to_launch = [
+        SetEnvironmentVariable(
+            name='GZ_SIM_RESOURCE_PATH',
+            value=resource_path + ':' + os.environ.get('GZ_SIM_RESOURCE_PATH', ''),
+        ),
+        SetEnvironmentVariable(
+            name='IGN_GAZEBO_RESOURCE_PATH',
+            value=resource_path + ':' + os.environ.get('IGN_GAZEBO_RESOURCE_PATH', ''),
+        ),
         gazebo_launch,
         bridge,
+        aligned_depth_bridge,
         robot_state_publisher,
         spawn_entity,
     ]
@@ -179,6 +206,7 @@ def generate_launch_description():
         DeclareLaunchArgument('use_sim_time', default_value='true', description='Use simulation time'),
         DeclareLaunchArgument('x_pos', default_value='0.0', description='Initial X position'),
         DeclareLaunchArgument('y_pos', default_value='0.0', description='Initial Y position'),
+        DeclareLaunchArgument('yaw', default_value='0.0', description='Initial yaw angle in radians'),
         DeclareLaunchArgument('height', default_value='0.1', description='Initial spawn height'),
         DeclareLaunchArgument('launch_rviz', default_value='true', description='Launch RViz2'),
         DeclareLaunchArgument('headless', default_value='false', description='Run Gazebo in server-only mode'),

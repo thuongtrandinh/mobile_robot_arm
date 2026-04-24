@@ -52,8 +52,11 @@ controller_server:
       gamma: 0.015
       visualize: true
       TrajectoryVisualizer:
-        trajectory_step: 5
-        time_step: 3
+        # Publish a sparse sample of MPPI's rollout cloud for RViz.
+        # batch_size=2000, time_steps=56:
+        #   50/7 => about 40 trajectories x 8 points instead of 400 x 19.
+        trajectory_step: 50
+        time_step: 7
 
       # --- CÁC HÀM ĐÁNH GIÁ (CRITICS) BẮT BUỘC ---
       critics:
@@ -86,7 +89,7 @@ controller_server:
 
 planner_server:
   ros__parameters:
-    expected_planner_frequency: 20.0
+    expected_planner_frequency: 30.0
     use_sim_time: True
     planner_plugins: ["GridBased"]
     GridBased:

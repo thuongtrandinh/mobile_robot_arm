@@ -6,8 +6,15 @@ from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
 
 def generate_launch_description():
-    # Khai báo đường dẫn mặc định đến file map của bạn
-    default_map_path = '/home/hdt/LVTN/mobile_robot_arm/src/mapping/maps/room_20x20/room_20x20_map.yaml'
+    workspace_root = os.path.abspath(os.path.join(get_package_share_directory('localization'), '..', '..', '..', '..'))
+    default_map_path = os.path.join(
+        workspace_root,
+        'src',
+        'mapping',
+        'maps',
+        'room_20x20',
+        'room_20x20_map.yaml',
+    )
 
     # ===========================
     # Launch Arguments
