@@ -94,6 +94,9 @@ def generate_launch_description():
             "use_sim_time": use_sim_time,
             "launch_rviz": launch_rviz,
             "world": world,
+            "x_pos": x_pos,
+            "y_pos": y_pos,
+            "yaw": yaw,
         }.items(),
     )
 
@@ -114,6 +117,10 @@ def generate_launch_description():
             "map_name": localization_map_name,
             "map_yaml": localization_map_yaml,
             "use_map_server": localization_use_map_server,
+            "initial_x": x_pos,
+            "initial_y": y_pos,
+            "initial_yaw": yaw,
+            "launch_rviz": "false",
         }.items(),
     )
 
