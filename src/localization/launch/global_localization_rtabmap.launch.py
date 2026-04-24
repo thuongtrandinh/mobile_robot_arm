@@ -21,19 +21,21 @@ def generate_launch_description():
     # Path Database Map (B3)
     default_db_path = os.path.join(src_dir, "mapping", "maps", "B3", "rtabmap_map.db")
     
-    # Path EKF (Sử dụng file bạn đã copy vào localization/config)
-    ekf_config = os.path.join(localization_dir, "config", "ekf.yaml")
-    
     # Path RViz (Trỏ chính xác về thư mục descriptions trong src)
     rviz_config_path = os.path.join(src_dir, "descriptions", "config", "rviz2.rviz")
 
     # --- LAUNCH ARGUMENTS ---
     use_sim_time = LaunchConfiguration("use_sim_time")
+    ekf_config = LaunchConfiguration("ekf_config")
     cfg = LaunchConfiguration("cfg")
     database_path = LaunchConfiguration("database_path")
     namespace = LaunchConfiguration("namespace")
     
     use_sim_time_arg = DeclareLaunchArgument("use_sim_time", default_value="false")
+    ekf_config_arg = DeclareLaunchArgument(
+        "ekf_config",
+        default_value=os.path.join(localization_dir, "config", "ekf.yaml")
+    )
     cfg_arg = DeclareLaunchArgument(
         "cfg", 
         default_value=os.path.join(localization_dir, "config", "rtabmap_localization.yaml")
@@ -63,6 +65,7 @@ def generate_launch_description():
             "database_path": database_path,
             "frame_id": "base_footprint",
             "map_frame_id": "map",
+            "map_topic": "/map",
             "odom_topic": "/odometry/filtered",
             
             # --- 1. BẬT LẠI CAMERA (RGB-D) Để KHỚI TẠO Vị TRÍ NHANH ---
@@ -76,6 +79,7 @@ def generate_launch_description():
             "subscribe_scan": "true",
             "scan_topic": "/scan",
             "approx_sync": "true",
+            "odom_sensor_sync": "true",
             
             # --- 3. TẮT VISUAL ODOMETRY VÀ ICP ODOMETRY ---
             "visual_odometry": "false",
@@ -100,6 +104,7 @@ def generate_launch_description():
 
     return LaunchDescription([
         use_sim_time_arg,
+        ekf_config_arg,
         cfg_arg,
         database_path_arg,
         namespace_arg,

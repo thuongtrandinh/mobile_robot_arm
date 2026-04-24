@@ -12,6 +12,7 @@ def generate_launch_description():
     use_sim_time = LaunchConfiguration("use_sim_time")
     launch_rviz = LaunchConfiguration("launch_rviz")
     world = LaunchConfiguration("world")
+    localization_ekf_config = LaunchConfiguration("localization_ekf_config")
     localization_cfg = LaunchConfiguration("localization_cfg")
     localization_database_path = LaunchConfiguration("localization_database_path")
     localization_namespace = LaunchConfiguration("localization_namespace")
@@ -35,6 +36,15 @@ def generate_launch_description():
         "world",
         default_value="room_20x20.world",
         description="Gazebo world used when use_sim_time=true",
+    )
+    localization_ekf_config_arg = DeclareLaunchArgument(
+        "localization_ekf_config",
+        default_value=os.path.join(
+            get_package_share_directory("localization"),
+            "config",
+            "ekf_sim.yaml",
+        ),
+        description="EKF config file used by localization in simulation",
     )
     localization_cfg_arg = DeclareLaunchArgument(
         "localization_cfg",
@@ -97,6 +107,7 @@ def generate_launch_description():
         ),
         launch_arguments={
             "use_sim_time": use_sim_time,
+            "ekf_config": localization_ekf_config,
             "cfg": localization_cfg,
             "database_path": localization_database_path,
             "namespace": localization_namespace,
@@ -110,6 +121,7 @@ def generate_launch_description():
         use_sim_time_arg,
         launch_rviz_arg,
         world_arg,
+        localization_ekf_config_arg,
         localization_cfg_arg,
         localization_database_path_arg,
         localization_namespace_arg,
