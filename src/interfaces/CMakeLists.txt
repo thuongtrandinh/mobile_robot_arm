@@ -14,6 +14,7 @@ find_package(nav_msgs REQUIRED)
 set(msg_files
   "msg/ControlVar.msg"
   "msg/DynaObstacle.msg"
+  "msg/HumanArray.msg"
   "msg/HumanState.msg"
   "msg/JointState.msg"
   "msg/ObstacleArray.msg"

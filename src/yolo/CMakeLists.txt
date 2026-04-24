@@ -9,8 +9,7 @@ ament_python_install_package(${PROJECT_NAME})
 
 # Install executable scripts
 install(PROGRAMS
-  scripts/handsign_detector
-  scripts/handsign_detector_sim
+  scripts/multi_object_tracking
   DESTINATION lib/${PROJECT_NAME}
 )
 

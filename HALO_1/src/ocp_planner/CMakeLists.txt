@@ -17,6 +17,7 @@ find_package(interfaces REQUIRED)
 find_package(OpenCV REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(casadi REQUIRED)
+find_package(CURL REQUIRED)
 
 ################################################
 ## Build ##
@@ -50,7 +51,8 @@ target_compile_definitions(${PROJECT_NAME}_node PRIVATE ROS_BUILD)
 
 target_link_libraries(${PROJECT_NAME}_node
   ${OpenCV_LIBRARIES}
-  casadi::casadi
+  casadi
+  CURL::libcurl
   dw
 )
 
@@ -59,6 +61,44 @@ target_link_libraries(${PROJECT_NAME}_node
 ################################################
 
 option(BUILD_OCP_PYTHON_BINDINGS "Build pybind11 module for ocp_planner" ON)
+
+if(BUILD_OCP_PYTHON_BINDINGS)
+  # Prefer conda Python when available, otherwise fall back to system Python.
+  if(DEFINED ENV{CONDA_PREFIX} AND EXISTS "$ENV{CONDA_PREFIX}/bin/python")
+    set(Python3_EXECUTABLE "$ENV{CONDA_PREFIX}/bin/python")
+  endif()
+
+  find_package(Python3 COMPONENTS Interpreter Development.Module)
+  if(Python3_FOUND)
+    # Add pybind11 subdirectory
+    add_subdirectory(extern/pybind11)
+
+    # Build Python binding module (STANDALONE - no ROS dependency)
+    pybind11_add_module(${PROJECT_NAME}_py
+      src/ocp_bind.cc
+      src/astar.cc
+      src/smooth.cc
+      src/lookahead.cc
+      src/planner.cc
+      src/mpc.cc
+    )
+
+    target_link_libraries(${PROJECT_NAME}_py
+      PRIVATE
+      ${OpenCV_LIBRARIES}
+      casadi::casadi
+    )
+  else()
+    message(WARNING "Python3 (Interpreter + Development.Module) not found. Skipping ocp_planner pybind module.")
+  endif()
+endif()
+
+# Use conda environment Python when available; otherwise fall back to system Python.
+if(DEFINED ENV{CONDA_PREFIX} AND NOT "$ENV{CONDA_PREFIX}" STREQUAL "")
+  set(Python3_EXECUTABLE "$ENV{CONDA_PREFIX}/bin/python")
+endif()
+option(BUILD_OCP_PYTHON_BINDINGS "Build pybind11 module for ocp_planner" OFF)
+
 
 if(BUILD_OCP_PYTHON_BINDINGS)
   # Prefer conda Python when available, otherwise fall back to system Python.

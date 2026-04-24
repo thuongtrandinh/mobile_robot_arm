@@ -106,16 +106,20 @@ def launch_setup(context, *args, **kwargs):
         arguments=[
             '/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock',
             '/scan@sensor_msgs/msg/LaserScan[gz.msgs.LaserScan',
-            '/zed/zed_node/imu/data@sensor_msgs/msg/Imu[gz.msgs.IMU',
-            '/zed/zed_node/left/image_rect_color/image@sensor_msgs/msg/Image[gz.msgs.Image',
-            '/zed/zed_node/left/image_rect_color/camera_info@sensor_msgs/msg/CameraInfo[gz.msgs.CameraInfo',
-            '/zed/zed_node/left/image_rect_color/depth_image@sensor_msgs/msg/Image[gz.msgs.Image',
+            # Bridge cho IMU của D435i
+            '/imu@sensor_msgs/msg/Imu[ignition.msgs.IMU',
+            
+            # Bridge cho Camera D435i (RGB, Depth, Info)
+            '/camera/image@sensor_msgs/msg/Image[ignition.msgs.Image',
+            '/camera/depth_image@sensor_msgs/msg/Image[ignition.msgs.Image',
+            '/camera/camera_info@sensor_msgs/msg/CameraInfo[ignition.msgs.CameraInfo',
         ],
+
         remappings=[
-            ('/zed/zed_node/imu/data', '/imu'),
-            ('/zed/zed_node/left/image_rect_color/image', '/zed/zed_node/rgb/color/rect/image'),
-            ('/zed/zed_node/left/image_rect_color/camera_info', '/zed/zed_node/rgb/color/rect/camera_info'),
-            ('/zed/zed_node/left/image_rect_color/depth_image', '/zed/zed_node/depth/depth_registered'),
+            ('/imu', '/camera/imu'),
+            ('/camera/image', '/camera/color/image_raw'),
+            ('/camera/depth_image', '/camera/depth/image_rect_raw'),
+            ('/camera/camera_info', '/camera/color/camera_info'),
         ],
         parameters=[{'use_sim_time': use_sim_time}],
         output='screen'
@@ -179,7 +183,7 @@ def generate_launch_description():
         DeclareLaunchArgument('launch_rviz', default_value='true', description='Launch RViz2'),
         DeclareLaunchArgument('headless', default_value='false', description='Run Gazebo in server-only mode'),
         DeclareLaunchArgument('spawn_controllers', default_value='true', description='Spawn ros2_control controllers'),
-        DeclareLaunchArgument('world', default_value='room_20x20.world',
+        DeclareLaunchArgument('world', default_value='parallel_hallways.world',
                               description='World file to load',
                               choices=['amr_simulation.world', 'empty.world', 'parallel_hallways.world', 'room_20x20.world', 'small_house.world', 'small_warehouse.world']),
         OpaqueFunction(function=launch_setup),

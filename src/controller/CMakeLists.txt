@@ -10,7 +10,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # ---------- ACADOS integration ----------
 option(CONTROLLER_ENABLE_ACADOS "Enable ACADOS generated solver integration" ON)
-set(ACADOS_INSTALL_DIR "$ENV{HOME}/acados")
+set(ACADOS_INSTALL_DIR "/home/hdt/LVTN/acados")
 set(ACADOS_GENERATED_CODE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/c_generated_code")
 
 if(CONTROLLER_ENABLE_ACADOS)

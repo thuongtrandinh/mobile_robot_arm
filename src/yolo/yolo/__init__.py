@@ -6,10 +6,6 @@ Supports both real ZED2 camera and Gazebo simulation
 
 __version__ = '2.0.0'
 
-# Lazy imports to avoid circular dependency and reduce load time
 __all__ = [
-    'HandSignDetectorNode',
-    'HandSignDetectorSimNode',
-    'VelocityFilter',
-    'BoTSortTracker',
+    'MultiObjectTrackingNode',
 ]
