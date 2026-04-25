@@ -34,14 +34,14 @@ controller_server:
       ax_max: 0.1
       ay_max: 0.0
       ay_min: 0.0
-      az_min: -1.0
-      az_max: 1.0
+      az_min: -0.5
+      az_max: 0.5
       vx_min: 0.0
       vx_max: 0.3
       vy_min: 0.0   # Bắt buộc = 0 cho DDMR
       vy_max: 0.0
-      vz_min: -0.3
-      vz_max: 0.3
+      vz_min: -0.15
+      vz_max: 0.15
 
       # Thông số nội bộ của MPPI
       motion_model: "DiffDrive" # Khai báo rõ mô hình động học vi sai

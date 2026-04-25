@@ -4,12 +4,12 @@ Panels:
     Name: Displays
     Property Tree Widget:
       Expanded:
-        - /LaserScan1
         - /Image1
         - /ParticleCloud1/Topic1
         - /Map1
         - /Map2
         - /MarkerArray3
+        - /MarkerArray4
       Splitter Ratio: 0.5
     Tree Height: 356
   - Class: rviz_common/Selection
@@ -78,6 +78,10 @@ Visualization Manager:
           Value: true
         camera_gyro_optical_frame:
           Value: true
+        camera_imu_frame:
+          Value: true
+        camera_imu_optical_frame:
+          Value: true
         camera_infra1_frame:
           Value: true
         camera_infra1_optical_frame:
@@ -138,6 +142,9 @@ Visualization Manager:
                     camera_gyro_frame:
                       camera_gyro_optical_frame:
                         {}
+                      camera_imu_frame:
+                        camera_imu_optical_frame:
+                          {}
                     camera_infra1_frame:
                       camera_infra1_optical_frame:
                         {}
@@ -329,7 +336,7 @@ Visualization Manager:
       Enabled: true
       Invert Rainbow: false
       Max Color: 255; 255; 255
-      Max Intensity: 0
+      Max Intensity: 47
       Min Color: 0; 0; 0
       Min Intensity: 0
       Name: LaserScan
@@ -382,7 +389,7 @@ Visualization Manager:
       Enabled: true
       Name: MarkerArray
       Namespaces:
-        {}
+        policy_actions: true
       Topic:
         Depth: 5
         Durability Policy: Volatile
@@ -443,7 +450,7 @@ Visualization Manager:
       Enabled: true
       Name: MarkerArray
       Namespaces:
-        {}
+        planner_scene: true
       Topic:
         Depth: 5
         Durability Policy: Volatile
@@ -476,7 +483,8 @@ Visualization Manager:
       Enabled: true
       Name: MarkerArray
       Namespaces:
-        {}
+        Candidate Trajectories: true
+        Optimal Trajectory: true
       Topic:
         Depth: 5
         Durability Policy: Volatile
@@ -485,7 +493,7 @@ Visualization Manager:
         Value: /trajectories
       Value: true
     - Class: rviz_default_plugins/MarkerArray
-      Enabled: false
+      Enabled: true
       Name: MarkerArray
       Namespaces:
         {}
@@ -494,8 +502,8 @@ Visualization Manager:
         Durability Policy: Volatile
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: /trajectories
-      Value: false
+        Value: /human_markers
+      Value: true
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48
@@ -542,7 +550,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz_default_plugins/Orbit
-      Distance: 45.87548828125
+      Distance: 12.776369094848633
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -557,10 +565,10 @@ Visualization Manager:
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 0.9347972869873047
+      Pitch: 1.389796495437622
       Target Frame: <Fixed Frame>
       Value: Orbit (rviz)
-      Yaw: 1.5753809213638306
+      Yaw: 2.5703818798065186
     Saved: ~
 Window Geometry:
   Displays:
@@ -580,5 +588,5 @@ Window Geometry:
   Views:
     collapsed: false
   Width: 1080
-  X: 0
-  Y: 27
+  X: 102
+  Y: 138
