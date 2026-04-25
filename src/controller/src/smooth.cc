@@ -100,7 +100,7 @@ std::vector<SmoothPath> SmoothCorner::SmoothSharpCorner(
       smooth_path_.push_back(SmoothPath(center.x, center.y, r, 
                                         start_angle, end_angle));
       
-      if (i == astar_path.size() - 2) {
+      if (static_cast<std::size_t>(i) == astar_path.size() - 2) {
         smooth_path_.push_back(SmoothPath(
             end_p.x, end_p.y, astar_path[i + 1].x, astar_path[i + 1].y));
       }
@@ -118,7 +118,7 @@ std::vector<struct Point> SmoothCorner::SimplifyPath(
                         astar_path[1].x - astar_path[0].x);
         
   simple_path.push_back(astar_path[0]);
-  for (int i = 2; i < astar_path.size(); i++) {
+  for (std::size_t i = 2; i < astar_path.size(); i++) {
     double k = atan2(astar_path[i].y - astar_path[i - 1].y, 
                      astar_path[i].x - astar_path[i - 1].x);
     

@@ -1,11 +1,12 @@
 import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, GroupAction
-from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.actions import DeclareLaunchArgument, SetEnvironmentVariable
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
-from launch_ros.actions import Node, SetParameter, SetRemap
+from launch_ros.actions import Node
+from launch_ros.descriptions import ParameterFile
 from launch_ros.substitutions import FindPackageShare
+from nav2_common.launch import RewrittenYaml
 
 def generate_launch_description():
     use_sim_time = LaunchConfiguration("use_sim_time")
@@ -43,7 +44,7 @@ def generate_launch_description():
     )
     tuning_config_arg = DeclareLaunchArgument(
         "tuning_config",
-        default_value=PathJoinSubstitution([FindPackageShare("controller"), "config", "ddmr_mpc_config.yaml"]),
+        default_value=PathJoinSubstitution([FindPackageShare("controller"), "config", "planner_config.yaml"]),
     )
     mppi_params_file_arg = DeclareLaunchArgument(
         "mppi_params_file",
@@ -65,7 +66,7 @@ def generate_launch_description():
 
     visualize_actions_arg = DeclareLaunchArgument("visualize_actions", default_value="true")
     action_marker_topic_arg = DeclareLaunchArgument("action_marker_topic", default_value="/policy/action_markers")
-    action_marker_frame_arg = DeclareLaunchArgument("action_marker_frame", default_value="base_link")
+    action_marker_frame_arg = DeclareLaunchArgument("action_marker_frame", default_value="odom")
     publish_debug_joint_state_arg = DeclareLaunchArgument("publish_debug_joint_state", default_value="true")
     debug_joint_state_topic_arg = DeclareLaunchArgument("debug_joint_state_topic", default_value="/debug/joint_state_req")
     publish_policy_debug_status_arg = DeclareLaunchArgument("publish_policy_debug_status", default_value="true")
@@ -76,23 +77,135 @@ def generate_launch_description():
     local_costmap_topic_arg = DeclareLaunchArgument("local_costmap_topic", default_value="/a_star/local_costmap")
     astar_local_map_topic_arg = DeclareLaunchArgument("astar_local_map_topic", default_value="/map")
 
-    # 1. GỌI NAV2 BRINGUP (CHẠY MPPI)
-    nav2_bringup_dir = get_package_share_directory('nav2_bringup')
-    nav2_cmd = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(os.path.join(nav2_bringup_dir, 'launch', 'navigation_launch.py')),
-        launch_arguments={
-            'use_sim_time': use_sim_time,
-            'params_file': mppi_params_file,
-            'autostart': 'true'
-        }.items()
+    # 1. GỌI NAV2 NODES (CHẠY MPPI)
+    #
+    # Do not use a parent/global cmd_vel remap here. A global remap also rewires
+    # behavior_server into the wheel controller, which creates conflicting
+    # velocity commands when recoveries run. Keep controller_server -> smoother
+    # on cmd_vel_nav, and only send the smoother output to diff_cont.
+    nav2_remappings = [("/tf", "tf"), ("/tf_static", "tf_static")]
+    nav2_params = ParameterFile(
+        RewrittenYaml(
+            source_file=mppi_params_file,
+            param_rewrites={"use_sim_time": use_sim_time, "autostart": "true"},
+            convert_types=True,
+        ),
+        allow_substs=True,
     )
 
-    nav2_group = GroupAction([
-        SetParameter(name='use_sim_time', value=use_sim_time),
-        SetRemap(src='cmd_vel', dst='/diff_cont/cmd_vel_unstamped'),
-        SetRemap(src='cmd_vel_nav', dst='/diff_cont/cmd_vel_unstamped'),
-        nav2_cmd
-    ])
+    nav2_buffered_logging = SetEnvironmentVariable(
+        "RCUTILS_LOGGING_BUFFERED_STREAM", "1"
+    )
+
+    controller_server = Node(
+        package="nav2_controller",
+        executable="controller_server",
+        output="screen",
+        respawn=respawn,
+        respawn_delay=2.0,
+        parameters=[nav2_params],
+        arguments=["--ros-args", "--log-level", log_level],
+        remappings=nav2_remappings + [("cmd_vel", "cmd_vel_nav")],
+    )
+
+    smoother_server = Node(
+        package="nav2_smoother",
+        executable="smoother_server",
+        name="smoother_server",
+        output="screen",
+        respawn=respawn,
+        respawn_delay=2.0,
+        parameters=[nav2_params],
+        arguments=["--ros-args", "--log-level", log_level],
+        remappings=nav2_remappings,
+    )
+
+    planner_server = Node(
+        package="nav2_planner",
+        executable="planner_server",
+        name="planner_server",
+        output="screen",
+        respawn=respawn,
+        respawn_delay=2.0,
+        parameters=[nav2_params],
+        arguments=["--ros-args", "--log-level", log_level],
+        remappings=nav2_remappings,
+    )
+
+    behavior_server = Node(
+        package="nav2_behaviors",
+        executable="behavior_server",
+        name="behavior_server",
+        output="screen",
+        respawn=respawn,
+        respawn_delay=2.0,
+        parameters=[nav2_params],
+        arguments=["--ros-args", "--log-level", log_level],
+        remappings=nav2_remappings + [("cmd_vel", "behavior_cmd_vel")],
+    )
+
+    bt_navigator = Node(
+        package="nav2_bt_navigator",
+        executable="bt_navigator",
+        name="bt_navigator",
+        output="screen",
+        respawn=respawn,
+        respawn_delay=2.0,
+        parameters=[nav2_params],
+        arguments=["--ros-args", "--log-level", log_level],
+        remappings=nav2_remappings,
+    )
+
+    waypoint_follower = Node(
+        package="nav2_waypoint_follower",
+        executable="waypoint_follower",
+        name="waypoint_follower",
+        output="screen",
+        respawn=respawn,
+        respawn_delay=2.0,
+        parameters=[nav2_params],
+        arguments=["--ros-args", "--log-level", log_level],
+        remappings=nav2_remappings,
+    )
+
+    velocity_smoother = Node(
+        package="nav2_velocity_smoother",
+        executable="velocity_smoother",
+        name="velocity_smoother",
+        output="screen",
+        respawn=respawn,
+        respawn_delay=2.0,
+        parameters=[nav2_params],
+        arguments=["--ros-args", "--log-level", log_level],
+        remappings=nav2_remappings
+        + [
+            ("cmd_vel", "cmd_vel_nav"),
+            ("cmd_vel_smoothed", "/diff_cont/cmd_vel_unstamped"),
+        ],
+    )
+
+    lifecycle_manager_navigation = Node(
+        package="nav2_lifecycle_manager",
+        executable="lifecycle_manager",
+        name="lifecycle_manager_navigation",
+        output="screen",
+        arguments=["--ros-args", "--log-level", log_level],
+        parameters=[
+            {"use_sim_time": use_sim_time},
+            {"autostart": True},
+            {
+                "node_names": [
+                    "controller_server",
+                    "smoother_server",
+                    "planner_server",
+                    "behavior_server",
+                    "bt_navigator",
+                    "waypoint_follower",
+                    "velocity_smoother",
+                ]
+            },
+        ],
+    )
 
     # 2. GỌI PLANNER NODE (Chỉ giữ A* smooth & local path service)
     ampcc_node = Node(
@@ -128,6 +241,20 @@ def generate_launch_description():
                 "follow_path_action": "/follow_path",
                 "controller_id": "FollowPath",
                 "goal_checker_id": "general_goal_checker",
+                "policy_hz": 5.0,
+                "service_hz": 5.0,
+                "follow_path_replan_min_interval_sec": 0.80,
+                "follow_path_replan_path_delta": 0.35,
+                "obstacle_sample_step": 16,
+                "scan_filter_enabled": True,
+                "scan_obstacle_max_range": 3.0,
+                "scan_neighbor_window": 2,
+                "scan_min_neighbor_count": 2,
+                "scan_neighbor_max_delta": 0.18,
+                "scan_persistence_hits": 2,
+                "scan_persistence_decay_scans": 4,
+                "scan_persistence_resolution": 0.12,
+                "scan_obstacle_limit": 60,
                 "planner_half_width": 5.8,
                 "planner_half_height": 9.8,
                 "auto_relax_constraints": False,
@@ -209,7 +336,15 @@ def generate_launch_description():
         local_costmap_topic_arg,
         astar_local_map_topic_arg,
         
-        nav2_group,
+        nav2_buffered_logging,
+        controller_server,
+        smoother_server,
+        planner_server,
+        behavior_server,
+        bt_navigator,
+        waypoint_follower,
+        velocity_smoother,
+        lifecycle_manager_navigation,
         ampcc_node,
         rl_bridge_node,
         rviz_visualizer_node,

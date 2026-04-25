@@ -4,9 +4,7 @@
   <name>controller</name>
   <version>0.1.0</version>
   <description>
-    Adaptive Model Predictive Contouring Control (AMPCC) backend
-    for the H-AMPCC framework. Implements RLS-based online parameter
-    estimation and MPCC with contouring/lag error formulation.
+    Local reference planner and RL bridge for Nav2 MPPI path following.
   </description>
   <maintainer email="thuong@todo.todo">thuong</maintainer>
   <license>Apache-2.0</license>
