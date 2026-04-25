@@ -6,9 +6,9 @@ opt_planner:
     scene_limits.num_static_obstacles: 40
 
     constraints.max_linear_vel: 0.3
-    constraints.max_angular_vel: 0.27
+    constraints.max_angular_vel: 0.3
     constraints.max_linear_acc: 1.0
-    constraints.max_angular_acc: 0.525
+    constraints.max_angular_acc: 1.0
 
     planner.local_obstacle_count: 8
     planner.polygon_clearance_margin: 0.03
