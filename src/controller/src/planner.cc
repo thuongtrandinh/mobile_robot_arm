@@ -194,7 +194,7 @@ bool Planner::UpdateReferenceOnly(const JointState &state,
 std::vector<Point> Planner::BuildDirectReferenceTrajectory(
     const JointState &state, const Eigen::Vector2d &goal) const {
   std::vector<Point> path;
-  const int horizon = std::max(2, static_cast<int>(GetMpcHorizonSteps()));
+  const int horizon = std::max(2, static_cast<int>(GetReferenceHorizonSteps()));
   path.reserve(static_cast<std::size_t>(horizon));
 
   const double sx = state.robot.px;
@@ -234,7 +234,7 @@ std::vector<Point> Planner::BuildDirectReferenceTrajectory(
 }
 
 double Planner::ComputeDirectReferenceSpeed(double remaining_distance) const {
-  const double v_cap = std::max(0.0, std::min(debug_xref_v_max_, mpc_params_->max_linear_vel));
+  const double v_cap = std::max(0.0, std::min(debug_xref_v_max_, params_->max_linear_vel));
   const double v_floor = std::max(0.0, std::min(debug_xref_v_min_, v_cap));
   const double slow_dist = std::max(0.05, debug_xref_slowdown_distance_);
   const double k = std::max(0.0, debug_xref_kp_dist_);
@@ -249,76 +249,6 @@ double Planner::ComputeDirectReferenceSpeed(double remaining_distance) const {
     v_ref = 0.0;
   }
   return v_ref;
-}
-
-MpcReturn Planner::SolveMpcFromCachedReference(const JointState &state) {
-  if (astar_path_.size() < 2) {
-    if (verbose_ >= 1) {
-      std::cout << "Invalid cached reference trajectory with len = "
-                << astar_path_.size() << std::endl;
-    }
-    return {MpcStages(), false};
-  }
-
-  auto final_path = astar_path_;
-  auto revised_state = state;
-
-  double phi_0 = atan2(final_path[1].y - final_path[0].y,
-                       final_path[1].x - final_path[0].x);
-
-  double yaw_error = state.robot.yaw - phi_0;
-  Unwrap(yaw_error);
-
-  if (abs(yaw_error) > M_PI / 2) {
-    revised_state.robot.yaw -= M_PI;
-    Unwrap(revised_state.robot.yaw);
-    revised_state.robot.v = -revised_state.robot.v;
-    move_forward_ = false;
-  } else {
-    move_forward_ = true;
-  }
-
-  while (final_path.size() < static_cast<size_t>(GetMpcHorizonSteps())) {
-    final_path.push_back(final_path.back());
-  }
-  
-  if (verbose_ > 1) std::cout << "DEBUG: geo plann done!" << std::endl;
-
-  auto mpc_return = ocp_planner_->RunMpc(revised_state, final_path);
-
-  if (!mpc_return.success) {
-    // Fail-safe: do not fallback to goal-seeking PID when NLP is infeasible,
-    // because PID does not enforce obstacle constraints and can cause collisions.
-    return {MpcStages(), false};
-  }
-
-  // std::cout << "===" << std::endl;
-  if (visual_flag_) {
-    for (int i = 0; i < final_path.size(); i++) {
-      Eigen::Vector2d path_pt(final_path[i].x, final_path[i].y);
-      cv::Point visual_pt = MapCoord2ImgIdx(path_pt, true);
-      cv::circle(visual_map_, visual_pt, 3, cv::Scalar(200, 0, 0), 2);
-    }
-    if (mpc_return.success) {
-      for (int k = 0; k < mpc_return.stages.size(); k++) {
-        Eigen::Vector2d path_pt(mpc_return.stages[k].xk.X, 
-                                mpc_return.stages[k].xk.Y);
-        
-        cv::Point visual_pt = MapCoord2ImgIdx(path_pt, true);
-        cv::circle(visual_map_, visual_pt, 3, cv::Scalar(0, 0, 200), 2);
-      }
-    }
-
-    cv::imshow("debug!", visual_map_);
-    cv::waitKey(5);
-  }
-  if (mpc_return.success && !move_forward_) {
-    for (std::size_t t = 0; t < mpc_return.stages.size(); ++t) {
-      mpc_return.stages[t].uk.acc = -mpc_return.stages[t].uk.acc;
-    }
-    // mpc_return.stages[0].uk.acc = -mpc_return.stages[0].uk.acc;
-  }
-  return mpc_return;
 }
 
 bool Planner::CheckAround(Eigen::Vector2d &pos) {
@@ -409,7 +339,7 @@ bool Planner::CheckNavGoal(Eigen::Vector2d &sub_goal,
   }
 
   // 3. Đã xóa toàn bộ logic Polygon Fix và Circular Fix.
-  // Điểm RL đã an toàn, cho phép giải MPC!
+  // The RL sub-goal is valid for local A* reference generation.
   return true;
 }
 
@@ -519,132 +449,8 @@ cv::Mat Planner::CreateMap() {
   cv::Mat map(400, 240, CV_8UC1, cv::Scalar(255));  // TODO: change to 10 x 20
 
   std::cout << "create map" << std::endl;
-  return std::move(map);
+  return map;
 };
-
-robot_plann::MPCOutputForPython Planner::RunSlover(
-  const robot_plann::MPCInputForPython& input) {
-  
-  robot_plann::MPCOutputForPython ans{};
-  ans.astar_path.clear();
-  ans.control_vars.clear();
-  ans.success = false;
-  if (input.valid == false) {
-    return ans;
-  }
-  robot_plann::JointState ob_state;
-
-  PybindInputDataChange(input, ob_state);
-  Eigen::Vector2d sub_goal = {input.sub_goal.x, input.sub_goal.y};
-
-    auto start_stamp = std::chrono::high_resolution_clock::now();
-    const bool ref_ok = this->UpdateReferenceOnly(ob_state, sub_goal);
-    auto mpc_return = ref_ok ? this->SolveMpcFromCachedReference(ob_state)
-                 : MpcReturn{MpcStages(), false};
-    auto end_stamp = std::chrono::high_resolution_clock::now();
-    double time_cost =
-      std::chrono::duration<double, std::milli>(end_stamp - start_stamp)
-        .count();
-
-  std::vector<robot_plann::Point> astar_path = this->GetAStarPath();
-  for (int i = 0; i < astar_path.size(); ++i) {
-    robot_plann::Point pt;
-    pt.x = astar_path.at(i).x;
-    pt.y = astar_path.at(i).y;
-    pt.v = 0.0;
-    ans.astar_path.push_back(pt);
-
-  }
-
-  robot_plann::ControlVar cur_control_var{};
-  if (!mpc_return.success) {
-    ans.al = 0.0;
-    ans.ar = 0.0;
-    ans.revised_goal.x = input.sub_goal.x;
-    ans.revised_goal.y = input.sub_goal.y;
-    std::cout << "Ocp plann failed!" << std::endl;
-    cur_control_var.al = ans.al;
-    cur_control_var.ar = ans.ar;
-    for (int i = 0; i < GetMpcHorizonSteps(); ++i) {
-      ans.control_vars.push_back(cur_control_var);
-    }
-
-  } else {
-    const double half_track = GetWheelHalfTrack();
-    ans.al = mpc_return.stages[0].uk.acc - mpc_return.stages[0].uk.dr * half_track;
-    ans.ar = mpc_return.stages[0].uk.acc + mpc_return.stages[0].uk.dr * half_track;
-    ans.revised_goal.x = input.sub_goal.x;
-    ans.revised_goal.y = input.sub_goal.y;
-   
-    for (int i = 0; i < GetMpcHorizonSteps(); ++i) {
-      cur_control_var.al =
-          mpc_return.stages.at(i).uk.acc - mpc_return.stages.at(i).uk.dr * half_track;
-      cur_control_var.ar =
-          mpc_return.stages.at(i).uk.acc + mpc_return.stages.at(i).uk.dr * half_track;
-
-      ans.control_vars.push_back(cur_control_var);
-    }
-    ans.success = true;
-    std::cout << "Time cost: " << time_cost << std::endl;
-
-  }
-
-  return std::move(ans);
-}
-
-
-void Planner::PybindInputDataChange(const robot_plann::MPCInputForPython& input,
-                               robot_plann::JointState &ob_state) {
-  
-  const auto &robot_state = input.ob.robot;
-  ob_state.robot.px = robot_state.px;
-  ob_state.robot.py = robot_state.py;
-  ob_state.robot.yaw = robot_state.yaw;
-  ob_state.robot.v = robot_state.v;
-  ob_state.robot.yaw_rate = robot_state.yaw_rate;
-
-  ob_state.robot.v_pref = robot_state.v_pref;
-  ob_state.robot.radius = robot_state.radius;
-  ob_state.robot.gx = robot_state.gx;
-  ob_state.robot.gy = robot_state.gy;
-
-  for (const auto &hum_iter : input.ob.hum) {
-    robot_plann::HumanState hum_state;
-    hum_state.px = hum_iter.px;
-    hum_state.py = hum_iter.py;
-    hum_state.vx = hum_iter.vx;
-    hum_state.vy = hum_iter.vy;
-    hum_state.radius = hum_iter.radius;
-
-    ob_state.hum.push_back(hum_state);
-  }
-
-  for (const auto &obst_iter : input.ob.obst) {
-    robot_plann::ObstacleState obst_state;
-    obst_state.px = obst_iter.px;
-    obst_state.py = obst_iter.py;
-    obst_state.radius = obst_iter.radius;
-    ob_state.obst.push_back(obst_state);
-  }
-
-  ob_state.rect.vertices.clear();
-  // for (const auto &poly_iter : input.ob.rect) {
-  for (const auto &vertex : input.ob.rect.vertices) {
-    Eigen::Vector2d pt(vertex.x, vertex.y);
-    ob_state.rect.vertices.push_back(pt);
-  }
-
-  ob_state.walls.clear();
-  for (const auto &input_wall : input.ob.walls) {
-    Wall wall;
-    wall.first.x = input_wall.sx;
-    wall.first.y = input_wall.sy;
-    wall.second.x = input_wall.ex;
-    wall.second.y = input_wall.ey;
-    ob_state.walls.push_back(wall);
-  }
-
-}
 
 // Cohen-Sutherland line clipping against an axis-aligned box.
 bool Planner::ClipLine(double &x1, double &y1, double &x2, double &y2,
