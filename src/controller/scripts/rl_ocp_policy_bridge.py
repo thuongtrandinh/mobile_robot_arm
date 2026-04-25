@@ -50,6 +50,15 @@ class RlOcpPolicyBridge(Node):
         self.declare_parameter("v_pref", 0.8)
         self.declare_parameter("obstacle_radius", 0.2)
         self.declare_parameter("obstacle_sample_step", 16)
+        self.declare_parameter("scan_filter_enabled", True)
+        self.declare_parameter("scan_obstacle_max_range", 3.0)
+        self.declare_parameter("scan_neighbor_window", 2)
+        self.declare_parameter("scan_min_neighbor_count", 2)
+        self.declare_parameter("scan_neighbor_max_delta", 0.18)
+        self.declare_parameter("scan_persistence_hits", 2)
+        self.declare_parameter("scan_persistence_decay_scans", 4)
+        self.declare_parameter("scan_persistence_resolution", 0.12)
+        self.declare_parameter("scan_obstacle_limit", 60)
         self.declare_parameter("use_map_static_obstacles", True)
         self.declare_parameter("map_static_obstacle_radius", 0.2)
         self.declare_parameter("map_static_sample_step_m", 0.3)
@@ -64,7 +73,6 @@ class RlOcpPolicyBridge(Node):
         self.declare_parameter("service_hz", 10.0)
         self.declare_parameter("goal_source_mode", self._GOAL_SOURCE_RL)
         self.declare_parameter("policy_period", 0.2)
-        self.declare_parameter("mpc_period", 0.05)
 
         self.declare_parameter("planner_half_width", 5.8)
         self.declare_parameter("planner_half_height", 9.8)
@@ -107,8 +115,8 @@ class RlOcpPolicyBridge(Node):
         self.declare_parameter("goal_checker_id", "general_goal_checker")
         self.declare_parameter("local_goal_topic", "/rl/local_goal")
         self.declare_parameter("local_path_topic", "/rl/local_path")
-        self.declare_parameter("follow_path_replan_min_interval_sec", 0.35)
-        self.declare_parameter("follow_path_replan_path_delta", 0.20)
+        self.declare_parameter("follow_path_replan_min_interval_sec", 0.80)
+        self.declare_parameter("follow_path_replan_path_delta", 0.35)
 
         self.policy_env_name = self.get_parameter("policy_env_name").get_parameter_value().string_value
         self.halo_drl_dir = self.get_parameter("halo_drl_dir").get_parameter_value().string_value
@@ -123,6 +131,15 @@ class RlOcpPolicyBridge(Node):
         self.v_pref = self.get_parameter("v_pref").get_parameter_value().double_value
         self.obstacle_radius = self.get_parameter("obstacle_radius").get_parameter_value().double_value
         self.obstacle_sample_step = self.get_parameter("obstacle_sample_step").get_parameter_value().integer_value
+        self.scan_filter_enabled = self.get_parameter("scan_filter_enabled").get_parameter_value().bool_value
+        self.scan_obstacle_max_range = self.get_parameter("scan_obstacle_max_range").get_parameter_value().double_value
+        self.scan_neighbor_window = self.get_parameter("scan_neighbor_window").get_parameter_value().integer_value
+        self.scan_min_neighbor_count = self.get_parameter("scan_min_neighbor_count").get_parameter_value().integer_value
+        self.scan_neighbor_max_delta = self.get_parameter("scan_neighbor_max_delta").get_parameter_value().double_value
+        self.scan_persistence_hits = self.get_parameter("scan_persistence_hits").get_parameter_value().integer_value
+        self.scan_persistence_decay_scans = self.get_parameter("scan_persistence_decay_scans").get_parameter_value().integer_value
+        self.scan_persistence_resolution = self.get_parameter("scan_persistence_resolution").get_parameter_value().double_value
+        self.scan_obstacle_limit = self.get_parameter("scan_obstacle_limit").get_parameter_value().integer_value
         self.use_map_static_obstacles = self.get_parameter("use_map_static_obstacles").get_parameter_value().bool_value
         self.map_static_obstacle_radius = self.get_parameter("map_static_obstacle_radius").get_parameter_value().double_value
         self.map_static_sample_step_m = self.get_parameter("map_static_sample_step_m").get_parameter_value().double_value
@@ -138,7 +155,7 @@ class RlOcpPolicyBridge(Node):
             self.get_parameter("goal_source_mode").get_parameter_value().string_value
         )
         self.policy_period = 1.0 / self.policy_hz
-        self.mpc_period = 1.0 / self.service_hz
+        self.service_period = 1.0 / self.service_hz
         self.planner_half_width = self.get_parameter("planner_half_width").get_parameter_value().double_value
         self.planner_half_height = self.get_parameter("planner_half_height").get_parameter_value().double_value
         self.planner_hard_half_width = self.get_parameter("planner_hard_half_width").get_parameter_value().double_value
@@ -217,6 +234,8 @@ class RlOcpPolicyBridge(Node):
         self.current_goal: Optional[Tuple[float, float]] = None
         self.current_goal_frame: str = ""
         self.latest_scan: Optional[LaserScan] = None
+        self.scan_seq = 0
+        self.scan_persistence: Dict[Tuple[int, int], Tuple[int, int]] = {}
         self.latest_humans: Optional[HumanArray] = None
         self.map_bounds: Optional[Tuple[float, float, float, float]] = None
         self.map_resolution: Optional[float] = None
@@ -303,14 +322,14 @@ class RlOcpPolicyBridge(Node):
         # Keep legacy timer_period declared for backward compatibility,
         # but run policy and planner/service loops on dedicated timers.
         self.create_timer(self.policy_period, self._policy_loop)
-        self.create_timer(self.mpc_period, self._planner_loop)
+        self.create_timer(self.service_period, self._planner_loop)
 
         self.get_logger().info("RL OCP policy bridge started")
         self.get_logger().info(f"Model: {self.model_path}")
         self.get_logger().info(f"Service: {self.planner_service}")
         self.get_logger().info(f"FollowPath action: {self.follow_path_action}")
         self.get_logger().info(
-            f"Loop rates: RL={1.0 / self.policy_period:.2f} Hz, service={1.0 / self.mpc_period:.2f} Hz"
+            f"Loop rates: RL={1.0 / self.policy_period:.2f} Hz, service={1.0 / self.service_period:.2f} Hz"
         )
         self.get_logger().info(f"Goal source mode: {self.goal_source_mode}")
         self.get_logger().info("Pipeline mode: RL/RViz local goal -> A* service -> MPPI FollowPath")
@@ -366,6 +385,27 @@ class RlOcpPolicyBridge(Node):
                 self.action_dim = max(2, int(p.value))
             elif p.name == "action_range":
                 self.action_range = float(p.value)
+            elif p.name == "obstacle_sample_step":
+                self.obstacle_sample_step = max(1, int(p.value))
+            elif p.name == "scan_filter_enabled":
+                self.scan_filter_enabled = bool(p.value)
+            elif p.name == "scan_obstacle_max_range":
+                self.scan_obstacle_max_range = max(0.0, float(p.value))
+            elif p.name == "scan_neighbor_window":
+                self.scan_neighbor_window = max(0, int(p.value))
+            elif p.name == "scan_min_neighbor_count":
+                self.scan_min_neighbor_count = max(0, int(p.value))
+            elif p.name == "scan_neighbor_max_delta":
+                self.scan_neighbor_max_delta = max(0.0, float(p.value))
+            elif p.name == "scan_persistence_hits":
+                self.scan_persistence_hits = max(1, int(p.value))
+            elif p.name == "scan_persistence_decay_scans":
+                self.scan_persistence_decay_scans = max(1, int(p.value))
+            elif p.name == "scan_persistence_resolution":
+                self.scan_persistence_resolution = max(0.01, float(p.value))
+                self.scan_persistence.clear()
+            elif p.name == "scan_obstacle_limit":
+                self.scan_obstacle_limit = max(1, int(p.value))
             elif p.name == "planner_half_width":
                 self.planner_half_width = float(p.value)
                 update_effective_bounds = True
@@ -407,7 +447,7 @@ class RlOcpPolicyBridge(Node):
 
         if update_loop_hz:
             self.policy_period = 1.0 / self.policy_hz
-            self.mpc_period = 1.0 / self.service_hz
+            self.service_period = 1.0 / self.service_hz
 
         return SetParametersResult(successful=True)
 
@@ -647,8 +687,7 @@ class RlOcpPolicyBridge(Node):
         if self.active_follow_path_goal_handle is not None:
             if not self._should_replan_follow_path(path_msg):
                 return
-            self.pending_follow_path_msg = path_msg
-            self._cancel_follow_path_goal()
+            self._send_new_follow_path_goal(goal_msg)
             return
 
         self._send_new_follow_path_goal(goal_msg)
@@ -710,6 +749,7 @@ class RlOcpPolicyBridge(Node):
 
     def _scan_callback(self, msg: LaserScan) -> None:
         self.latest_scan = msg
+        self.scan_seq += 1
 
     def _goal_callback(self, msg: PoseStamped) -> None:
         self.current_goal = (msg.pose.position.x, msg.pose.position.y)
@@ -1191,6 +1231,67 @@ class RlOcpPolicyBridge(Node):
                     return True
         return False
 
+    def _scan_has_neighbor_support(self, index: int, range_value: float) -> bool:
+        if not self.scan_filter_enabled:
+            return True
+        if self.latest_scan is None:
+            return False
+
+        window = max(0, int(self.scan_neighbor_window))
+        required = max(0, int(self.scan_min_neighbor_count))
+        if window == 0 or required == 0:
+            return True
+
+        ranges = self.latest_scan.ranges
+        r_min = self.latest_scan.range_min
+        r_max = self.latest_scan.range_max
+        max_delta = max(0.0, float(self.scan_neighbor_max_delta))
+        support_count = 0
+
+        for offset in range(-window, window + 1):
+            if offset == 0:
+                continue
+            j = index + offset
+            if j < 0 or j >= len(ranges):
+                continue
+            neighbor = ranges[j]
+            if not math.isfinite(neighbor):
+                continue
+            if neighbor < r_min or neighbor > r_max:
+                continue
+            if abs(float(neighbor) - float(range_value)) <= max_delta:
+                support_count += 1
+                if support_count >= required:
+                    return True
+
+        return False
+
+    def _scan_persistence_key(self, x: float, y: float) -> Tuple[int, int]:
+        resolution = max(0.01, float(self.scan_persistence_resolution))
+        return (int(round(float(x) / resolution)), int(round(float(y) / resolution)))
+
+    def _scan_is_persistent(self, x: float, y: float) -> bool:
+        if not self.scan_filter_enabled:
+            return True
+
+        required_hits = max(1, int(self.scan_persistence_hits))
+        decay_scans = max(1, int(self.scan_persistence_decay_scans))
+        key = self._scan_persistence_key(x, y)
+        count, last_seen = self.scan_persistence.get(key, (0, -1))
+        if last_seen != self.scan_seq:
+            count = min(required_hits, count + 1)
+        self.scan_persistence[key] = (count, self.scan_seq)
+
+        stale_keys = [
+            stale_key
+            for stale_key, (_, last_seen) in self.scan_persistence.items()
+            if self.scan_seq - last_seen > decay_scans
+        ]
+        for stale_key in stale_keys:
+            self.scan_persistence.pop(stale_key, None)
+
+        return count >= required_hits
+
     def _scan_only_obstacle_tuples(self) -> List[Tuple[float, float, float]]:
         obstacles = []
         if self.latest_scan is None or self.current_pose is None:
@@ -1209,6 +1310,8 @@ class RlOcpPolicyBridge(Node):
         angle_inc = self.latest_scan.angle_increment
         r_min = self.latest_scan.range_min
         r_max = self.latest_scan.range_max
+        if self.scan_filter_enabled and self.scan_obstacle_max_range > 0.0:
+            r_max = min(r_max, float(self.scan_obstacle_max_range))
 
         for i in range(0, len(ranges), max(1, self.obstacle_sample_step)):
             r = ranges[i]
@@ -1217,6 +1320,8 @@ class RlOcpPolicyBridge(Node):
             if r < r_min or r > r_max:
                 continue
             if r < min_safe_range:
+                continue
+            if not self._scan_has_neighbor_support(i, float(r)):
                 continue
 
             ang = yaw + angle_min + i * angle_inc
@@ -1230,7 +1335,13 @@ class RlOcpPolicyBridge(Node):
 
             if abs(ox - px_map) >= x_lim or abs(oy - py_map) >= y_lim:
                 continue
+            if not self._scan_is_persistent(ox, oy):
+                continue
             obstacles.append((ox, oy, self.obstacle_radius))
+
+        if len(obstacles) > max(1, int(self.scan_obstacle_limit)):
+            obstacles.sort(key=lambda p: math.hypot(float(p[0]) - px_map, float(p[1]) - py_map))
+            obstacles = obstacles[: max(1, int(self.scan_obstacle_limit))]
 
         return obstacles
 
@@ -1446,7 +1557,7 @@ class RlOcpPolicyBridge(Node):
                 "map_local_polygons_count": int(self.last_sent_map_polygons_count),
                 "planner_fail_streak": int(self.consecutive_planner_failures),
                 "policy_hz": float(1.0 / self.policy_period),
-                "planner_service_hz": float(1.0 / self.mpc_period),
+                "planner_service_hz": float(1.0 / self.service_period),
                 "goal_source_mode": str(self.goal_source_mode),
                 "selected_sub_goal": list(selected_sub_goal) if selected_sub_goal is not None else None,
                 "cached_sub_goal": list(self.latest_sub_goal) if self.latest_sub_goal is not None else None,
@@ -1485,14 +1596,14 @@ class RlOcpPolicyBridge(Node):
         self.action_debug_pub.publish(msg)
 
     def _scan_to_obstacle_msgs(self) -> List[ObstacleState]:
-        # Use both lidar and map-grid circles, then keep only nearest N for ACADOS.
+        # Use both lidar and map-grid circles, then keep only nearest obstacles.
         obs_tuples = self._scan_to_obstacle_tuples()
         pose_map = self._current_pose_in_map_frame()
         if pose_map is not None:
             px, py = pose_map
             obs_tuples.sort(key=lambda o: math.hypot(float(o[0]) - px, float(o[1]) - py))
 
-        # Keep only nearest obstacles to match ACADOS parameter capacity.
+        # Keep the nearest obstacles to keep planner requests bounded.
         max_supported = 40
         keep_n = min(max_supported, max(1, int(self.map_static_obstacle_limit)))
         obs_tuples = obs_tuples[:keep_n]

@@ -617,7 +617,7 @@ class AmpccRvizVisualizer(Node):
         polygons = payload.get("polygons", [])
         humans = payload.get("humans", [])
         trajectory = payload.get("trajectory", [])
-        mpc_debug = payload.get("mpc_debug", {})
+        reference_debug = payload.get("reference_debug", {})
         costmap_msg = self.last_costmap
 
         robot_radius = float(robot.get("radius", 0.25))
@@ -1026,9 +1026,9 @@ class AmpccRvizVisualizer(Node):
         traj_marker.type = Marker.LINE_STRIP
         traj_marker.action = Marker.ADD
         traj_marker.scale.x = 0.08
-        delta_rms = float(mpc_debug.get("stability_delta_rms_m", 0.0))
-        jitter_threshold = max(1e-6, float(mpc_debug.get("stability_warn_threshold_m", 0.35)))
-        stable = bool(float(mpc_debug.get("stable", 1.0)) > 0.5)
+        delta_rms = float(reference_debug.get("stability_delta_rms_m", 0.0))
+        jitter_threshold = max(1e-6, float(reference_debug.get("stability_warn_threshold_m", 0.35)))
+        stable = bool(float(reference_debug.get("stable", 1.0)) > 0.5)
         jitter_ratio = min(1.0, delta_rms / jitter_threshold)
 
         if stable:
@@ -1046,41 +1046,41 @@ class AmpccRvizVisualizer(Node):
             traj_marker.points.append(self._point(pt[0], pt[1], 0.08))
         markers.markers.append(traj_marker)
 
-        mpc_info = Marker()
-        mpc_info.header.frame_id = frame_id
-        mpc_info.header.stamp = now
-        mpc_info.ns = "planner_scene"
-        mpc_info.id = 151
-        mpc_info.type = Marker.TEXT_VIEW_FACING
-        mpc_info.action = Marker.ADD
-        mpc_info.scale.z = 0.25
+        reference_info = Marker()
+        reference_info.header.frame_id = frame_id
+        reference_info.header.stamp = now
+        reference_info.ns = "planner_scene"
+        reference_info.id = 151
+        reference_info.type = Marker.TEXT_VIEW_FACING
+        reference_info.action = Marker.ADD
+        reference_info.scale.z = 0.25
         if stable:
-            mpc_info.color.r = 0.20
-            mpc_info.color.g = 1.0
-            mpc_info.color.b = 0.25
+            reference_info.color.r = 0.20
+            reference_info.color.g = 1.0
+            reference_info.color.b = 0.25
         else:
-            mpc_info.color.r = 1.0
-            mpc_info.color.g = 0.20
-            mpc_info.color.b = 0.20
-        mpc_info.color.a = 0.95
+            reference_info.color.r = 1.0
+            reference_info.color.g = 0.20
+            reference_info.color.b = 0.20
+        reference_info.color.a = 0.95
 
         rx = float(robot.get("x", 0.0))
         ry = float(robot.get("y", 0.0))
-        mpc_info.pose.position.x = rx
-        mpc_info.pose.position.y = ry
-        mpc_info.pose.position.z = 1.0
+        reference_info.pose.position.x = rx
+        reference_info.pose.position.y = ry
+        reference_info.pose.position.z = 1.0
 
-        expected_h = int(float(mpc_debug.get("expected_horizon_steps", 0.0)))
-        received_h = int(float(mpc_debug.get("received_control_steps", 0.0)))
-        pred_pts = int(float(mpc_debug.get("predicted_points", 0.0)))
-        coverage = 100.0 * float(mpc_debug.get("horizon_coverage", 0.0))
-        traj_len = float(mpc_debug.get("trajectory_length_m", 0.0))
+        expected_h = int(float(reference_debug.get("expected_horizon_steps", 0.0)))
+        received_h = int(float(reference_debug.get("received_control_steps", 0.0)))
+        pred_pts = int(float(reference_debug.get("predicted_points", 0.0)))
+        coverage = 100.0 * float(reference_debug.get("horizon_coverage", 0.0))
+        traj_len = float(reference_debug.get("trajectory_length_m", 0.0))
         stability_tag = "STABLE" if stable else "UNSTABLE"
-        mpc_info.text = (
-            f"MPC H={expected_h} ctrl={received_h} pts={pred_pts} cov={coverage:.0f}%\\n"
+        reference_info.text = (
+            f"REF H={expected_h} ctrl={received_h} pts={pred_pts} cov={coverage:.0f}%\\n"
             f"len={traj_len:.2f}m dRMS={delta_rms:.3f}m -> {stability_tag}"
         )
-        markers.markers.append(mpc_info)
+        markers.markers.append(reference_info)
 
         horizon_end = Marker()
         horizon_end.header.frame_id = frame_id

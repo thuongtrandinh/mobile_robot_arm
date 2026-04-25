@@ -1,43 +1,19 @@
 opt_planner:
   ros__parameters:
-    # Legacy MPC params are still loaded because the planner backend reuses
-    # velocity-profile limits from this block when generating the A* reference.
-    mpc_structure.n_horizon: 20
-    mpc_structure.dt: 0.1
-    mpc_structure.wheel_half_track: 0.3
+    # A* reference generation and velocity-profile limits.
+    planner.reference_horizon_steps: 20
+    planner.reference_dt: 0.1
     scene_limits.num_static_obstacles: 40
     scene_limits.num_static_obstacles: 40
 
-    # Runtime-tunable cost weights
-    # Runtime-tunable cost weights
-    cost_weights.w_x: 5.0
-    cost_weights.w_y: 5.0
-    cost_weights.w_theta: 1.0
-    cost_weights.w_v: 1.0
-    cost_weights.w_r: 1.0
-    cost_weights.w_acc: 2.0
-    cost_weights.w_dr: 0.5
-    cost_weights.w_x_e: 100.0
-    cost_weights.w_y_e: 100.0
-    cost_weights.w_theta_e: 1.0
-    cost_weights.w_v_e: 1.0
-    cost_weights.w_r_e: 1.0
-
-    # Runtime constraints
     constraints.max_linear_vel: 0.3
     constraints.max_angular_vel: 0.3
     constraints.max_linear_acc: 1.0
     constraints.max_angular_acc: 1.0
 
-    # Optional legacy keys still consumed by current node paths
-    mpc.local_obst_num: 8
-    mpc.solver.max_iter: 250
-    mpc.solver.max_cpu_time: 0.09
-    mpc.polygon_clearance_margin: 0.03
-    mpc.wall_constraint_activation_distance: 2.0
-    mpc.weights.slack: 99999.0
-    mpc.weights.smooth_acc: 0.05
-    mpc.weights.smooth_yaw_acc: 0.05
+    planner.local_obstacle_count: 8
+    planner.polygon_clearance_margin: 0.03
+    planner.wall_constraint_activation_distance: 2.0
 
     # Reference source in planner:
     # - astar_subgoal: build A* path from robot pose to RL local goal
@@ -52,11 +28,13 @@ opt_planner:
 rl_ocp_policy_bridge:
   ros__parameters:
     # Direct frequency tuning [Hz]
-    policy_hz: 10.0
-    service_hz: 10.0
+    policy_hz: 5.0
+    service_hz: 5.0
     follow_path_action: /follow_path
     controller_id: FollowPath
     goal_checker_id: general_goal_checker
+    follow_path_replan_min_interval_sec: 0.80
+    follow_path_replan_path_delta: 0.35
     # Goal source mode:
     # - rl_local_goal: use PPO-generated local sub-goal
     # - rviz_global_goal: bypass PPO and send RViz global goal directly to planner
@@ -64,7 +42,6 @@ rl_ocp_policy_bridge:
     # Legacy params (fallback/compatibility)
     timer_period: 0.1
     policy_period: 0.1
-    mpc_period: 0.1
     # Match Nav2 goal checker so bridge/planner/controller stop in the same zone.
     goal_tolerance: 0.18
     robot_radius: 0.25
