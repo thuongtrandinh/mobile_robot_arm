@@ -4,7 +4,6 @@ opt_planner:
     planner.reference_horizon_steps: 20
     planner.reference_dt: 0.1
     scene_limits.num_static_obstacles: 40
-    scene_limits.num_static_obstacles: 40
 
     constraints.max_linear_vel: 0.3
     constraints.max_angular_vel: 0.3
@@ -35,6 +34,11 @@ rl_ocp_policy_bridge:
     goal_checker_id: general_goal_checker
     follow_path_replan_min_interval_sec: 0.80
     follow_path_replan_path_delta: 0.35
+    final_goal_approach_distance: 0.80
+    final_goal_xy_tolerance: 0.22
+    final_goal_yaw_tolerance: 0.25
+    final_goal_release_distance: 0.45
+    stop_cmd_topic: /diff_cont/cmd_vel_unstamped
     # Goal source mode:
     # - rl_local_goal: use PPO-generated local sub-goal
     # - rviz_global_goal: bypass PPO and send RViz global goal directly to planner

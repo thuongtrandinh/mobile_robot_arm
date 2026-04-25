@@ -15,7 +15,7 @@ from rclpy.action import ActionClient
 from interfaces.msg import ObstacleState, WallState, PolyState, HumanState
 from interfaces.msg import JointState as InterfaceJointState
 from interfaces.srv import OcpLocalPlann
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped, Twist
 from nav2_msgs.action import FollowPath
 from nav_msgs.msg import OccupancyGrid, Odometry, Path
 from nav2_msgs.action import FollowPath
@@ -117,6 +117,11 @@ class RlOcpPolicyBridge(Node):
         self.declare_parameter("local_path_topic", "/rl/local_path")
         self.declare_parameter("follow_path_replan_min_interval_sec", 0.80)
         self.declare_parameter("follow_path_replan_path_delta", 0.35)
+        self.declare_parameter("final_goal_approach_distance", 0.80)
+        self.declare_parameter("final_goal_xy_tolerance", 0.22)
+        self.declare_parameter("final_goal_yaw_tolerance", 0.25)
+        self.declare_parameter("final_goal_release_distance", 0.45)
+        self.declare_parameter("stop_cmd_topic", "/diff_cont/cmd_vel_unstamped")
 
         self.policy_env_name = self.get_parameter("policy_env_name").get_parameter_value().string_value
         self.halo_drl_dir = self.get_parameter("halo_drl_dir").get_parameter_value().string_value
@@ -228,10 +233,27 @@ class RlOcpPolicyBridge(Node):
             0.01,
             self.get_parameter("follow_path_replan_path_delta").get_parameter_value().double_value,
         )
+        self.final_goal_approach_distance = max(
+            0.0,
+            self.get_parameter("final_goal_approach_distance").get_parameter_value().double_value,
+        )
+        self.final_goal_xy_tolerance = max(
+            0.01,
+            self.get_parameter("final_goal_xy_tolerance").get_parameter_value().double_value,
+        )
+        self.final_goal_yaw_tolerance = max(
+            0.01,
+            self.get_parameter("final_goal_yaw_tolerance").get_parameter_value().double_value,
+        )
+        self.final_goal_release_distance = max(
+            self.final_goal_xy_tolerance,
+            self.get_parameter("final_goal_release_distance").get_parameter_value().double_value,
+        )
+        self.stop_cmd_topic = self.get_parameter("stop_cmd_topic").get_parameter_value().string_value
 
         self.current_pose: Optional[Tuple[float, float, float]] = None
         self.current_twist: Optional[Tuple[float, float]] = None
-        self.current_goal: Optional[Tuple[float, float]] = None
+        self.current_goal: Optional[Tuple[float, float, float]] = None
         self.current_goal_frame: str = ""
         self.latest_scan: Optional[LaserScan] = None
         self.scan_seq = 0
@@ -271,6 +293,7 @@ class RlOcpPolicyBridge(Node):
         self.latest_sub_goal: Optional[Tuple[float, float]] = None
         self.latest_sub_goal_seq = 0
         self.last_requested_sub_goal_seq = -1
+        self.final_goal_latched = False
         self.worker: Optional[subprocess.Popen] = None
         self.worker_stop_event = threading.Event()
         self.worker_state_lock = threading.Lock()
@@ -315,6 +338,7 @@ class RlOcpPolicyBridge(Node):
         self.planner_scene_debug_pub = self.create_publisher(String, self.planner_scene_debug_topic, 10)
         self.local_goal_pub = self.create_publisher(PoseStamped, self.local_goal_topic, 10)
         self.local_path_pub = self.create_publisher(Path, self.local_path_topic, 10)
+        self.stop_cmd_pub = self.create_publisher(Twist, self.stop_cmd_topic, 10)
         self.ocp_client = self.create_client(OcpLocalPlann, self.planner_service)
         self.follow_path_client = ActionClient(self, FollowPath, self.follow_path_action)
         self.add_on_set_parameters_callback(self._on_parameters_changed)
@@ -440,6 +464,17 @@ class RlOcpPolicyBridge(Node):
                 self.follow_path_replan_min_interval_sec = max(0.0, float(p.value))
             elif p.name == "follow_path_replan_path_delta":
                 self.follow_path_replan_path_delta = max(0.01, float(p.value))
+            elif p.name == "final_goal_approach_distance":
+                self.final_goal_approach_distance = max(0.0, float(p.value))
+            elif p.name == "final_goal_xy_tolerance":
+                self.final_goal_xy_tolerance = max(0.01, float(p.value))
+                self.final_goal_release_distance = max(
+                    self.final_goal_release_distance, self.final_goal_xy_tolerance
+                )
+            elif p.name == "final_goal_yaw_tolerance":
+                self.final_goal_yaw_tolerance = max(0.01, float(p.value))
+            elif p.name == "final_goal_release_distance":
+                self.final_goal_release_distance = max(self.final_goal_xy_tolerance, float(p.value))
 
         if update_effective_bounds:
             self.effective_half_width = min(self.planner_half_width, self.planner_hard_half_width)
@@ -586,6 +621,22 @@ class RlOcpPolicyBridge(Node):
 
         return float(sub_goal[0]), float(sub_goal[1])
 
+    @staticmethod
+    def _normalize_angle(angle: float) -> float:
+        while angle > math.pi:
+            angle -= 2.0 * math.pi
+        while angle < -math.pi:
+            angle += 2.0 * math.pi
+        return angle
+
+    @staticmethod
+    def _quaternion_from_yaw(yaw: float) -> Tuple[float, float]:
+        half_yaw = 0.5 * yaw
+        return math.sin(half_yaw), math.cos(half_yaw)
+
+    def _publish_zero_cmd(self) -> None:
+        self.stop_cmd_pub.publish(Twist())
+
     def _publish_local_goal(self, sub_goal: Tuple[float, float]) -> None:
         msg = PoseStamped()
         msg.header.stamp = self.get_clock().now().to_msg()
@@ -595,16 +646,49 @@ class RlOcpPolicyBridge(Node):
         msg.pose.orientation.w = 1.0
         self.local_goal_pub.publish(msg)
 
-    def _build_path_msg(self, path_points, frame_id: str) -> Path:
+    def _build_path_msg(self, path_points, frame_id: str, final_yaw: Optional[float] = None) -> Path:
         path_msg = Path()
         path_msg.header.stamp = self.get_clock().now().to_msg()
         path_msg.header.frame_id = frame_id if frame_id else self.map_frame
-        for pt in path_points:
+        point_list = list(path_points)
+        for i, pt in enumerate(point_list):
             pose = PoseStamped()
             pose.header = path_msg.header
             pose.pose.position.x = float(pt.x)
             pose.pose.position.y = float(pt.y)
-            pose.pose.orientation.w = 1.0
+            yaw = final_yaw if final_yaw is not None else 0.0
+            if i + 1 < len(point_list):
+                next_pt = point_list[i + 1]
+                dx = float(next_pt.x) - float(pt.x)
+                dy = float(next_pt.y) - float(pt.y)
+                if math.hypot(dx, dy) > 1e-6:
+                    yaw = math.atan2(dy, dx)
+            elif final_yaw is None and len(path_msg.poses) > 0:
+                pose.pose.orientation = path_msg.poses[-1].pose.orientation
+                path_msg.poses.append(pose)
+                continue
+            qz, qw = self._quaternion_from_yaw(yaw)
+            pose.pose.orientation.z = qz
+            pose.pose.orientation.w = qw
+            path_msg.poses.append(pose)
+        return path_msg
+
+    def _build_final_alignment_path(
+        self,
+        pose_map_with_yaw: Tuple[float, float, float],
+        goal_map_with_yaw: Tuple[float, float, float],
+    ) -> Path:
+        path_msg = Path()
+        path_msg.header.stamp = self.get_clock().now().to_msg()
+        path_msg.header.frame_id = self.map_frame
+        for x, y, yaw in (pose_map_with_yaw, goal_map_with_yaw):
+            pose = PoseStamped()
+            pose.header = path_msg.header
+            pose.pose.position.x = float(x)
+            pose.pose.position.y = float(y)
+            qz, qw = self._quaternion_from_yaw(float(yaw))
+            pose.pose.orientation.z = qz
+            pose.pose.orientation.w = qw
             path_msg.poses.append(pose)
         return path_msg
 
@@ -752,8 +836,15 @@ class RlOcpPolicyBridge(Node):
         self.scan_seq += 1
 
     def _goal_callback(self, msg: PoseStamped) -> None:
-        self.current_goal = (msg.pose.position.x, msg.pose.position.y)
+        q = msg.pose.orientation
+        goal_yaw = self._yaw_from_quaternion(q.x, q.y, q.z, q.w)
+        self.current_goal = (msg.pose.position.x, msg.pose.position.y, goal_yaw)
         self.current_goal_frame = msg.header.frame_id if msg.header.frame_id else self.current_goal_frame
+        self.final_goal_latched = False
+        self.goal_reached = False
+        self.latest_sub_goal = None
+        self.pending_follow_path_msg = None
+        self.last_sent_follow_path = None
 
     def _human_callback(self, msg: HumanArray) -> None:
         self.latest_humans = msg
@@ -1196,11 +1287,75 @@ class RlOcpPolicyBridge(Node):
         return float(map_xy[0]), float(map_xy[1]), yaw_map
 
     def _current_goal_in_map_frame(self) -> Optional[Tuple[float, float]]:
+        goal_pose = self._current_goal_pose_in_map_frame()
+        if goal_pose is None:
+            return None
+        return goal_pose[0], goal_pose[1]
+
+    def _current_goal_pose_in_map_frame(self) -> Optional[Tuple[float, float, float]]:
         if self.current_goal is None:
             return None
-        gx, gy = self.current_goal
+        gx, gy, goal_yaw = self.current_goal
         source_frame = self.current_goal_frame if self.current_goal_frame else self.map_frame
-        return self._transform_point_2d(gx, gy, source_frame, self.map_frame)
+        map_xy = self._transform_point_2d(gx, gy, source_frame, self.map_frame)
+        if map_xy is None:
+            return None
+
+        if source_frame == self.map_frame:
+            return float(map_xy[0]), float(map_xy[1]), float(goal_yaw)
+
+        try:
+            tf_msg = self.tf_buffer.lookup_transform(
+                self.map_frame,
+                source_frame,
+                Time(),
+                timeout=Duration(seconds=0.05),
+            )
+        except TransformException:
+            return None
+
+        r = tf_msg.transform.rotation
+        tf_yaw = self._yaw_from_quaternion(r.x, r.y, r.z, r.w)
+        return float(map_xy[0]), float(map_xy[1]), self._normalize_angle(float(goal_yaw + tf_yaw))
+
+    def _final_goal_error(
+        self,
+        pose_map_with_yaw: Tuple[float, float, float],
+        goal_map_with_yaw: Tuple[float, float, float],
+    ) -> Tuple[float, float]:
+        px, py, yaw = pose_map_with_yaw
+        gx, gy, goal_yaw = goal_map_with_yaw
+        xy_error = math.hypot(float(gx) - float(px), float(gy) - float(py))
+        yaw_error = abs(self._normalize_angle(float(goal_yaw) - float(yaw)))
+        return xy_error, yaw_error
+
+    def _update_final_goal_latch(
+        self,
+        pose_map_with_yaw: Tuple[float, float, float],
+        goal_map_with_yaw: Tuple[float, float, float],
+    ) -> Tuple[bool, float, float]:
+        xy_error, yaw_error = self._final_goal_error(pose_map_with_yaw, goal_map_with_yaw)
+        if self.final_goal_latched:
+            if xy_error > self.final_goal_release_distance:
+                self.final_goal_latched = False
+            else:
+                return True, xy_error, yaw_error
+
+        if xy_error <= self.final_goal_xy_tolerance and yaw_error <= self.final_goal_yaw_tolerance:
+            self.final_goal_latched = True
+            return True, xy_error, yaw_error
+
+        return False, xy_error, yaw_error
+
+    def _hold_final_goal_stop(self) -> None:
+        self.goal_reached = True
+        self.latest_sub_goal = None
+        self.last_astar_path_for_viz = []
+        self.last_sent_follow_path = None
+        self.pending_follow_path_msg = None
+        self._cancel_follow_path_goal()
+        self._publish_zero_cmd()
+        self._publish_action_visualization(None)
 
     def _is_occupied_from_map(self, world_x: float, world_y: float, clearance: float) -> bool:
         if (
@@ -1830,7 +1985,9 @@ class RlOcpPolicyBridge(Node):
             self._publish_planner_scene_debug(self.last_request_for_viz, astar_path)
 
         if res.success:
-            path_msg = self._build_path_msg(res.astar_path, self.map_frame)
+            goal_pose = self._current_goal_pose_in_map_frame()
+            final_yaw = goal_pose[2] if goal_pose is not None else None
+            path_msg = self._build_path_msg(res.astar_path, self.map_frame, final_yaw=final_yaw)
             self.local_path_pub.publish(path_msg)
             self._send_follow_path_goal(path_msg)
 
@@ -1856,9 +2013,9 @@ class RlOcpPolicyBridge(Node):
             )
             return
 
-        pose_map = self._current_pose_in_map_frame()
-        goal_map = self._current_goal_in_map_frame()
-        if pose_map is None or goal_map is None:
+        pose_map_with_yaw = self._current_pose_with_yaw_in_map_frame()
+        goal_map_with_yaw = self._current_goal_pose_in_map_frame()
+        if pose_map_with_yaw is None or goal_map_with_yaw is None:
             self._throttled_log(
                 "_last_policy_wait_tf_log_ns",
                 2.0,
@@ -1866,17 +2023,23 @@ class RlOcpPolicyBridge(Node):
             )
             return
 
-        px, py = pose_map
-        gx, gy = goal_map
-        if math.hypot(gx - px, gy - py) < self.goal_tolerance:
-            self.goal_reached = True
-            self.latest_sub_goal = None
-            self.last_astar_path_for_viz = []
-            self._cancel_follow_path_goal()
-            self._publish_action_visualization(None)
+        px, py, _ = pose_map_with_yaw
+        gx, gy, _ = goal_map_with_yaw
+        final_latched, xy_error, _ = self._update_final_goal_latch(
+            pose_map_with_yaw, goal_map_with_yaw
+        )
+        if final_latched:
+            self._hold_final_goal_stop()
             return
 
         self.goal_reached = False
+        if xy_error <= self.final_goal_approach_distance:
+            self.latest_sub_goal = (float(gx), float(gy))
+            self.latest_sub_goal_seq += 1
+            self.last_mask_applied = False
+            self.last_mask_snap_distance = 0.0
+            self._publish_action_visualization(self.latest_sub_goal)
+            return
 
         if self.goal_source_mode == self._GOAL_SOURCE_RVIZ:
             self.latest_sub_goal = (float(gx), float(gy))
@@ -1932,8 +2095,8 @@ class RlOcpPolicyBridge(Node):
             return
 
         pose_map_with_yaw = self._current_pose_with_yaw_in_map_frame()
-        goal_map = self._current_goal_in_map_frame()
-        if pose_map_with_yaw is None or goal_map is None:
+        goal_map_with_yaw = self._current_goal_pose_in_map_frame()
+        if pose_map_with_yaw is None or goal_map_with_yaw is None:
             self._throttled_log(
                 "_last_planner_wait_tf_log_ns",
                 2.0,
@@ -1942,19 +2105,12 @@ class RlOcpPolicyBridge(Node):
             return
 
         px, py, _ = pose_map_with_yaw
-        gx, gy = goal_map
-        if math.hypot(gx - px, gy - py) < self.goal_tolerance:
-            self.goal_reached = True
-            # In cascaded mode, keep sending state updates so the C++ planner can
-            # apply planner.goal_stop_distance and hold cmd_vel at zero near goal.
-            self.last_sent_follow_path = None
-            self.pending_follow_path_msg = None
-            self._cancel_follow_path_goal()
-            if self.pending_future is None:
-                try:
-                    self._send_planner_request((px, py))
-                except Exception as exc:
-                    self.get_logger().error(f"Planner goal-stop update failed: {exc}")
+        gx, gy, _ = goal_map_with_yaw
+        final_latched, xy_error, _ = self._update_final_goal_latch(
+            pose_map_with_yaw, goal_map_with_yaw
+        )
+        if final_latched:
+            self._hold_final_goal_stop()
             return
 
         self.goal_reached = False
@@ -1963,9 +2119,30 @@ class RlOcpPolicyBridge(Node):
 
         if self.goal_source_mode == self._GOAL_SOURCE_RVIZ:
             try:
-                self._send_planner_request((float(gx), float(gy)))
+                if xy_error <= self.final_goal_xy_tolerance:
+                    path_msg = self._build_final_alignment_path(
+                        pose_map_with_yaw, goal_map_with_yaw
+                    )
+                    self.local_path_pub.publish(path_msg)
+                    self._send_follow_path_goal(path_msg)
+                else:
+                    self._send_planner_request((float(gx), float(gy)))
             except Exception as exc:
                 self.get_logger().error(f"Planner loop failed (rviz_global_goal mode): {exc}")
+            return
+
+        if xy_error <= self.final_goal_approach_distance:
+            try:
+                if xy_error <= self.final_goal_xy_tolerance:
+                    path_msg = self._build_final_alignment_path(
+                        pose_map_with_yaw, goal_map_with_yaw
+                    )
+                    self.local_path_pub.publish(path_msg)
+                    self._send_follow_path_goal(path_msg)
+                else:
+                    self._send_planner_request((float(gx), float(gy)))
+            except Exception as exc:
+                self.get_logger().error(f"Planner loop failed (final approach): {exc}")
             return
 
         if self.latest_sub_goal is None:

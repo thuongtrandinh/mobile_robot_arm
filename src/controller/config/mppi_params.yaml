@@ -36,7 +36,7 @@ controller_server:
       ay_min: 0.0
       az_min: -1.0
       az_max: 1.0
-      vx_min: -0.3
+      vx_min: 0.0
       vx_max: 0.3
       vy_min: 0.0   # Bắt buộc = 0 cho DDMR
       vy_max: 0.0
