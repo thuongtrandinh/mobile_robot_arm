@@ -34,14 +34,14 @@ controller_server:
       ax_max: 0.1
       ay_max: 0.0
       ay_min: 0.0
-      az_min: -0.25
-      az_max: 0.25
+      az_min: -0.05
+      az_max: 0.05
       vx_min: 0.0
       vx_max: 0.3
       vy_min: 0.0   # Bắt buộc = 0 cho DDMR
       vy_max: 0.0
-      vz_min: -0.15
-      vz_max: 0.15
+      vz_min: -0.1
+      vz_max: 0.1
 
       # Thông số nội bộ của MPPI
       motion_model: "DiffDrive" # Khai báo rõ mô hình động học vi sai
@@ -55,8 +55,8 @@ controller_server:
         # Publish a sparse sample of MPPI's rollout cloud for RViz.
         # batch_size=2000, time_steps=56:
         #   50/7 => about 40 trajectories x 8 points instead of 400 x 19.
-        trajectory_step: 50
-        time_step: 7
+        trajectory_step: 500
+        time_step: 20
 
       # --- CÁC HÀM ĐÁNH GIÁ (CRITICS) BẮT BUỘC ---
       critics:

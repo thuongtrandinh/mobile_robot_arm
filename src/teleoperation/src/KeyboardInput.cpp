@@ -60,8 +60,8 @@ void KeyboardInput::keyboardLoop()
         {
             case 'w': case 'W': linear = 0.2; break;
             case 's': case 'S': linear = -0.2; break;
-            case 'a': case 'A': angular = 0.2; break;
-            case 'd': case 'D': angular = -0.2; break;
+            case 'a': case 'A': angular = 0.4; break;
+            case 'd': case 'D': angular = -0.4; break;
             case ' ': linear = 0.0; angular = 0.0; break;
             default: continue; 
         }

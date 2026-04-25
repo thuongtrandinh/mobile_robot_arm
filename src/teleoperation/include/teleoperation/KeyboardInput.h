@@ -1,8 +1,7 @@
 #pragma once
 
 #include <rclcpp/rclcpp.hpp>
-#include "geometry_msgs/msg/twist_stamped.hpp"
-#include <geometry_msgs/msg/twist.hpp>
+#include <geometry_msgs/msg/twist.hpp> // Chỉ cần Twist cho STM32
 #include <termios.h>
 #include <unistd.h>
 #include <thread>
@@ -19,7 +18,9 @@ public:
 private:
     void keyboardLoop();
 
-    rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr cmd_pub_;
+    // Đã sửa từ TwistStamped thành Twist để khớp với KeyboardInput.cpp và STM32
+    rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_pub_;
+    
     std::thread input_thread_;
     struct termios oldt_;
 };
