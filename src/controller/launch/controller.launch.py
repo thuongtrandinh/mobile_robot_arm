@@ -34,7 +34,7 @@ def generate_launch_description():
     mppi_params_file = LaunchConfiguration("mppi_params_file")
 
     use_sim_time_arg = DeclareLaunchArgument(
-        "use_sim_time", default_value="true", description="Use simulation time if true"
+        "use_sim_time", default_value="false", description="Use simulation time if true"
     )
     respawn_arg = DeclareLaunchArgument(
         "respawn", default_value="false", description="Respawn node when it crashes"
@@ -245,13 +245,14 @@ def generate_launch_description():
                 "service_hz": 5.0,
                 "follow_path_replan_min_interval_sec": 0.80,
                 "follow_path_replan_path_delta": 0.35,
+                "tf_timeout_sec": 0.25,
                 "obstacle_sample_step": 16,
                 "scan_filter_enabled": True,
                 "scan_obstacle_max_range": 3.0,
                 "scan_neighbor_window": 2,
-                "scan_min_neighbor_count": 2,
-                "scan_neighbor_max_delta": 0.18,
-                "scan_persistence_hits": 2,
+                "scan_min_neighbor_count": 1,
+                "scan_neighbor_max_delta": 0.25,
+                "scan_persistence_hits": 1,
                 "scan_persistence_decay_scans": 4,
                 "scan_persistence_resolution": 0.12,
                 "scan_obstacle_limit": 60,

@@ -10,6 +10,7 @@ import numpy as np
 import rclpy
 from rcl_interfaces.msg import SetParametersResult
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
 from std_msgs.msg import String
 from std_msgs.msg import ColorRGBA
 from visualization_msgs.msg import Marker, MarkerArray
@@ -181,7 +182,7 @@ class AmpccRvizVisualizer(Node):
         self.create_subscription(OccupancyGrid, self.local_costmap_topic, self._on_local_costmap, 10)
         self.create_subscription(OccupancyGrid, self.map_topic, self._on_map, 10)
         self.create_subscription(OccupancyGrid, self.astar_local_map_topic, self._on_astar_local_map, 10)
-        self.create_subscription(LaserScan, self.scan_topic, self._on_scan, 10)
+        self.create_subscription(LaserScan, self.scan_topic, self._on_scan, qos_profile_sensor_data)
         self.create_subscription(Path, self.astar_path_topic, self._on_astar_path, 10)
         if self.visualize_joint_state_geometry:
             self.create_subscription(InterfaceJointState, self.joint_state_topic, self._on_joint_state, 10)

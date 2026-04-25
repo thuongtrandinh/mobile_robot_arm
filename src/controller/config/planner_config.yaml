@@ -6,9 +6,9 @@ opt_planner:
     scene_limits.num_static_obstacles: 40
 
     constraints.max_linear_vel: 0.3
-    constraints.max_angular_vel: 0.3
+    constraints.max_angular_vel: 0.27
     constraints.max_linear_acc: 1.0
-    constraints.max_angular_acc: 1.0
+    constraints.max_angular_acc: 0.525
 
     planner.local_obstacle_count: 8
     planner.polygon_clearance_margin: 0.03
@@ -29,6 +29,7 @@ rl_ocp_policy_bridge:
     # Direct frequency tuning [Hz]
     policy_hz: 5.0
     service_hz: 5.0
+    tf_timeout_sec: 0.25
     follow_path_action: /follow_path
     controller_id: FollowPath
     goal_checker_id: general_goal_checker
@@ -51,6 +52,16 @@ rl_ocp_policy_bridge:
     robot_radius: 0.25
     obstacle_radius: 0.25
     action_mask_clearance: 0.10
+    obstacle_sample_step: 16
+    scan_filter_enabled: true
+    scan_obstacle_max_range: 3.0
+    scan_neighbor_window: 2
+    scan_min_neighbor_count: 1
+    scan_neighbor_max_delta: 0.25
+    scan_persistence_hits: 1
+    scan_persistence_decay_scans: 4
+    scan_persistence_resolution: 0.12
+    scan_obstacle_limit: 60
     # Keep wall/poly constraints always active unless explicitly enabled
     auto_relax_constraints: false
     # Include occupied cells from /map as static obstacles for RL mask/planner debug

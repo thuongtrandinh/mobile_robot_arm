@@ -17,12 +17,10 @@ from interfaces.srv import OcpLocalPlann
 from geometry_msgs.msg import PoseStamped, Twist
 from nav2_msgs.action import FollowPath
 from nav_msgs.msg import OccupancyGrid, Odometry, Path
-from nav2_msgs.action import FollowPath
-from nav_msgs.msg import OccupancyGrid, Odometry, Path
 from rcl_interfaces.msg import SetParametersResult
 from rclpy.duration import Duration
 from rclpy.node import Node
-from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
+from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
 from rclpy.time import Time
 from sensor_msgs.msg import LaserScan
 from std_msgs.msg import String
@@ -72,6 +70,7 @@ class RlOcpPolicyBridge(Node):
         self.declare_parameter("service_hz", 10.0)
         self.declare_parameter("goal_source_mode", self._GOAL_SOURCE_RL)
         self.declare_parameter("policy_period", 0.2)
+        self.declare_parameter("tf_timeout_sec", 0.25)
 
         self.declare_parameter("planner_half_width", 5.8)
         self.declare_parameter("planner_half_height", 9.8)
@@ -160,6 +159,10 @@ class RlOcpPolicyBridge(Node):
         )
         self.policy_period = 1.0 / self.policy_hz
         self.service_period = 1.0 / self.service_hz
+        self.tf_timeout_sec = max(
+            0.01,
+            self.get_parameter("tf_timeout_sec").get_parameter_value().double_value,
+        )
         self.planner_half_width = self.get_parameter("planner_half_width").get_parameter_value().double_value
         self.planner_half_height = self.get_parameter("planner_half_height").get_parameter_value().double_value
         self.planner_hard_half_width = self.get_parameter("planner_hard_half_width").get_parameter_value().double_value
@@ -255,6 +258,7 @@ class RlOcpPolicyBridge(Node):
         self.current_goal: Optional[Tuple[float, float, float]] = None
         self.current_goal_frame: str = ""
         self.latest_scan: Optional[LaserScan] = None
+        self.scan_frame: str = ""
         self.scan_seq = 0
         self.scan_persistence: Dict[Tuple[int, int], Tuple[int, int]] = {}
         self.latest_humans: Optional[HumanArray] = None
@@ -319,16 +323,23 @@ class RlOcpPolicyBridge(Node):
         self._start_policy_worker()
 
         self.create_subscription(Odometry, self.odom_topic, self._odom_callback, 10)
-        self.create_subscription(LaserScan, self.scan_topic, self._scan_callback, 10)
+        self.create_subscription(LaserScan, self.scan_topic, self._scan_callback, qos_profile_sensor_data)
         self.create_subscription(PoseStamped, self.goal_topic, self._goal_callback, 10)
         self.create_subscription(HumanArray, self.human_topic, self._human_callback, 10)
-        map_qos = QoSProfile(
+        map_qos_volatile = QoSProfile(
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.VOLATILE,
+        )
+        map_qos_transient = QoSProfile(
             history=HistoryPolicy.KEEP_LAST,
             depth=1,
             reliability=ReliabilityPolicy.RELIABLE,
             durability=DurabilityPolicy.TRANSIENT_LOCAL,
         )
-        self.create_subscription(OccupancyGrid, self.map_topic, self._map_callback, map_qos)
+        self.create_subscription(OccupancyGrid, self.map_topic, self._map_callback, map_qos_volatile)
+        self.create_subscription(OccupancyGrid, self.map_topic, self._map_callback, map_qos_transient)
 
         self.debug_joint_state_pub = self.create_publisher(InterfaceJointState, self.debug_joint_state_topic, 10)
         self.policy_debug_status_pub = self.create_publisher(String, self.policy_debug_status_topic, 10)
@@ -377,6 +388,8 @@ class RlOcpPolicyBridge(Node):
             elif p.name == "goal_source_mode":
                 self.goal_source_mode = self._normalize_goal_source_mode(str(p.value))
                 self.get_logger().info(f"Updated goal_source_mode: {self.goal_source_mode}")
+            elif p.name == "tf_timeout_sec":
+                self.tf_timeout_sec = max(0.01, float(p.value))
             if p.name == "visualize_actions":
                 self.visualize_actions = bool(p.value)
             elif p.name == "publish_debug_joint_state":
@@ -831,6 +844,7 @@ class RlOcpPolicyBridge(Node):
 
     def _scan_callback(self, msg: LaserScan) -> None:
         self.latest_scan = msg
+        self.scan_frame = msg.header.frame_id if msg.header.frame_id else self.scan_frame
         self.scan_seq += 1
 
     def _goal_callback(self, msg: PoseStamped) -> None:
@@ -1097,11 +1111,22 @@ class RlOcpPolicyBridge(Node):
                 target_frame,
                 source_frame,
                 Time(),
-                timeout=Duration(seconds=0.05),
+                timeout=Duration(seconds=self.tf_timeout_sec),
             )
         except TransformException:
             return None
 
+        return self._transform_point_with_tf(x, y, tf_msg)
+
+    def _lookup_transform(self, target_frame: str, source_frame: str):
+        return self.tf_buffer.lookup_transform(
+            target_frame,
+            source_frame,
+            Time(),
+            timeout=Duration(seconds=self.tf_timeout_sec),
+        )
+
+    def _transform_point_with_tf(self, x: float, y: float, tf_msg) -> Tuple[float, float]:
         t = tf_msg.transform.translation
         r = tf_msg.transform.rotation
         yaw = self._yaw_from_quaternion(r.x, r.y, r.z, r.w)
@@ -1132,7 +1157,7 @@ class RlOcpPolicyBridge(Node):
                     self.map_frame,
                     source_frame,
                     Time(),
-                    timeout=Duration(seconds=0.05),
+                    timeout=Duration(seconds=self.tf_timeout_sec),
                 )
             except TransformException as exc:
                 self._throttled_log(
@@ -1193,7 +1218,7 @@ class RlOcpPolicyBridge(Node):
                 self.map_frame,
                 source_frame,
                 Time(),
-                timeout=Duration(seconds=0.05),
+                timeout=Duration(seconds=self.tf_timeout_sec),
             )
         except TransformException:
             return None
@@ -1231,7 +1256,7 @@ class RlOcpPolicyBridge(Node):
                 self.map_frame,
                 source_frame,
                 Time(),
-                timeout=Duration(seconds=0.05),
+                timeout=Duration(seconds=self.tf_timeout_sec),
             )
         except TransformException:
             return None
@@ -1374,11 +1399,26 @@ class RlOcpPolicyBridge(Node):
         if self.latest_scan is None or self.current_pose is None:
             return obstacles
 
-        px, py, yaw = self.current_pose
         pose_map = self._current_pose_in_map_frame()
         if pose_map is None:
             return obstacles
         px_map, py_map = pose_map
+        scan_frame = self.scan_frame if self.scan_frame else self.pose_frame
+        scan_tf = None
+        if not scan_frame:
+            return obstacles
+        if scan_frame != self.map_frame:
+            try:
+                scan_tf = self._lookup_transform(self.map_frame, scan_frame)
+            except TransformException as exc:
+                self._throttled_log(
+                    "_last_scan_tf_warn_ns",
+                    2.0,
+                    "[scan] waiting TF %s -> %s: %s"
+                    % (str(scan_frame), str(self.map_frame), str(exc)),
+                )
+                return obstacles
+
         x_lim = min(self.effective_half_width, self.planner_x_limit)
         y_lim = min(self.effective_half_height, self.planner_y_limit)
         min_safe_range = self.robot_radius + 0.12
@@ -1401,14 +1441,15 @@ class RlOcpPolicyBridge(Node):
             if not self._scan_has_neighbor_support(i, float(r)):
                 continue
 
-            ang = yaw + angle_min + i * angle_inc
-            ox = px + r * math.cos(ang)
-            oy = py + r * math.sin(ang)
-
-            map_xy = self._point_to_map_frame(ox, oy)
-            if map_xy is None:
+            ang = angle_min + i * angle_inc
+            sx = r * math.cos(ang)
+            sy = r * math.sin(ang)
+            if scan_frame == self.map_frame:
+                ox, oy = sx, sy
+            elif scan_tf is not None:
+                ox, oy = self._transform_point_with_tf(sx, sy, scan_tf)
+            else:
                 continue
-            ox, oy = map_xy
 
             if abs(ox - px_map) >= x_lim or abs(oy - py_map) >= y_lim:
                 continue
