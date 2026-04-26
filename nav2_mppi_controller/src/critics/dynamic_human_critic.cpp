@@ -29,7 +29,7 @@
 namespace mppi::critics
 {
 
-using xt::evaluation_strategy::immediate;
+using xt::evaluation_strategy::immediate;feat
 
 void DynamicHumanCritic::initialize()
 {
