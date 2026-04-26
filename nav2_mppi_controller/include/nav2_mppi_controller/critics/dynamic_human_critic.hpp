@@ -23,6 +23,7 @@
 #include "interfaces/msg/human_state.hpp"
 #include "nav2_mppi_controller/critic_function.hpp"
 #include "rclcpp/rclcpp.hpp"
+#include "std_msgs/msg/string.hpp"
 
 namespace mppi::critics
 {
@@ -47,6 +48,7 @@ protected:
   std::vector<Human> getHumansInFrame(const std::string & target_frame);
 
   rclcpp::Subscription<interfaces::msg::HumanArray>::SharedPtr humans_sub_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr debug_pub_;
 
   std::mutex humans_mutex_;
   interfaces::msg::HumanArray latest_humans_;
@@ -58,6 +60,8 @@ protected:
   float robot_radius_{0.0f};
   float data_timeout_{0.0f};
   std::string human_topic_;
+  std::string debug_topic_;
+  bool publish_debug_{false};
 };
 
 }  // namespace mppi::critics

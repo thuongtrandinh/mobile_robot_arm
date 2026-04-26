@@ -73,6 +73,8 @@ controller_server:
       DynamicHumanCritic:
         enabled: true
         human_topic: /tracking/humans
+        publish_debug: true
+        debug_topic: /debug/dynamic_human_critic
         cost_weight: 1.0
         collision_cost: 100000.0
         safe_margin: 0.25

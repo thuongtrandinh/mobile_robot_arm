@@ -25,6 +25,7 @@ set(dependencies_pkgs
   pluginlib
   tf2
   geometry_msgs
+  std_msgs
   visualization_msgs
   nav_msgs
   nav2_core

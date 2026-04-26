@@ -16,6 +16,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
+#include <sstream>
 
 #include "geometry_msgs/msg/point_stamped.hpp"
 #include "geometry_msgs/msg/vector3_stamped.hpp"
@@ -29,7 +31,7 @@
 namespace mppi::critics
 {
 
-using xt::evaluation_strategy::immediate;feat
+using xt::evaluation_strategy::immediate;
 
 void DynamicHumanCritic::initialize()
 {
@@ -40,6 +42,8 @@ void DynamicHumanCritic::initialize()
   getParam(safe_margin_, "safe_margin", 0.20f);
   getParam(data_timeout_, "data_timeout", 0.5f);
   getParam(human_topic_, "human_topic", std::string("/tracking/humans"));
+  getParam(publish_debug_, "publish_debug", true);
+  getParam(debug_topic_, "debug_topic", std::string("/debug/dynamic_human_critic"));
 
   robot_radius_ = static_cast<float>(costmap_ros_->getRobotRadius());
   getParam(robot_radius_, "robot_radius", robot_radius_);
@@ -52,12 +56,14 @@ void DynamicHumanCritic::initialize()
   humans_sub_ = node->create_subscription<interfaces::msg::HumanArray>(
     human_topic_, rclcpp::SystemDefaultsQoS(),
     std::bind(&DynamicHumanCritic::humansCallback, this, std::placeholders::_1));
+  debug_pub_ = node->create_publisher<std_msgs::msg::String>(debug_topic_, 10);
 
   RCLCPP_INFO(
     logger_,
     "DynamicHumanCritic subscribed to %s with weight=%f collision_cost=%f "
-    "safe_margin=%f robot_radius=%f data_timeout=%f.",
-    human_topic_.c_str(), weight_, collision_cost_, safe_margin_, robot_radius_, data_timeout_);
+    "safe_margin=%f robot_radius=%f data_timeout=%f debug_topic=%s.",
+    human_topic_.c_str(), weight_, collision_cost_, safe_margin_, robot_radius_, data_timeout_,
+    debug_topic_.c_str());
 }
 
 void DynamicHumanCritic::humansCallback(const interfaces::msg::HumanArray::SharedPtr msg)
@@ -168,6 +174,8 @@ void DynamicHumanCritic::score(CriticData & data)
   const auto time_steps = data.trajectories.x.shape(1);
   const auto time = xt::arange<float>(0.0f, static_cast<float>(time_steps)) * data.model_dt;
   xt::xtensor<float, 1> total_human_cost = xt::zeros<float>({data.costs.shape(0)});
+  float min_distance = std::numeric_limits<float>::infinity();
+  size_t colliding_trajectory_count = 0;
 
   for (const auto & human : humans) {
     const auto human_x = human.px + human.vx * time;
@@ -179,6 +187,7 @@ void DynamicHumanCritic::score(CriticData & data)
     const auto dx = data.trajectories.x - human_x;
     const auto dy = data.trajectories.y - human_y;
     const auto dist_sq = dx * dx + dy * dy;
+    min_distance = std::min(min_distance, std::sqrt(xt::amin(dist_sq)()));
 
     auto collision_costs = xt::where(
       dist_sq < collision_radius_sq,
@@ -189,6 +198,27 @@ void DynamicHumanCritic::score(CriticData & data)
   }
 
   data.costs += weight_ * total_human_cost;
+
+  if (publish_debug_ && debug_pub_->get_subscription_count() > 0) {
+    const auto colliding_flags = total_human_cost > 0.0f;
+    colliding_trajectory_count = static_cast<size_t>(xt::sum(xt::cast<size_t>(colliding_flags))());
+    const float max_added_cost = xt::amax(total_human_cost)() * weight_;
+    const float mean_added_cost = xt::mean(total_human_cost)() * weight_;
+
+    std_msgs::msg::String msg;
+    std::ostringstream out;
+    out << "enabled=" << (enabled_ ? "true" : "false")
+        << " humans=" << humans.size()
+        << " batch_size=" << data.costs.shape(0)
+        << " time_steps=" << time_steps
+        << " colliding_trajectories=" << colliding_trajectory_count
+        << " min_predicted_distance=" << min_distance
+        << " safe_collision_radius_min=" << robot_radius_ + safe_margin_
+        << " max_added_cost=" << max_added_cost
+        << " mean_added_cost=" << mean_added_cost;
+    msg.data = out.str();
+    debug_pub_->publish(msg);
+  }
 }
 
 }  // namespace mppi::critics
