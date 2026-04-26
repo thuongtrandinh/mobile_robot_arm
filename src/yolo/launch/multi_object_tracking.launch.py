@@ -62,6 +62,8 @@ def generate_launch_description():
     # ===== LOAD CONFIG FILE =====
     yolo_pkg_share = get_package_share_directory('yolo')
     config_path = os.path.join(yolo_pkg_share, 'config', 'params.yaml')
+    yolo_python = os.path.expanduser('~/miniconda3/envs/yolo_training/bin/python')
+    default_python_prefix = yolo_python if os.path.exists(yolo_python) else ''
     
     # ===== LAUNCH ARGUMENTS =====
     declare_use_cuda = DeclareLaunchArgument(
@@ -94,6 +96,24 @@ def generate_launch_description():
         description='Enable FPS/latency logging every 5 seconds'
     )
 
+    declare_use_sim_time = DeclareLaunchArgument(
+        'use_sim_time',
+        default_value='false',
+        description='Use simulation clock when running with Gazebo'
+    )
+
+    declare_config_file = DeclareLaunchArgument(
+        'config_file',
+        default_value=config_path,
+        description='Path to multi-object tracking YAML config'
+    )
+
+    declare_python_prefix = DeclareLaunchArgument(
+        'python_prefix',
+        default_value=default_python_prefix,
+        description='Optional Python executable prefix for running YOLO dependencies from a virtualenv/conda env'
+    )
+
     # ===== MULTI-OBJECT TRACKING NODE =====
     # Load params.yaml for centralized configuration
     tracking_node = Node(
@@ -101,7 +121,17 @@ def generate_launch_description():
         executable='multi_object_tracking',
         name='multi_object_tracking_node',
         output='screen',
-        parameters=[config_path],  # Automatically loads all parameters from params.yaml
+        prefix=LaunchConfiguration('python_prefix'),
+        parameters=[
+            LaunchConfiguration('config_file'),
+            {
+                'use_sim_time': LaunchConfiguration('use_sim_time'),
+                'use_cuda': LaunchConfiguration('use_cuda'),
+                'use_fp16': LaunchConfiguration('use_fp16'),
+                'model_path': LaunchConfiguration('model_path'),
+                'yolo.object_conf_thresh': LaunchConfiguration('object_conf'),
+            },
+        ],
     )
 
     # ===== RETURN LAUNCH DESCRIPTION =====
@@ -111,5 +141,8 @@ def generate_launch_description():
         declare_model_path,
         declare_object_conf,
         declare_enable_metrics,
+        declare_use_sim_time,
+        declare_config_file,
+        declare_python_prefix,
         tracking_node,
     ])

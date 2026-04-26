@@ -3,6 +3,7 @@ controller_server:
     # Chú ý đồng bộ use_sim_time với toàn hệ thống (True cho Gazebo, False cho phần cứng thật)
     use_sim_time: true 
     controller_frequency: 10.0
+    odom_topic: /odometry/filtered
     cmd_vel_topic: "/diff_cont/cmd_vel_unstamped"
     min_x_velocity_threshold: 0.001
     min_y_velocity_threshold: 0.0
@@ -24,19 +25,13 @@ controller_server:
       movement_time_allowance: 30.0
 
     FollowPath:
-      plugin: "nav2_mppi_controller::MPPIController"
+      plugin: "amr_nav2_mppi_controller::MPPIController"
       time_steps: 80
       model_dt: 0.1
       batch_size: 2000
       
       # Giới hạn Động học & Vận tốc
-      ax_min: -0.1
-      ax_max: 0.1
-      ay_max: 0.0
-      ay_min: 0.0
-      az_min: -1.0
-      az_max: 1.0
-      vx_min: 0.0
+      vx_min: -0.15
       vx_max: 0.3
       vy_min: 0.0   # Bắt buộc = 0 cho DDMR
       vy_max: 0.0
@@ -46,7 +41,7 @@ controller_server:
       # Thông số nội bộ của MPPI
       motion_model: "DiffDrive" # Khai báo rõ mô hình động học vi sai
       IterationCount: 1
-      PruneBoundary: false
+      PruneBoundary: true
       transform_tolerance: 0.1
       temperature: 0.3
       gamma: 0.015
@@ -55,13 +50,14 @@ controller_server:
         # Publish a sparse sample of MPPI's rollout cloud for RViz.
         # batch_size=2000, time_steps=56:
         #   50/7 => about 40 trajectories x 8 points instead of 400 x 19.
-        trajectory_step: 50
+        trajectory_step: 500
         time_step: 7
 
       # --- CÁC HÀM ĐÁNH GIÁ (CRITICS) BẮT BUỘC ---
       critics:
         - ConstraintCritic
         - ObstaclesCritic
+        - DynamicHumanCritic
         - GoalCritic
         - GoalAngleCritic
         - PathAlignCritic
@@ -74,6 +70,13 @@ controller_server:
         repulsion_weight: 3.5
         cost_weight: 40.0
         collision_cost: 100000.0
+      DynamicHumanCritic:
+        enabled: true
+        human_topic: /tracking/humans
+        cost_weight: 1.0
+        collision_cost: 100000.0
+        safe_margin: 0.25
+        data_timeout: 0.5
       PathAlignCritic:
         cost_weight: 2.0  # Giảm mạnh để không bám chặt vào đường thẳng, cho phép lách vật cản
         max_heuristic_path_distance: 3.0
@@ -131,6 +134,11 @@ local_costmap:
         cost_scaling_factor: 2.5
         inflation_radius: 0.65
       always_send_full_costmap: True
+
+bt_navigator:
+  ros__parameters:
+    use_sim_time: True
+    odom_topic: /odometry/filtered
 
 global_costmap:
   global_costmap:

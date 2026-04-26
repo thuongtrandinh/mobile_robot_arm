@@ -15,8 +15,8 @@ from collections import deque
 
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
+import torch
 from ultralytics import YOLO
-from cv_bridge import CvBridge
 import message_filters
 
 from visualization_msgs.msg import Marker, MarkerArray
@@ -52,10 +52,15 @@ class MultiObjectTrackingNode(Node):
         def get_param(name, default):
             param = self.get_parameter(name)
             return param.value if param else default
+
+        def as_bool(value):
+            if isinstance(value, str):
+                return value.lower() in ('true', '1', 'yes', 'on')
+            return bool(value)
         
-        self.obj_conf = get_param('yolo.object_conf_thresh', 0.65)
-        self.iou_thresh = get_param('yolo.iou_thresh', 0.50)
-        self.depth_nms_threshold = get_param('yolo.depth_nms_threshold', 0.5)
+        self.obj_conf = float(get_param('yolo.object_conf_thresh', 0.65))
+        self.iou_thresh = float(get_param('yolo.iou_thresh', 0.50))
+        self.depth_nms_threshold = float(get_param('yolo.depth_nms_threshold', 0.5))
         self.dynamic_classes = set(get_param('yolo.dynamic_classes', [0]))
         
         self.track_cleanup_timeout = get_param('tracking.tracking_timeout', 2.0)
@@ -71,6 +76,13 @@ class MultiObjectTrackingNode(Node):
         self.max_depth = get_param('depth_filter.max_depth_m', 6.0)
         
         self.velocity_filter_alpha = get_param('velocity_filter.alpha', 0.25)
+
+        self.rgb_topic = get_param('topics.rgb', '/camera/color/image_raw')
+        self.depth_topic = get_param('topics.depth', '/camera/aligned_depth_to_color/image_raw')
+        self.camera_info_topic = get_param('topics.camera_info', '/camera/color/camera_info')
+        self.camera_frame = get_param('camera.frame_id', 'camera_link')
+        self.use_cuda = as_bool(get_param('use_cuda', True))
+        self.use_fp16 = as_bool(get_param('use_fp16', True))
         
         pub_depth = get_param('ros2_qos.publisher_depth', 1)
         sub_depth = get_param('ros2_qos.subscriber_depth', 30)
@@ -91,10 +103,15 @@ class MultiObjectTrackingNode(Node):
         model_path = os.path.join(pkg_share, 'models', self.get_parameter('model_path').value)
         
         self._yolo = YOLO(model_path)
-        self._yolo.to('cuda')
+        cuda_available = torch.cuda.is_available()
+        if self.use_cuda and not cuda_available:
+            self.get_logger().warn('CUDA requested but unavailable. Falling back to CPU inference.')
+        self.inference_device = 'cuda' if self.use_cuda and cuda_available else 'cpu'
+        if self.inference_device == 'cuda':
+            self._yolo.to('cuda')
         dummy_img = np.zeros((480, 640, 3), dtype=np.uint8)
-        self._yolo.predict(dummy_img, device='cuda', verbose=False, half=True)
-        self.get_logger().info('✅ YOLOv8n & GPU đã khởi tạo.')
+        self._yolo.predict(dummy_img, device=self.inference_device, verbose=False, half=self.use_fp16 and self.use_cuda)
+        self.get_logger().info(f'✅ YOLO đã khởi tạo trên {self.inference_device}.')
 
         self._tracker = BoTSortTracker(
             track_thresh=track_thresh, 
@@ -111,7 +128,6 @@ class MultiObjectTrackingNode(Node):
         self.ekfs, self.velocity_filters = {}, {}
         self.track_last_seen_time, self.last_frame_ts, self.position_history = {}, {}, {}
         
-        self._bridge = CvBridge()
         self._current_depth_map = None
         
         # Inicializar intrínsecos da câmera com valores padrão (serão sobrescrevidos por camera_info)
@@ -133,14 +149,17 @@ class MultiObjectTrackingNode(Node):
         )
         self.get_logger().info('🛠️ Debug mode sẵn sàng (chỉ hoạt động khi có người xem).')
 
-        self.img_sub = message_filters.Subscriber(self, Image, '/camera/color/image_raw', qos_profile=qos_sub)
-        self.depth_sub = message_filters.Subscriber(self, Image, '/camera/aligned_depth_to_color/image_raw', qos_profile=qos_sub)
+        self.img_sub = message_filters.Subscriber(self, Image, self.rgb_topic, qos_profile=qos_sub)
+        self.depth_sub = message_filters.Subscriber(self, Image, self.depth_topic, qos_profile=qos_sub)
         
         # Synchronizer với parameters từ config
         self.ts = message_filters.ApproximateTimeSynchronizer([self.img_sub, self.depth_sub], queue_size=sync_queue_size, slop=sync_slop)
         self.ts.registerCallback(self._synced_callback)
         
-        self.create_subscription(CameraInfo, '/camera/color/camera_info', self._cam_cb, 10)
+        self.create_subscription(CameraInfo, self.camera_info_topic, self._cam_cb, 10)
+        self.get_logger().info(
+            f'📷 Camera topics: rgb={self.rgb_topic}, depth={self.depth_topic}, info={self.camera_info_topic}'
+        )
 
         self._frame_intervals = deque(maxlen=30)
         self._last_cb_time = None
@@ -152,6 +171,53 @@ class MultiObjectTrackingNode(Node):
             self.fx, self.fy, self.cx, self.cy = msg.k[0], msg.k[4], msg.k[2], msg.k[5]
             self.camera_info_received = True
 
+    def _image_msg_to_numpy(self, msg):
+        encoding = msg.encoding.lower()
+        encoding_info = {
+            'rgb8': (np.uint8, 3),
+            'bgr8': (np.uint8, 3),
+            'rgba8': (np.uint8, 4),
+            'bgra8': (np.uint8, 4),
+            'mono8': (np.uint8, 1),
+            '8uc1': (np.uint8, 1),
+            '16uc1': (np.uint16, 1),
+            'mono16': (np.uint16, 1),
+            '32fc1': (np.float32, 1),
+        }
+        if encoding not in encoding_info:
+            raise ValueError(f'Unsupported image encoding: {msg.encoding}')
+
+        dtype, channels = encoding_info[encoding]
+        data = np.frombuffer(msg.data, dtype=dtype)
+        row_items = msg.step // np.dtype(dtype).itemsize
+        if channels == 1:
+            image = data.reshape((msg.height, row_items))[:, :msg.width]
+        else:
+            image = data.reshape((msg.height, row_items // channels, channels))[:, :msg.width, :]
+        return np.ascontiguousarray(image)
+
+    def _color_msg_to_bgr(self, msg):
+        image = self._image_msg_to_numpy(msg)
+        encoding = msg.encoding.lower()
+        if encoding == 'rgb8':
+            return cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+        if encoding == 'rgba8':
+            return cv2.cvtColor(image, cv2.COLOR_RGBA2BGR)
+        if encoding == 'bgra8':
+            return cv2.cvtColor(image, cv2.COLOR_BGRA2BGR)
+        if encoding in ('mono8', '8uc1'):
+            return cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+        return image
+
+    def _depth_msg_to_meters(self, msg):
+        depth = self._image_msg_to_numpy(msg)
+        encoding = msg.encoding.lower()
+        if encoding in ('16uc1', 'mono16'):
+            return depth.astype(np.float32) / 1000.0
+        if encoding == '32fc1':
+            return depth.astype(np.float32)
+        raise ValueError(f'Unsupported depth encoding: {msg.encoding}')
+
     def _synced_callback(self, img_msg, depth_msg):
         if not self.camera_info_received: return
         ts_now = time.time()
@@ -162,13 +228,12 @@ class MultiObjectTrackingNode(Node):
         self._last_cb_time = ts_now
 
         try:
-            frame_raw = self._bridge.imgmsg_to_cv2(img_msg, desired_encoding='passthrough')
-            if frame_raw is None or frame_raw.size == 0: return
-            frame = cv2.cvtColor(frame_raw, cv2.COLOR_RGB2BGR) if img_msg.encoding == 'rgb8' else frame_raw
+            frame = self._color_msg_to_bgr(img_msg)
+            if frame is None or frame.size == 0: return
 
-            depth_raw = self._bridge.imgmsg_to_cv2(depth_msg, desired_encoding='passthrough')
-            if depth_raw is not None and depth_raw.size > 0:
-                self._current_depth_map = depth_raw.astype(np.float32) / 1000.0 if depth_msg.encoding == '16UC1' else depth_raw.astype(np.float32)
+            depth_map = self._depth_msg_to_meters(depth_msg)
+            if depth_map is not None and depth_map.size > 0:
+                self._current_depth_map = depth_map
             
             self._process_frame(frame, ts_now)
         except Exception as e:
@@ -178,7 +243,13 @@ class MultiObjectTrackingNode(Node):
         ts_now = self.get_clock().now().nanoseconds * 1e-9
 
         # 1. Dự đoán YOLO với ngưỡng thấp để BYTE Association bắt được các phần cơ thể mờ
-        results = self._yolo.predict(frame, conf=self.track_low_thresh, verbose=False, device='cuda', half=True)[0]
+        results = self._yolo.predict(
+            frame,
+            conf=self.track_low_thresh,
+            verbose=False,
+            device=self.inference_device,
+            half=self.use_fp16 and self.use_cuda,
+        )[0]
             
         raw_dets = []
         for box in results.boxes.data:
@@ -201,7 +272,7 @@ class MultiObjectTrackingNode(Node):
         # 4. KHỞI TẠO TIN NHẮN VÀ MARKER
         msg = HumanArray()
         msg.header.stamp = self.get_clock().now().to_msg()
-        msg.header.frame_id = "camera_link"
+        msg.header.frame_id = self.camera_frame
         marker_array = MarkerArray()
 
         h, w = frame.shape[:2]
@@ -276,7 +347,7 @@ class MultiObjectTrackingNode(Node):
         
         # 1. Khối trụ đỏ (Vùng vật cản)
         obs = Marker()
-        obs.header.frame_id = "camera_link"
+        obs.header.frame_id = self.camera_frame
         obs.header.stamp = now
         obs.ns = "danger_zones"
         obs.id = human_id

@@ -2,6 +2,7 @@ import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, SetEnvironmentVariable
+from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.descriptions import ParameterFile
@@ -12,6 +13,7 @@ def generate_launch_description():
     use_sim_time = LaunchConfiguration("use_sim_time")
     respawn = LaunchConfiguration("respawn")
     log_level = LaunchConfiguration("log_level")
+    use_rviz = LaunchConfiguration("use_rviz")
     tuning_config = LaunchConfiguration("tuning_config")
     halo_drl_dir = LaunchConfiguration("halo_drl_dir")
     config = LaunchConfiguration("config")
@@ -41,6 +43,12 @@ def generate_launch_description():
     )
     log_level_arg = DeclareLaunchArgument(
         "log_level", default_value="info", description="Logging level"
+    )
+    use_rviz_arg = DeclareLaunchArgument(
+        "use_rviz",
+        default_value="false",
+        description="Launch RViz2 with the descriptions RViz config",
+        choices=["true", "false"],
     )
     tuning_config_arg = DeclareLaunchArgument(
         "tuning_config",
@@ -83,7 +91,11 @@ def generate_launch_description():
     # behavior_server into the wheel controller, which creates conflicting
     # velocity commands when recoveries run. Keep controller_server -> smoother
     # on cmd_vel_nav, and only send the smoother output to diff_cont.
-    nav2_remappings = [("/tf", "tf"), ("/tf_static", "tf_static")]
+    nav2_remappings = [
+        ("/tf", "tf"),
+        ("/tf_static", "tf_static"),
+        ("odom", "/odometry/filtered"),
+    ]
     nav2_params = ParameterFile(
         RewrittenYaml(
             source_file=mppi_params_file,
@@ -313,10 +325,28 @@ def generate_launch_description():
         arguments=["--ros-args", "--log-level", log_level],
     )
 
+    rviz_node = Node(
+        package="rviz2",
+        executable="rviz2",
+        name="rviz2",
+        output="screen",
+        condition=IfCondition(use_rviz),
+        arguments=[
+            "-d",
+            PathJoinSubstitution([
+                FindPackageShare("descriptions"),
+                "config",
+                "rviz2.rviz",
+            ]),
+        ],
+        parameters=[{"use_sim_time": use_sim_time}],
+    )
+
     return LaunchDescription([
         use_sim_time_arg,
         respawn_arg,
         log_level_arg,
+        use_rviz_arg,
         tuning_config_arg,
         mppi_params_file_arg,
         halo_drl_dir_arg,
@@ -348,4 +378,5 @@ def generate_launch_description():
         ampcc_node,
         rl_bridge_node,
         rviz_visualizer_node,
+        rviz_node,
     ])
