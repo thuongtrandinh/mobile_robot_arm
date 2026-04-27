@@ -56,10 +56,6 @@ class RlOcpPolicyBridge(Node):
         self.declare_parameter("scan_persistence_decay_scans", 4)
         self.declare_parameter("scan_persistence_resolution", 0.12)
         self.declare_parameter("scan_obstacle_limit", 60)
-        self.declare_parameter("lidar_dynamic_enabled", True)
-        self.declare_parameter("lidar_dynamic_radius", 0.25)
-        self.declare_parameter("lidar_dynamic_safety_margin", 0.20)
-        self.declare_parameter("lidar_dynamic_map_clearance", 0.08)
         self.declare_parameter("use_map_static_obstacles", True)
         self.declare_parameter("map_static_obstacle_radius", 0.05)
         self.declare_parameter("map_static_sample_step_m", 0.3)
@@ -149,10 +145,6 @@ class RlOcpPolicyBridge(Node):
         self.scan_persistence_decay_scans = self.get_parameter("scan_persistence_decay_scans").get_parameter_value().integer_value
         self.scan_persistence_resolution = self.get_parameter("scan_persistence_resolution").get_parameter_value().double_value
         self.scan_obstacle_limit = self.get_parameter("scan_obstacle_limit").get_parameter_value().integer_value
-        self.lidar_dynamic_enabled = self.get_parameter("lidar_dynamic_enabled").get_parameter_value().bool_value
-        self.lidar_dynamic_radius = self.get_parameter("lidar_dynamic_radius").get_parameter_value().double_value
-        self.lidar_dynamic_safety_margin = self.get_parameter("lidar_dynamic_safety_margin").get_parameter_value().double_value
-        self.lidar_dynamic_map_clearance = self.get_parameter("lidar_dynamic_map_clearance").get_parameter_value().double_value
         self.use_map_static_obstacles = self.get_parameter("use_map_static_obstacles").get_parameter_value().bool_value
         self.map_static_obstacle_radius = self.get_parameter("map_static_obstacle_radius").get_parameter_value().double_value
         self.map_static_sample_step_m = self.get_parameter("map_static_sample_step_m").get_parameter_value().double_value
@@ -454,14 +446,6 @@ class RlOcpPolicyBridge(Node):
                 self.scan_persistence.clear()
             elif p.name == "scan_obstacle_limit":
                 self.scan_obstacle_limit = max(1, int(p.value))
-            elif p.name == "lidar_dynamic_enabled":
-                self.lidar_dynamic_enabled = bool(p.value)
-            elif p.name == "lidar_dynamic_radius":
-                self.lidar_dynamic_radius = max(0.01, float(p.value))
-            elif p.name == "lidar_dynamic_safety_margin":
-                self.lidar_dynamic_safety_margin = max(0.0, float(p.value))
-            elif p.name == "lidar_dynamic_map_clearance":
-                self.lidar_dynamic_map_clearance = max(0.0, float(p.value))
             elif p.name == "planner_half_width":
                 self.planner_half_width = float(p.value)
                 update_effective_bounds = True
@@ -1541,30 +1525,6 @@ class RlOcpPolicyBridge(Node):
 
         return obstacles
 
-    def _lidar_dynamic_obstacle_tuples(
-        self,
-        scan_obstacles: Optional[List[Tuple[float, float, float]]] = None,
-    ) -> List[Tuple[float, float, float]]:
-        if not self.lidar_dynamic_enabled:
-            return []
-        if self.map_data is None or self.map_resolution is None:
-            return []
-
-        source = scan_obstacles if scan_obstacles is not None else self._scan_only_obstacle_tuples()
-        if not source:
-            return []
-
-        radius = max(0.01, float(self.lidar_dynamic_radius)) + max(0.0, float(self.lidar_dynamic_safety_margin))
-        map_clearance = max(0.0, float(self.lidar_dynamic_map_clearance))
-        dynamic_obs: List[Tuple[float, float, float]] = []
-
-        for ox, oy, _ in source:
-            if self._is_occupied_from_map(float(ox), float(oy), map_clearance):
-                continue
-            dynamic_obs.append((float(ox), float(oy), radius))
-
-        return dynamic_obs
-
     def _map_to_obstacle_tuples(self) -> List[Tuple[float, float, float]]:
         if not self.use_map_static_obstacles:
             self.map_static_circles = []
@@ -1684,11 +1644,9 @@ class RlOcpPolicyBridge(Node):
         if not candidates:
             return sub_goal_map, False, 0.0
 
-        dynamic_obstacles = self._scan_only_obstacle_tuples()
-        lidar_dynamic_obstacles = self._lidar_dynamic_obstacle_tuples(dynamic_obstacles)
         static_obstacles = self._map_to_obstacle_tuples()
         human_obstacles = self._human_obstacle_tuples()
-        obstacles = dynamic_obstacles + lidar_dynamic_obstacles + static_obstacles + human_obstacles
+        obstacles = static_obstacles + human_obstacles
 
         best_valid: Optional[Tuple[float, float]] = None
         best_dist = float("inf")
@@ -1717,12 +1675,10 @@ class RlOcpPolicyBridge(Node):
         if self.current_pose is None:
             return
         candidates = self._generate_action_candidates()
-        dynamic_obstacles = self._scan_only_obstacle_tuples()
-        lidar_dynamic_obstacles = self._lidar_dynamic_obstacle_tuples(dynamic_obstacles)
         static_obstacles = self._map_to_obstacle_tuples()
         humans_map = self._process_human_msgs()
         human_obstacles = self._human_obstacle_tuples(humans_map)
-        obstacles = dynamic_obstacles + lidar_dynamic_obstacles + static_obstacles + human_obstacles
+        obstacles = static_obstacles + human_obstacles
 
         valid_points: List[Tuple[float, float]] = []
         masked_points: List[Tuple[float, float]] = []
@@ -1748,8 +1704,6 @@ class RlOcpPolicyBridge(Node):
                 "expected_count": int(self.action_dim) * int(self.action_dim),
                 "valid_count": len(valid_points),
                 "masked_count": len(masked_points),
-                "dynamic_count": len(dynamic_obstacles),
-                "lidar_dynamic_count": len(lidar_dynamic_obstacles),
                 "static_count": len(static_obstacles),
                 "human_obstacle_count": len(human_obstacles),
                 "human_count": len(humans_map),
@@ -1787,16 +1741,12 @@ class RlOcpPolicyBridge(Node):
             "selected_point": [float(closest_selected[0]), float(closest_selected[1])] if closest_selected is not None else None,
             "obstacles": [
                 [float(obs[0]), float(obs[1]), float(obs[2])]
-                for obs in dynamic_obstacles + static_obstacles
+                for obs in static_obstacles
                 if len(obs) >= 3
             ],
             "human_obstacles": [
                 [float(obs[0]), float(obs[1]), float(obs[2])]
                 for obs in human_obstacles
-            ],
-            "lidar_dynamic_obstacles": [
-                [float(obs[0]), float(obs[1]), float(obs[2])]
-                for obs in lidar_dynamic_obstacles
             ],
             "candidate_count": len(candidates),
             "valid_count": len(valid_points),
@@ -1805,7 +1755,6 @@ class RlOcpPolicyBridge(Node):
             "action_mask_clearance": float(self.action_mask_clearance),
             "mask_margin": float(self.robot_radius + self.action_mask_clearance),
             "human_safety_margin": float(self.human_safety_margin),
-            "lidar_dynamic_safety_margin": float(self.lidar_dynamic_safety_margin),
         }
         msg = String()
         msg.data = json.dumps(action_payload)
@@ -1859,7 +1808,6 @@ class RlOcpPolicyBridge(Node):
         human_msgs = self._process_human_msgs()
         scan_obstacles = self._scan_only_obstacle_tuples()
         static_obstacles = self._map_to_obstacle_tuples()
-        lidar_dynamic_obstacles = self._lidar_dynamic_obstacle_tuples(scan_obstacles)
         humans_data = [
             (
                 float(h.px),
@@ -1870,10 +1818,6 @@ class RlOcpPolicyBridge(Node):
             )
             for h in human_msgs
         ]
-        humans_data.extend(
-            (float(x), float(y), 0.0, 0.0, float(radius))
-            for x, y, radius in lidar_dynamic_obstacles
-        )
 
         return {
             "px": px,

@@ -918,7 +918,6 @@ class AmpccRvizVisualizer(Node):
         masked_points = action_payload.get("masked_points", [])
         selected_point = action_payload.get("selected_point", None)
         action_obstacles = action_payload.get("obstacles", [])
-        lidar_dynamic_obstacles = action_payload.get("lidar_dynamic_obstacles", [])
         mask_margin = float(action_payload.get("mask_margin", 0.35))
         human_safety_margin = float(action_payload.get("human_safety_margin", 0.0))
         map_margin = 0.5 * mask_margin
@@ -1009,10 +1008,6 @@ class AmpccRvizVisualizer(Node):
                 radius,
                 z=0.10,
             )
-        for obs in lidar_dynamic_obstacles:
-            if len(obs) >= 3:
-                radius = max(0.05, float(obs[2])) + mask_margin
-                self._append_circle_segments(margin_marker.points, float(obs[0]), float(obs[1]), radius, z=0.11)
         markers.markers.append(margin_marker)
 
         wall_margin_marker = Marker()
