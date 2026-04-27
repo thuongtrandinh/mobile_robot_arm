@@ -51,6 +51,10 @@ rl_ocp_policy_bridge:
     scan_persistence_decay_scans: 4
     scan_persistence_resolution: 0.12
     scan_obstacle_limit: 60
+    lidar_dynamic_enabled: true
+    lidar_dynamic_radius: 0.25
+    lidar_dynamic_safety_margin: 0.20
+    lidar_dynamic_map_clearance: 0.08
     auto_relax_constraints: false
     use_map_static_obstacles: true
     map_static_obstacle_radius: 0.05
