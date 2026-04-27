@@ -919,6 +919,7 @@ class AmpccRvizVisualizer(Node):
         selected_point = action_payload.get("selected_point", None)
         action_obstacles = action_payload.get("obstacles", [])
         mask_margin = float(action_payload.get("mask_margin", 0.35))
+        human_safety_margin = float(action_payload.get("human_safety_margin", 0.0))
         map_margin = 0.5 * mask_margin
 
         rl_valid_marker = Marker()
@@ -999,7 +1000,7 @@ class AmpccRvizVisualizer(Node):
                 radius = max(0.05, float(obs[2])) + mask_margin
                 self._append_circle_segments(margin_marker.points, float(obs[0]), float(obs[1]), radius)
         for hum in humans:
-            radius = max(0.05, float(hum.get("radius", 0.25))) + mask_margin
+            radius = max(0.05, float(hum.get("radius", 0.25))) + mask_margin + human_safety_margin
             self._append_circle_segments(
                 margin_marker.points,
                 float(hum.get("px", 0.0)),

@@ -64,6 +64,7 @@ class RlOcpPolicyBridge(Node):
         self.declare_parameter("human_max_age_sec", 0.6)
         self.declare_parameter("human_min_radius", 0.01)
         self.declare_parameter("human_max_radius", 1.50)
+        self.declare_parameter("human_safety_margin", 0.40)
         self.declare_parameter("human_limit", 12)
         self.declare_parameter("auto_relax_constraints", False)
         self.declare_parameter("timer_period", 0.1)
@@ -152,6 +153,7 @@ class RlOcpPolicyBridge(Node):
         self.human_max_age_sec = self.get_parameter("human_max_age_sec").get_parameter_value().double_value
         self.human_min_radius = self.get_parameter("human_min_radius").get_parameter_value().double_value
         self.human_max_radius = self.get_parameter("human_max_radius").get_parameter_value().double_value
+        self.human_safety_margin = self.get_parameter("human_safety_margin").get_parameter_value().double_value
         self.human_limit = self.get_parameter("human_limit").get_parameter_value().integer_value
         self.auto_relax_constraints = self.get_parameter("auto_relax_constraints").get_parameter_value().bool_value
         self.policy_hz = max(0.001, self.get_parameter("policy_hz").get_parameter_value().double_value)
@@ -413,6 +415,8 @@ class RlOcpPolicyBridge(Node):
                 self.human_min_radius = max(0.01, float(p.value))
             elif p.name == "human_max_radius":
                 self.human_max_radius = max(self.human_min_radius, float(p.value))
+            elif p.name == "human_safety_margin":
+                self.human_safety_margin = max(0.0, float(p.value))
             elif p.name == "human_limit":
                 self.human_limit = max(0, int(p.value))
             elif p.name == "auto_relax_constraints":
@@ -1225,6 +1229,14 @@ class RlOcpPolicyBridge(Node):
         hi = max(lo, float(self.human_max_radius))
         return float(self._clamp(float(radius), lo, hi))
 
+    def _human_obstacle_tuples(self, humans: Optional[List[HumanState]] = None) -> List[Tuple[float, float, float]]:
+        human_msgs = humans if humans is not None else self._process_human_msgs()
+        margin = max(0.0, float(self.human_safety_margin))
+        return [
+            (float(h.px), float(h.py), float(h.radius) + margin)
+            for h in human_msgs
+        ]
+
     def _current_pose_in_map_frame(self) -> Optional[Tuple[float, float]]:
         if self.current_pose is None:
             return None
@@ -1634,7 +1646,8 @@ class RlOcpPolicyBridge(Node):
 
         dynamic_obstacles = self._scan_only_obstacle_tuples()
         static_obstacles = self._map_to_obstacle_tuples()
-        obstacles = dynamic_obstacles + static_obstacles
+        human_obstacles = self._human_obstacle_tuples()
+        obstacles = dynamic_obstacles + static_obstacles + human_obstacles
 
         best_valid: Optional[Tuple[float, float]] = None
         best_dist = float("inf")
@@ -1665,7 +1678,9 @@ class RlOcpPolicyBridge(Node):
         candidates = self._generate_action_candidates()
         dynamic_obstacles = self._scan_only_obstacle_tuples()
         static_obstacles = self._map_to_obstacle_tuples()
-        obstacles = dynamic_obstacles + static_obstacles
+        humans_map = self._process_human_msgs()
+        human_obstacles = self._human_obstacle_tuples(humans_map)
+        obstacles = dynamic_obstacles + static_obstacles + human_obstacles
 
         valid_points: List[Tuple[float, float]] = []
         masked_points: List[Tuple[float, float]] = []
@@ -1685,7 +1700,6 @@ class RlOcpPolicyBridge(Node):
                     closest_selected = (wx, wy)
 
         if self.publish_policy_debug_status:
-            humans_map = self._process_human_msgs()
             status = {
                 "action_dim": int(self.action_dim),
                 "candidate_count": len(candidates),
@@ -1694,6 +1708,7 @@ class RlOcpPolicyBridge(Node):
                 "masked_count": len(masked_points),
                 "dynamic_count": len(dynamic_obstacles),
                 "static_count": len(static_obstacles),
+                "human_obstacle_count": len(human_obstacles),
                 "human_count": len(humans_map),
                 "raw_human_count": len(self.latest_humans.humans) if self.latest_humans is not None else 0,
                 "map_walls_count": len(self.map_geometry_walls),
@@ -1718,7 +1733,7 @@ class RlOcpPolicyBridge(Node):
         action_payload = {
             "humans": [
                 [float(h.px), float(h.py), float(h.vx), float(h.vy), float(h.radius)]
-                for h in self._process_human_msgs()
+                for h in humans_map
             ],
             "frame_id": self.map_frame,
             "obstacle_frame": self.map_frame,
@@ -1732,12 +1747,17 @@ class RlOcpPolicyBridge(Node):
                 for obs in obstacles
                 if len(obs) >= 3
             ],
+            "human_obstacles": [
+                [float(obs[0]), float(obs[1]), float(obs[2])]
+                for obs in human_obstacles
+            ],
             "candidate_count": len(candidates),
             "valid_count": len(valid_points),
             "masked_count": len(masked_points),
             "robot_radius": float(self.robot_radius),
             "action_mask_clearance": float(self.action_mask_clearance),
             "mask_margin": float(self.robot_radius + self.action_mask_clearance),
+            "human_safety_margin": float(self.human_safety_margin),
         }
         msg = String()
         msg.data = json.dumps(action_payload)
@@ -1790,7 +1810,13 @@ class RlOcpPolicyBridge(Node):
         v_left, v_right = wheel_speeds
         human_msgs = self._process_human_msgs()
         humans_data = [
-            (float(h.px), float(h.py), float(h.vx), float(h.vy), float(h.radius) + 0.10)
+            (
+                float(h.px),
+                float(h.py),
+                float(h.vx),
+                float(h.vy),
+                float(h.radius) + max(0.0, float(self.human_safety_margin)),
+            )
             for h in human_msgs
         ]
 
