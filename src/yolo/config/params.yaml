@@ -56,6 +56,10 @@ multi_object_tracking_node:
     velocity_filter:
       alpha: 0.25                     # EMA smoothing factor para velocidade
 
+    # ===== RVIZ VISUALIZATION =====
+    visualization:
+      marker_lifetime_sec: 0.5        # Hold markers across short TF/camera timing gaps
+
     # ===== ROS 2 QoS CONFIGURATION =====
     ros2_qos:
       # Publisher: Always latest (for controller)

@@ -9,7 +9,7 @@ Panels:
         - /Map2
         - /MarkerArray3
         - /MarkerArray4
-      Splitter Ratio: 0.5
+      Splitter Ratio: 0.5029411911964417
     Tree Height: 356
   - Class: rviz_common/Selection
     Name: Selection
@@ -36,7 +36,7 @@ Visualization Manager:
       Cell Size: 1
       Class: rviz_default_plugins/Grid
       Color: 160; 160; 164
-      Enabled: true
+      Enabled: false
       Line Style:
         Line Width: 0.029999999329447746
         Value: Lines
@@ -49,7 +49,7 @@ Visualization Manager:
       Plane: XY
       Plane Cell Count: 10
       Reference Frame: <Fixed Frame>
-      Value: true
+      Value: false
     - Class: rviz_default_plugins/TF
       Enabled: true
       Frame Timeout: 15
@@ -58,6 +58,34 @@ Visualization Manager:
         base_footprint:
           Value: true
         base_link:
+          Value: true
+        camera_accel_frame:
+          Value: true
+        camera_accel_optical_frame:
+          Value: true
+        camera_bottom_screw_frame:
+          Value: true
+        camera_color_frame:
+          Value: true
+        camera_color_optical_frame:
+          Value: true
+        camera_depth_frame:
+          Value: true
+        camera_depth_optical_frame:
+          Value: true
+        camera_gyro_frame:
+          Value: true
+        camera_gyro_optical_frame:
+          Value: true
+        camera_infra1_frame:
+          Value: true
+        camera_infra1_optical_frame:
+          Value: true
+        camera_infra2_frame:
+          Value: true
+        camera_infra2_optical_frame:
+          Value: true
+        camera_link:
           Value: true
         caster_wheel:
           Value: true
@@ -85,14 +113,6 @@ Visualization Manager:
           Value: true
         right_wheel:
           Value: true
-        zed2_left_camera_frame:
-          Value: true
-        zed2_link:
-          Value: true
-        zed2_right_camera_frame:
-          Value: true
-        zed_camera_link:
-          Value: true
       Marker Scale: 1
       Name: TF
       Show Arrows: true
@@ -103,6 +123,26 @@ Visualization Manager:
           odom:
             base_footprint:
               base_link:
+                camera_bottom_screw_frame:
+                  camera_link:
+                    camera_accel_frame:
+                      camera_accel_optical_frame:
+                        {}
+                    camera_color_frame:
+                      camera_color_optical_frame:
+                        {}
+                    camera_depth_frame:
+                      camera_depth_optical_frame:
+                        {}
+                    camera_gyro_frame:
+                      camera_gyro_optical_frame:
+                        {}
+                    camera_infra1_frame:
+                      camera_infra1_optical_frame:
+                        {}
+                    camera_infra2_frame:
+                      camera_infra2_optical_frame:
+                        {}
                 caster_wheel:
                   {}
                 chassis:
@@ -125,13 +165,6 @@ Visualization Manager:
                   {}
                 right_wheel:
                   {}
-                zed_camera_link:
-                  zed2_left_camera_frame:
-                    {}
-                  zed2_link:
-                    {}
-                  zed2_right_camera_frame:
-                    {}
       Update Interval: 0
       Value: true
     - Alpha: 1
@@ -160,6 +193,63 @@ Visualization Manager:
           Alpha: 1
           Show Axes: false
           Show Trail: false
+        camera_accel_frame:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        camera_accel_optical_frame:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        camera_bottom_screw_frame:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        camera_color_frame:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        camera_color_optical_frame:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        camera_depth_frame:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        camera_depth_optical_frame:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        camera_gyro_frame:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        camera_gyro_optical_frame:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        camera_infra1_frame:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        camera_infra1_optical_frame:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        camera_infra2_frame:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        camera_infra2_optical_frame:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        camera_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
         caster_wheel:
           Alpha: 1
           Show Axes: false
@@ -215,23 +305,6 @@ Visualization Manager:
           Show Axes: false
           Show Trail: false
           Value: true
-        zed2_left_camera_frame:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-        zed2_link:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-        zed2_right_camera_frame:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-        zed_camera_link:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
       Mass Properties:
         Inertia: false
         Mass: false
@@ -255,7 +328,7 @@ Visualization Manager:
       Enabled: true
       Invert Rainbow: false
       Max Color: 255; 255; 255
-      Max Intensity: 47
+      Max Intensity: 0
       Min Color: 0; 0; 0
       Min Intensity: 0
       Name: LaserScan
@@ -291,7 +364,7 @@ Visualization Manager:
     - Alpha: 1
       Class: nav2_rviz_plugins/ParticleCloud
       Color: 255; 25; 0
-      Enabled: false
+      Enabled: true
       Max Arrow Length: 0.30000001192092896
       Min Arrow Length: 0.019999999552965164
       Name: ParticleCloud
@@ -303,12 +376,12 @@ Visualization Manager:
         History Policy: Keep Last
         Reliability Policy: Best Effort
         Value: /particle_cloud
-      Value: false
+      Value: true
     - Class: rviz_default_plugins/MarkerArray
       Enabled: true
       Name: MarkerArray
       Namespaces:
-        policy_actions: true
+        {}
       Topic:
         Depth: 5
         Durability Policy: Volatile
@@ -320,7 +393,7 @@ Visualization Manager:
       Class: rviz_default_plugins/Map
       Color Scheme: map
       Draw Behind: false
-      Enabled: false
+      Enabled: true
       Name: Map
       Topic:
         Depth: 5
@@ -328,13 +401,13 @@ Visualization Manager:
         Filter size: 10
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: /rtabmap/map
+        Value: /map
       Update Topic:
         Depth: 5
         Durability Policy: Volatile
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: /rtabmap/map_updates
+        Value: /map_updates
       Use Timestamp: false
       Value: true
     - Alpha: 1
@@ -369,7 +442,7 @@ Visualization Manager:
       Enabled: true
       Name: MarkerArray
       Namespaces:
-        planner_scene: true
+        {}
       Topic:
         Depth: 5
         Durability Policy: Volatile
@@ -402,8 +475,7 @@ Visualization Manager:
       Enabled: true
       Name: MarkerArray
       Namespaces:
-        Candidate Trajectories: true
-        Optimal Trajectory: true
+        {}
       Topic:
         Depth: 5
         Durability Policy: Volatile
@@ -412,7 +484,7 @@ Visualization Manager:
         Value: /trajectories
       Value: true
     - Class: rviz_default_plugins/MarkerArray
-      Enabled: false
+      Enabled: true
       Name: MarkerArray
       Namespaces:
         {}
@@ -469,7 +541,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz_default_plugins/Orbit
-      Distance: 12.776369094848633
+      Distance: 35.429874420166016
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -484,10 +556,10 @@ Visualization Manager:
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 1.389796495437622
+      Pitch: 1.4947963953018188
       Target Frame: <Fixed Frame>
       Value: Orbit (rviz)
-      Yaw: 3.205378293991089
+      Yaw: 3.045377492904663
     Saved: ~
 Window Geometry:
   Displays:
@@ -507,5 +579,5 @@ Window Geometry:
   Views:
     collapsed: false
   Width: 1200
-  X: 720
+  X: 1150
   Y: 113

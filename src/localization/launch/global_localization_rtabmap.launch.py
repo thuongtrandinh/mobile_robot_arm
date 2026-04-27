@@ -6,29 +6,25 @@ from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, PythonExpression
 from launch_ros.actions import Node
-from ament_index_python.packages import get_package_share_directory
-from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, LogInfo, OpaqueFunction
-from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, PythonExpression
-from launch_ros.actions import Node
+from ament_index_python.packages import get_package_prefix, get_package_share_directory
 
 def generate_launch_description():
     localization_dir = get_package_share_directory("localization")
-    descriptions_dir = get_package_share_directory("descriptions")
+    localization_prefix = get_package_prefix("localization")
     rtabmap_launch_dir = get_package_share_directory("rtabmap_launch")
-    workspace_root = os.path.abspath(os.path.join(localization_dir, "..", "..", "..", ".."))
+    workspace_root = os.path.dirname(os.path.dirname(localization_prefix))
     src_dir = os.path.join(workspace_root, "src")
     maps_root = os.path.join(src_dir, "mapping", "maps")
 
     default_db_path = os.path.join(os.path.expanduser("~"), ".ros", "rtabmap_map.db")
-    ekf_config = os.path.join(localization_dir, "config", "ekf.yaml")
+    default_ekf_config = os.path.join(localization_dir, "config", "ekf.yaml")
     rviz_config_path = os.path.join(src_dir, "descriptions", "config", "rviz2.rviz")
 
     use_sim_time = LaunchConfiguration("use_sim_time")
     cfg = LaunchConfiguration("cfg")
     database_path = LaunchConfiguration("database_path")
     namespace = LaunchConfiguration("namespace")
+    ekf_config = LaunchConfiguration("ekf_config")
     map_name = LaunchConfiguration("map_name")
     map_yaml = LaunchConfiguration("map_yaml")
     use_map_server = LaunchConfiguration("use_map_server")
@@ -44,6 +40,7 @@ def generate_launch_description():
     )
     database_path_arg = DeclareLaunchArgument("database_path", default_value=default_db_path)
     namespace_arg = DeclareLaunchArgument("namespace", default_value="rtabmap")
+    ekf_config_arg = DeclareLaunchArgument("ekf_config", default_value=default_ekf_config)
     map_name_arg = DeclareLaunchArgument("map_name", default_value="room_20x20")
     map_yaml_arg = DeclareLaunchArgument("map_yaml", default_value="room_20x20_map.yaml")
     use_map_server_arg = DeclareLaunchArgument("use_map_server", default_value="true")
@@ -58,7 +55,7 @@ def generate_launch_description():
         name="ekf_filter_node",
         output="screen",
         parameters=[
-            ekf_config_path,
+            ekf_config,
             {"use_sim_time": use_sim_time},
         ],
     )
@@ -144,6 +141,7 @@ def generate_launch_description():
         cfg_arg,
         database_path_arg,
         namespace_arg,
+        ekf_config_arg,
         map_name_arg,
         map_yaml_arg,
         use_map_server_arg,

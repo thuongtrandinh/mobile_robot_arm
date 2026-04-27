@@ -18,6 +18,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 import torch
 from ultralytics import YOLO
 import message_filters
+from builtin_interfaces.msg import Time as RosTime
 
 from visualization_msgs.msg import Marker, MarkerArray
 
@@ -81,6 +82,7 @@ class MultiObjectTrackingNode(Node):
         self.depth_topic = get_param('topics.depth', '/camera/aligned_depth_to_color/image_raw')
         self.camera_info_topic = get_param('topics.camera_info', '/camera/color/camera_info')
         self.camera_frame = get_param('camera.frame_id', 'camera_link')
+        self.marker_lifetime_sec = float(get_param('visualization.marker_lifetime_sec', 0.5))
         self.use_cuda = as_bool(get_param('use_cuda', True))
         self.use_fp16 = as_bool(get_param('use_fp16', True))
         
@@ -343,12 +345,15 @@ class MultiObjectTrackingNode(Node):
     
     def create_human_marker(self, human, human_id, pz, human_height):
         markers = []
-        now = self.get_clock().now().to_msg()
+        # Stamp 0 tells RViz to use the latest available TF. This avoids marker
+        # flicker when Gazebo camera messages are a few milliseconds ahead of TF.
+        marker_stamp = RosTime()
+        marker_lifetime = rclpy.duration.Duration(seconds=self.marker_lifetime_sec).to_msg()
         
         # 1. Khối trụ đỏ (Vùng vật cản)
         obs = Marker()
         obs.header.frame_id = self.camera_frame
-        obs.header.stamp = now
+        obs.header.stamp = marker_stamp
         obs.ns = "danger_zones"
         obs.id = human_id
         obs.type = Marker.CYLINDER
@@ -363,7 +368,7 @@ class MultiObjectTrackingNode(Node):
         obs.scale.z = max(0.5, human_height)
         
         obs.color.r = 1.0; obs.color.g = 0.1; obs.color.b = 0.1; obs.color.a = 0.5
-        obs.lifetime = rclpy.duration.Duration(seconds=0.1).to_msg()
+        obs.lifetime = marker_lifetime
         markers.append(obs)
 
         # 2. Mũi tên vận tốc (Trend di chuyển)
@@ -381,6 +386,7 @@ class MultiObjectTrackingNode(Node):
             ]
             arrow.scale.x = 0.05; arrow.scale.y = 0.1; arrow.scale.z = 0.1
             arrow.color.r = 1.0; arrow.color.g = 1.0; arrow.color.b = 0.0; arrow.color.a = 1.0
+            arrow.lifetime = marker_lifetime
             markers.append(arrow)
 
         return markers
