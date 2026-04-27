@@ -29,7 +29,6 @@ rl_ocp_policy_bridge:
     # Direct frequency tuning [Hz]
     policy_hz: 5.0
     service_hz: 5.0
-    tf_timeout_sec: 0.25
     follow_path_action: /follow_path
     controller_id: FollowPath
     goal_checker_id: general_goal_checker

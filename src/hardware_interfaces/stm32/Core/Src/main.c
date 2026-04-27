@@ -13,6 +13,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "data_struct.h"
+#include <geometry_msgs/msg/twist.h>
 #include <math.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -65,30 +66,29 @@ sensor_msgs__msg__JointState joint_msg;
 double pos_left = 0, pos_right = 0; // Đơn vị: Radian
 
 rcl_subscription_t cmd_vel_sub;
-geometry_msgs__msg__TwistStamped cmd_vel_msg;
+geometry_msgs__msg__Twist cmd_vel_msg;
 rclc_executor_t executor;
 
-// Tên các khớp phải khớp 100% với file URDF của bạn
+// Tên các khớp phải khớp 100% với file URDF của bạn (swapped order: Right, Left)
 const char* joint_names[2] = {"left_wheel_joint", "right_wheel_joint"};
 
-/* ---------- BIẾN ENCODER & PID (GIỮ NGUYÊN HỆ SỐ) ---------- */
-float speed_left = 0, speed_right = 0, setpoint_left = 0, setpoint_right = 0;
-float Kp_L = 810, Ki_L = 2800, Kd_L = 3.5;
-float Kp_R = 810, Ki_R = 2500, Kd_R = 3.7;
+/* ---------- BIẾN ENCODER & KINEMATIC DECOUPLING PID ---------- */
+float speed_left = 0, speed_right = 0;     // Vận tốc bánh xe (m/s)
+float speed_v = 0, speed_w = 0;            // Vận tốc thực tế: v (m/s), ω (rad/s)
+float setpoint_v = 0, setpoint_w = 0;      // Setpoint từ cmd_vel: v*, ω*
 
-float Error1=0, pre_Error1=0, pre_pre_Error1=0, duty_left=0, pre_duty_left=0;
-float Error2=0, pre_Error2=0, pre_pre_Error2=0, duty_right=0, pre_duty_right=0;
+// Hệ số PID cho Vận tốc dài (Linear Velocity - v)
+float Kp_v = 800.0f, Ki_v = 2800.0f, Kd_v = 0.0f;
+float Error_v = 0, pre_Error_v = 0, pre_pre_Error_v = 0, u_v = 0, pre_u_v = 0;
 
-int32_t enc_left=0, pre_enc_left=0, delta_left=0;
-int32_t enc_right=0, pre_enc_right=0, delta_right=0;
+// Hệ số PID cho Vận tốc góc (Angular Velocity - w)
+float Kp_w = 400.0f, Ki_w = 1200.0f, Kd_w = 0.0f;
+float Error_w = 0, pre_Error_w = 0, pre_pre_Error_w = 0, u_w = 0, pre_u_w = 0;
 
-/* ---------- BIẾN ĐỒNG BỘ CHÉO (Cross-Coupling Synchronization) ---------- */
-float K_sync_D = 150.0f;    // Khâu D (Phản I cũ) - chống rừng lắc vận tốc
-float K_sync_P = 800.0f;    // Khâu P (Phản II cũ) - kéo 2 vị trí lại gần nhau
-float K_sync_I = 50.0f;     // Khâu I (Phản III cũ) - tích phân vị trí
+float duty_left = 0, duty_right = 0;      // Tín hiệu PWM ra motor
 
-float pos_error = 0.0f;     // Lưu chênh lệch vị trí
-float pos_error_sum = 0.0f; // Lưu cộng dồn cũa chênh lệch vị trí
+int32_t enc_left = 0, pre_enc_left = 0, delta_left = 0;
+int32_t enc_right = 0, pre_enc_right = 0, delta_right = 0;
 
 /* USER CODE END PV */
 
@@ -104,8 +104,7 @@ void StartDefaultTask(void *argument);
 void MotorTask(void *argument);
 
 /* USER CODE BEGIN PFP */
-void PID_Calculate1(void);
-void PID_Calculate2(void);
+void Kinematic_PID_Calculate(void);
 void PWM_Calculate1(void);
 void PWM_Calculate2(void);
 
@@ -130,14 +129,14 @@ int _gettimeofday(struct timeval *tv, void *tzvp)
 
 void cmd_vel_callback(const void *msgin)
 {
-    const geometry_msgs__msg__TwistStamped *msg = (const geometry_msgs__msg__TwistStamped *)msgin;
+    const geometry_msgs__msg__Twist *msg = (const geometry_msgs__msg__Twist *)msgin;
 
-    float v = msg->twist.linear.x;   // m/s
-    float w = msg->twist.angular.z;  // rad/s
+    float v = msg->linear.x;   // m/s
+    float w = msg->angular.z;  // rad/s
 
     __disable_irq();
-    setpoint_right  = (v - (wheel_base / 2.0f) * (w));
-    setpoint_left = (v + (wheel_base / 2.0f) * (w));
+    setpoint_v = v;  // Gán trực tiếp vận tốc dài
+    setpoint_w = -w;  // Gán trực tiếp vận tốc góc
     __enable_irq();
 }
 /* USER CODE END PFP */
@@ -195,18 +194,33 @@ int main(void)
   HAL_GPIO_WritePin(GPIOA, GPIO_PIN_9 | GPIO_PIN_10, GPIO_PIN_SET);
   HAL_GPIO_WritePin(GPIOC, GPIO_PIN_10 | GPIO_PIN_12, GPIO_PIN_SET);
 
-  // 4. Reset biến đếm và PID
+  // 4. Reset biến đếm và PID (Kinematic Decoupling)
   __HAL_TIM_SET_COUNTER(&htim1, 0);
   __HAL_TIM_SET_COUNTER(&htim4, 0);
 
+  	// Encoder counters
   	enc_right = 0; pre_enc_right = 0; delta_right = 0;
 	enc_left = 0;  pre_enc_left = 0;  delta_left = 0;
+	
+	// Wheel speeds (feedback)
 	speed_left = 0.0f; speed_right = 0.0f;
-	setpoint_left = 0.0f; setpoint_right = 0.0f;
-	Error1 = 0; pre_Error1 = 0; pre_pre_Error1 = 0;
-	duty_right = 0; pre_duty_right = 0;
-	Error2 = 0; pre_Error2 = 0; pre_pre_Error2 = 0;
-	duty_left = 0; pre_duty_left = 0;
+	
+	// Robot center speeds (kinematic variables)
+	speed_v = 0.0f; speed_w = 0.0f;
+	
+	// Setpoints from ROS 2
+	setpoint_v = 0.0f; setpoint_w = 0.0f;
+	
+	// Linear velocity PID
+	Error_v = 0; pre_Error_v = 0; pre_pre_Error_v = 0;
+	u_v = 0; pre_u_v = 0;
+	
+	// Angular velocity PID
+	Error_w = 0; pre_Error_w = 0; pre_pre_Error_w = 0;
+	u_w = 0; pre_u_w = 0;
+	
+	// PWM outputs
+	duty_left = 0.0f; duty_right = 0.0f;
   /* USER CODE END 2 */
 
   /* Init scheduler */
@@ -480,7 +494,7 @@ static void MX_USART6_UART_Init(void)
 
   /* USER CODE END USART6_Init 1 */
   huart6.Instance = USART6;
-  huart6.Init.BaudRate = 115200;
+  huart6.Init.BaudRate = 921600;
   huart6.Init.WordLength = UART_WORDLENGTH_8B;
   huart6.Init.StopBits = UART_STOPBITS_1;
   huart6.Init.Parity = UART_PARITY_NONE;
@@ -578,70 +592,122 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
-/* --- OPTIMIZED PID & PWM FUNCTIONS --- */
-void PID_Calculate1() { // Trái
+/* --- KINEMATIC DECOUPLING PID & PWM FUNCTIONS --- */
+/**
+ * @brief Thuật toán điều khiển phân ly động học (Kinematic Decoupling Control)
+ *        Với Dynamic Scaling & Anti-Windup
+ * 
+ * Forward Kinematics:
+ *   speed_v = (speed_left + speed_right) / 2
+ *   speed_w = (speed_right - speed_left) / wheel_base
+ * 
+ * Inverse Kinematics:
+ *   duty_left  = u_v - u_w
+ *   duty_right = u_v + u_w
+ */
+void Kinematic_PID_Calculate(void) {
+	// ===== 1. ĐỌC CẢM BIẾN ENCODER (Incremental Encoder Decoding) =====
 	enc_left = __HAL_TIM_GET_COUNTER(&htim1);
 	delta_left = enc_left - pre_enc_left;
 	if(delta_left > 40000) delta_left -= 65536;
 	else if(delta_left < -40000) delta_left += 65536;
-
-	speed_left = ((delta_left/PPR)/Ts)*(2*M_PI*wheel_radius);
+	speed_left = ((delta_left / PPR) / Ts) * (2.0f * M_PI * wheel_radius);
 	pre_enc_left = enc_left;
 
-	float sp_l = setpoint_left;
-	Error1 = sp_l - speed_left;
-	if (sp_l == 0.0f) { duty_left = 0; return; }
-
-	// Công thức PID rò rỉ (Incremental PID)
-	duty_left = pre_duty_left + Kp_L*(Error1 - pre_Error1) + Ki_L*Ts*Error1 + (Kd_L/Ts)*(Error1 - 2*pre_Error1 + pre_pre_Error1);
-	if(duty_left > 699) duty_left = 699; else if (duty_left < -699) duty_left = -699;
-
-	pre_pre_Error1 = pre_Error1; pre_Error1 = Error1; pre_duty_left = duty_left;
-}
-
-void PID_Calculate2() { // Phải
 	enc_right = __HAL_TIM_GET_COUNTER(&htim4);
 	delta_right = enc_right - pre_enc_right;
 	if(delta_right > 40000) delta_right -= 65536;
 	else if(delta_right < -40000) delta_right += 65536;
-
-	speed_right = ((delta_right/PPR)/Ts)*(2*M_PI*wheel_radius);
+	speed_right = ((delta_right / PPR) / Ts) * (2.0f * M_PI * wheel_radius);
 	pre_enc_right = enc_right;
 
-	float sp_r = setpoint_right;
-	Error2 = sp_r - speed_right;
-	// SỬA LỖI 2: Xóa ký tự 's' thừa ở đây
-	if (sp_r == 0.0f) { duty_right = 0; return; }
+	// ===== 2. FORWARD KINEMATICS (Tính toán v & ω từ speed_left, speed_right) =====
+	speed_v = (speed_left + speed_right) / 2.0f;           // Vận tốc dài (m/s)
+	speed_w = (speed_right - speed_left) / wheel_base;     // Vận tốc góc (rad/s)
 
-	duty_right = pre_duty_right + Kp_R*(Error2 - pre_Error2) + Ki_R*Ts*Error2 + (Kd_R/Ts)*(Error2 - 2*pre_Error2 + pre_pre_Error2);
-	if(duty_right > 699) duty_right = 699; else if (duty_right < -699) duty_right = -699;
+	// ===== 3. XỬ LÝ LỆNH DỪNG (Stop Command Handler) =====
+	if (setpoint_v == 0.0f && setpoint_w == 0.0f) {
+		u_v = 0; pre_u_v = 0; pre_Error_v = 0; pre_pre_Error_v = 0;
+		u_w = 0; pre_u_w = 0; pre_Error_w = 0; pre_pre_Error_w = 0;
+		duty_left = 0; duty_right = 0;
+		return;
+	}
 
-	pre_pre_Error2 = pre_Error2; pre_Error2 = Error2; pre_duty_right = duty_right;
+	// ===== 4. TÍNH TOÁN PID RỜI RẠC CHO VẬN TỐC DÀI (Linear Velocity PID) =====
+	Error_v = setpoint_v - speed_v;
+	u_v = pre_u_v + Kp_v * (Error_v - pre_Error_v) 
+	            + Ki_v * Ts * Error_v 
+	            + (Kd_v / Ts) * (Error_v - 2.0f * pre_Error_v + pre_pre_Error_v);
+
+	// ===== 5. TÍNH TOÁN PID RỜI RẠC CHO VẬN TỐC GÓC (Angular Velocity PID) =====
+	Error_w = setpoint_w - speed_w;
+	u_w = pre_u_w + Kp_w * (Error_w - pre_Error_w) 
+	           + Ki_w * Ts * Error_w 
+	           + (Kd_w / Ts) * (Error_w - 2.0f * pre_Error_w + pre_pre_Error_w);
+
+	// ===== 6. INVERSE KINEMATICS + DYNAMIC SCALING (Anti-Saturation) =====
+	// Quy ước ROS 2: +angular.z => rẽ trái => bánh phải nhanh hơn bánh trái
+	// v_left  = v - (w * wheel_base / 2)
+	// v_right = v + (w * wheel_base / 2)
+	float angular_term = u_w * (wheel_base * 0.5f);
+	float raw_duty_left  = u_v - angular_term;
+	float raw_duty_right = u_v + angular_term;
+
+	float max_pwm_limit = 699.0f;
+	float max_requested = (fabsf(raw_duty_left) > fabsf(raw_duty_right)) 
+	                      ? fabsf(raw_duty_left) : fabsf(raw_duty_right);
+
+	if (max_requested > max_pwm_limit) {
+		// Tính hệ số thu nhỏ để giữ tỷ lệ
+		float scale_factor = max_pwm_limit / max_requested;
+		
+		// Thu nhỏ cả 2 bánh theo cùng tỷ lệ (bảo toàn quỹ đạo cong)
+		duty_left  = raw_duty_left * scale_factor;
+		duty_right = raw_duty_right * scale_factor;
+		
+		// Back-calculation Anti-Windup: Gắn lại u_v, u_w thực tế
+		u_v = u_v * scale_factor;
+		u_w = u_w * scale_factor;
+	} else {
+		duty_left  = raw_duty_left;
+		duty_right = raw_duty_right;
+	}
+
+	// ===== 7. CẬP NHẬT BIẾN TRẠNG THÁI CHO CHU KỲ SAU =====
+	pre_pre_Error_v = pre_Error_v; 
+	pre_Error_v = Error_v; 
+	pre_u_v = u_v;
+
+	pre_pre_Error_w = pre_Error_w; 
+	pre_Error_w = Error_w; 
+	pre_u_w = u_w;
 }
 
 void PWM_Calculate1() { // Trái
-	if(duty_left == 0){
+	// Thêm deadzone: Nếu duty nhỏ hơn 1% (10/1000) thì ép về 0 để tránh chạy tự động
+	if(fabsf(duty_left) < 10.0f){
 		__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, 0);
 		__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_4, 0);
 	}else if(duty_left > 0){
-		__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, duty_left);
+		__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, (uint32_t)duty_left);
 		__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_4, 0);
 	}else{
 		__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, 0);
-		__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_4, -duty_left);
+		__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_4, (uint32_t)(-duty_left));
 	}
 }
 
 void PWM_Calculate2() { // Phải
-	if(duty_right == 0){
+	// Thêm deadzone: Nếu duty nhỏ hơn 1% (10/1000) thì ép về 0 để tránh chạy tự động
+	if(fabsf(duty_right) < 10.0f){
 		__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, 0);
 		__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, 0);
 	}else if(duty_right > 0){
-		__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, duty_right);
+		__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, (uint32_t)duty_right);
 		__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, 0);
 	}else{
 		__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, 0);
-		__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, -duty_right);
+		__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, (uint32_t)(-duty_right));
 	}
 }
 /* USER CODE END 4 */
@@ -674,7 +740,10 @@ void StartDefaultTask(void *argument)
 
 	// 2. Init cmd_vel Subscription
 	rclc_subscription_init_default(&cmd_vel_sub, &node,
-		ROSIDL_GET_MSG_TYPE_SUPPORT(geometry_msgs, msg, TwistStamped), "/diff_cont/cmd_vel");
+		ROSIDL_GET_MSG_TYPE_SUPPORT(geometry_msgs, msg, Twist), "/diff_cont/cmd_vel_unstamped");
+
+	// 2b. Debug publisher removed for performance optimization
+	// (Loại bỏ để tối ưu hóa hiệu năng truyền dữ liệu UART/DMA)
 
 	rclc_executor_init(&executor, &support.context, 1, &allocator);
 	rclc_executor_add_subscription(&executor, &cmd_vel_sub, &cmd_vel_msg, &cmd_vel_callback, ON_NEW_DATA);
@@ -699,12 +768,23 @@ void StartDefaultTask(void *argument)
 	rmw_uros_sync_session(1000);
 
 	uint32_t sync_counter = 0;
+	
+	/* ========== PUBLISH RATE CONFIGURATION ==========
+	 * 100Hz TUYỆT ĐỐI (ổn định nhất): Dùng osDelayUntil
+	 * Loại bỏ jitter bằng cơ chế delay tuyệt đối thay vì tương đối
+	 * ============================================= */
+	
+	// Khởi tạo biến thời gian cho osDelayUntil (absolute timing)
+	uint32_t tick_start = osKernelGetTickCount(); 
+	const uint32_t frequency_ms = 10;  // 10ms = 100Hz (chu kỳ chính xác)
+	const float dt_100hz = 0.01f;      // Delta time = 0.01s
+	
 	while (1)
 	{
 
 		// --- Đồng bộ Clock với Master --- //
 		sync_counter++;
-		if(sync_counter >=3000){
+		if(sync_counter >=5000){  // Sync mỗi ~50 giây ở 100Hz
 			rmw_uros_sync_session(10);
 			sync_counter = 0;
 		}
@@ -713,25 +793,35 @@ void StartDefaultTask(void *argument)
 		double wl = (double)(speed_left / wheel_radius);
 		double wr = (double)(speed_right / wheel_radius);
 
-		// Tích phân vị trí (rad) = vị trí cũ + (vận tốc * thời gian)
-		// Task chạy chu kỳ 20ms = 0.02s
-		pos_left  += wl * 0.02;
-		pos_right += wr * 0.02;
+		// Tích phân vị trí (rad) = vị trí cũ + (vận tốc * dt)
+		// dt_100hz = 0.01s chính xác cho 100Hz
+		pos_left  += wl * dt_100hz;
+		pos_right += wr * dt_100hz;
 
-		// --- GÁN DỮ LIỆU ---
+		// --- GÁN DỮ LIỆU (KHỚP CẶP RIGHT-RIGHT, LEFT-LEFT) ---
 		int64_t time_ns = rmw_uros_epoch_nanos();
 		joint_msg.header.stamp.sec = (int32_t)(time_ns / 1000000000);
 		joint_msg.header.stamp.nanosec = (uint32_t)(time_ns % 1000000000);
-		joint_msg.position.data[0] = pos_left;
-		joint_msg.position.data[1] = pos_right;
-		joint_msg.velocity.data[0] = wl;
-		joint_msg.velocity.data[1] = wr;
 
+		joint_msg.position.data[0] = pos_right;
+		joint_msg.position.data[1] = pos_left;
+		joint_msg.velocity.data[0] = wr;
+		joint_msg.velocity.data[1] = wl;
+
+		// --- PUBLISH JOINT STATE ---
+		// Debug velocity publisher removed for performance optimization
 		rcl_publish(&joint_pub, &joint_msg, NULL);
 		rclc_executor_spin_some(&executor, RCL_MS_TO_NS(0));
 
 		HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_14);
-		osDelay(20);
+		
+		/* === PUBLISH RATE CONTROL (ABSOLUTE TIMING) ===
+		 * osDelayUntil: Bù trừ thời gian xử lý code → 100% chính xác 100Hz
+		 * Không phụ thuộc vào thời gian thực thi của micro-ROS operations
+		 * Công thức: tick_start += frequency_ms; osDelayUntil(tick_start);
+		 */
+		tick_start += frequency_ms;  // Tăng tick_start lên 10ms
+		osDelayUntil(tick_start);     // Delay cho đến tick_start
 	}
   /* USER CODE END 5 */
 }
@@ -741,52 +831,18 @@ void StartDefaultTask(void *argument)
 void MotorTask(void *argument)
 {
   /* USER CODE BEGIN MotorTask */
-  /* Infinite loop */
+  /* Infinite loop - 100Hz Motor Control Loop */
   for(;;)
   {
-	  // 1. Chạy 2 bộ PID độc lập
-	  PID_Calculate1();
-	  PID_Calculate2();
+	  // 1. Thuật toán điều khiển phân ly động học
+	  //    Tính toán u_v, u_w và duty_left, duty_right với Dynamic Scaling
+	  Kinematic_PID_Calculate();
 
-	  // 2. THUẬT TOÁN ĐỒNG BỘ PID Vị TRÍ
-	  if (setpoint_left != 0.0f && setpoint_left == setpoint_right) 
-	  {
-		  // 1. Sai số vận tốc (Khâu D cũa Vị trí)
-		  float speed_error = speed_left - speed_right;
-		  
-		  // 2. Sai số vị trí (Khâu P cũa Vị trí) - Tích phân cũa vận tốc
-		  pos_error += speed_error * 0.01f;
-		  
-		  // 3. Tích phân cũa Sai số vị trí (Khâu I cũa Vị trí)
-		  pos_error_sum += pos_error * 0.01f;
-
-		  // Anti-Windup cho khâu I mới (Tránh xe bị giật khi khởi động)
-		  if(pos_error_sum > 15.0f) pos_error_sum = 15.0f;
-		  else if(pos_error_sum < -15.0f) pos_error_sum = -15.0f;
-
-		  // 4. Xuất lực bù đồng bộ (PID hoàn chỉnh)
-		  float duty_sync_adjust = (K_sync_D * speed_error) + 
-		                           (K_sync_P * pos_error) + 
-		                           (K_sync_I * pos_error_sum);
-
-		  duty_left  -= duty_sync_adjust;
-		  duty_right += duty_sync_adjust;
-
-		  // Chặn giới hạn PWM
-		  if(duty_left > 699) duty_left = 699; else if (duty_left < -699) duty_left = -699;
-		  if(duty_right > 699) duty_right = 699; else if (duty_right < -699) duty_right = -699;
-	  }
-	  else 
-	  {
-		  // Xóa sạch bộ nhớ khi xe rẽ hoặc dừng
-		  pos_error = 0.0f;
-		  pos_error_sum = 0.0f; 
-	  }
-
-	  // 3. Xuất PWM ra Driver BTS7960
+	  // 2. Xuất PWM ra Driver BTS7960
 	  PWM_Calculate1();
 	  PWM_Calculate2();
 	  
+	  // Đảm bảo chạy chính xác ở 100Hz
 	  osDelay(10);
   }
   /* USER CODE END MotorTask */

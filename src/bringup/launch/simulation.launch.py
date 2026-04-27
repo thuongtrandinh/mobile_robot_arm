@@ -4,6 +4,7 @@ from ament_index_python.packages import get_package_share_directory
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 
@@ -11,11 +12,11 @@ from launch.substitutions import LaunchConfiguration
 def generate_launch_description():
     use_sim_time = LaunchConfiguration("use_sim_time")
     launch_rviz = LaunchConfiguration("launch_rviz")
+    launch_yolo = LaunchConfiguration("launch_yolo")
     world = LaunchConfiguration("world")
     x_pos = LaunchConfiguration("x_pos")
     y_pos = LaunchConfiguration("y_pos")
     yaw = LaunchConfiguration("yaw")
-    localization_ekf_config = LaunchConfiguration("localization_ekf_config")
     localization_cfg = LaunchConfiguration("localization_cfg")
     localization_database_path = LaunchConfiguration("localization_database_path")
     localization_namespace = LaunchConfiguration("localization_namespace")
@@ -35,6 +36,12 @@ def generate_launch_description():
         description="Launch RViz in simulation mode",
         choices=["true", "false"],
     )
+    launch_yolo_arg = DeclareLaunchArgument(
+        "launch_yolo",
+        default_value="true",
+        description="Launch YOLO multi-object tracking for Gazebo camera",
+        choices=["true", "false"],
+    )
     world_arg = DeclareLaunchArgument(
         "world",
         default_value="room_20x20.world",
@@ -43,26 +50,17 @@ def generate_launch_description():
     x_pos_arg = DeclareLaunchArgument(
         "x_pos",
         default_value="0.0",
-        description="Initial robot X pose in simulation",
+        description="Initial robot x position in the map/Gazebo frame",
     )
     y_pos_arg = DeclareLaunchArgument(
         "y_pos",
         default_value="0.0",
-        description="Initial robot Y pose in simulation",
+        description="Initial robot y position in the map/Gazebo frame",
     )
     yaw_arg = DeclareLaunchArgument(
         "yaw",
         default_value="0.0",
-        description="Initial robot yaw in simulation",
-    )
-    localization_ekf_config_arg = DeclareLaunchArgument(
-        "localization_ekf_config",
-        default_value=os.path.join(
-            get_package_share_directory("localization"),
-            "config",
-            "ekf_sim.yaml",
-        ),
-        description="EKF config file used by localization in simulation",
+        description="Initial robot yaw in radians in the map/Gazebo frame",
     )
     localization_cfg_arg = DeclareLaunchArgument(
         "localization_cfg",
@@ -142,14 +140,28 @@ def generate_launch_description():
         }.items(),
     )
 
+    yolo_tracking = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(
+                get_package_share_directory("yolo"),
+                "launch",
+                "multi_object_tracking.launch.py",
+            )
+        ),
+        launch_arguments={
+            "use_sim_time": use_sim_time,
+        }.items(),
+        condition=IfCondition(launch_yolo),
+    )
+
     return LaunchDescription([
         use_sim_time_arg,
         launch_rviz_arg,
+        launch_yolo_arg,
         world_arg,
         x_pos_arg,
         y_pos_arg,
         yaw_arg,
-        localization_ekf_config_arg,
         localization_cfg_arg,
         localization_database_path_arg,
         localization_namespace_arg,
@@ -158,4 +170,5 @@ def generate_launch_description():
         localization_use_map_server_arg,
         gazebo,
         localization_rtabmap,
+        yolo_tracking,
     ])

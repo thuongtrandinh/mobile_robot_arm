@@ -1,0 +1,7 @@
+<class_libraries>
+  <library path="mppi_controller">
+    <class type="amr_nav2_mppi_controller::MPPIController" base_class_type="nav2_core::Controller">
+      <description>AMR MPPI Controller for Nav2 with custom critics</description>
+    </class>
+  </library>
+</class_libraries>

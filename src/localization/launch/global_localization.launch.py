@@ -6,6 +6,16 @@ from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
+def generate_launch_description():
+    workspace_root = os.path.abspath(os.path.join(get_package_share_directory('localization'), '..', '..', '..', '..'))
+    default_map_path = os.path.join(
+        workspace_root,
+        'src',
+        'mapping',
+        'maps',
+        'room_20x20',
+        'room_20x20_map.yaml',
+    )
 
 def launch_setup(context, *args, **kwargs):
     localization_dir = get_package_share_directory("localization")
@@ -68,26 +78,5 @@ def launch_setup(context, *args, **kwargs):
         map_server_node,
         ekf_filter_node,
         nav2_amcl,
-        nav2_lifecycle_manager,
-    ]
-
-
-def generate_launch_description():
-    default_map_path = "/home/hdt/LVTN/mobile_robot_arm/src/mapping/maps/room_20x20/room_20x20_map.yaml"
-
-    return LaunchDescription([
-        DeclareLaunchArgument(
-            "map",
-            default_value=default_map_path,
-            description="Full path to the map yaml file",
-        ),
-        DeclareLaunchArgument(
-            "use_sim_time",
-            default_value="true",
-            description="Use simulation time",
-        ),
-        DeclareLaunchArgument("x_pos", default_value="0.0"),
-        DeclareLaunchArgument("y_pos", default_value="0.0"),
-        DeclareLaunchArgument("yaw", default_value="0.0"),
-        OpaqueFunction(function=launch_setup),
+        nav2_lifecycle_manager
     ])

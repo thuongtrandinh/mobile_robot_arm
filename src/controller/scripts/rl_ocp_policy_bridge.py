@@ -17,6 +17,8 @@ from interfaces.srv import OcpLocalPlann
 from geometry_msgs.msg import PoseStamped, Twist
 from nav2_msgs.action import FollowPath
 from nav_msgs.msg import OccupancyGrid, Odometry, Path
+from nav2_msgs.action import FollowPath
+from nav_msgs.msg import OccupancyGrid, Odometry, Path
 from rcl_interfaces.msg import SetParametersResult
 from rclpy.duration import Duration
 from rclpy.node import Node
@@ -70,7 +72,6 @@ class RlOcpPolicyBridge(Node):
         self.declare_parameter("service_hz", 10.0)
         self.declare_parameter("goal_source_mode", self._GOAL_SOURCE_RL)
         self.declare_parameter("policy_period", 0.2)
-        self.declare_parameter("tf_timeout_sec", 0.25)
 
         self.declare_parameter("planner_half_width", 5.8)
         self.declare_parameter("planner_half_height", 9.8)
@@ -159,10 +160,6 @@ class RlOcpPolicyBridge(Node):
         )
         self.policy_period = 1.0 / self.policy_hz
         self.service_period = 1.0 / self.service_hz
-        self.tf_timeout_sec = max(
-            0.01,
-            self.get_parameter("tf_timeout_sec").get_parameter_value().double_value,
-        )
         self.planner_half_width = self.get_parameter("planner_half_width").get_parameter_value().double_value
         self.planner_half_height = self.get_parameter("planner_half_height").get_parameter_value().double_value
         self.planner_hard_half_width = self.get_parameter("planner_hard_half_width").get_parameter_value().double_value
@@ -258,7 +255,6 @@ class RlOcpPolicyBridge(Node):
         self.current_goal: Optional[Tuple[float, float, float]] = None
         self.current_goal_frame: str = ""
         self.latest_scan: Optional[LaserScan] = None
-        self.scan_frame: str = ""
         self.scan_seq = 0
         self.scan_persistence: Dict[Tuple[int, int], Tuple[int, int]] = {}
         self.latest_humans: Optional[HumanArray] = None
@@ -844,7 +840,6 @@ class RlOcpPolicyBridge(Node):
 
     def _scan_callback(self, msg: LaserScan) -> None:
         self.latest_scan = msg
-        self.scan_frame = msg.header.frame_id if msg.header.frame_id else self.scan_frame
         self.scan_seq += 1
 
     def _goal_callback(self, msg: PoseStamped) -> None:
@@ -1256,7 +1251,7 @@ class RlOcpPolicyBridge(Node):
                 self.map_frame,
                 source_frame,
                 Time(),
-                timeout=Duration(seconds=self.tf_timeout_sec),
+                timeout=Duration(seconds=0.05),
             )
         except TransformException:
             return None
@@ -1441,14 +1436,12 @@ class RlOcpPolicyBridge(Node):
             if not self._scan_has_neighbor_support(i, float(r)):
                 continue
 
-            ang = angle_min + i * angle_inc
-            sx = r * math.cos(ang)
-            sy = r * math.sin(ang)
-            if scan_frame == self.map_frame:
-                ox, oy = sx, sy
-            elif scan_tf is not None:
-                ox, oy = self._transform_point_with_tf(sx, sy, scan_tf)
-            else:
+            ang = yaw + angle_min + i * angle_inc
+            ox = px + r * math.cos(ang)
+            oy = py + r * math.sin(ang)
+
+            map_xy = self._point_to_map_frame(ox, oy)
+            if map_xy is None:
                 continue
 
             if abs(ox - px_map) >= x_lim or abs(oy - py_map) >= y_lim:

@@ -2,6 +2,15 @@ multi_object_tracking_node:
   ros__parameters:
     # ===== MODEL & HARDWARE =====
     model_path: 'yolov8n.pt'
+    use_sim_time: false
+    use_cuda: true
+    use_fp16: true
+
+    # ===== ROS TOPICS =====
+    topics:
+      rgb: '/camera/color/image_raw'
+      depth: '/camera/aligned_depth_to_color/image_raw'
+      camera_info: '/camera/color/camera_info'
     
     # ===== YOLO DETECTION PARAMETERS =====
     yolo:
@@ -62,6 +71,7 @@ multi_object_tracking_node:
     # ===== D435i CAMERA INTRINSICS (VGA - 640x480) =====
     # Values extracted from /camera/color/camera_info (aligned depth uses color intrinsics)
     camera:
+      frame_id: 'camera_link'
       width: 640
       height: 480
       fx: 609.268    # Focal length X (K[0])
