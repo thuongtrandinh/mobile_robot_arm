@@ -53,7 +53,7 @@ rl_ocp_policy_bridge:
     scan_obstacle_limit: 60
     lidar_dynamic_enabled: true
     lidar_dynamic_radius: 0.25
-    lidar_dynamic_safety_margin: 0.20
+    lidar_dynamic_safety_margin: 0.30
     lidar_dynamic_map_clearance: 0.08
     auto_relax_constraints: false
     use_map_static_obstacles: true
@@ -64,7 +64,7 @@ rl_ocp_policy_bridge:
     human_max_age_sec: 0.6
     human_min_radius: 0.01
     human_max_radius: 1.50
-    human_safety_margin: 0.20
+    human_safety_margin: 0.40
     human_limit: 12
     map_geometry_boundary_area_ratio: 1.0
     map_geometry_wall_linearity_ratio: 100.0

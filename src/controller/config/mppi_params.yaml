@@ -29,13 +29,13 @@ controller_server:
       model_dt: 0.1
       batch_size: 2000
 
-      vx_min: -0.15
-      vx_max: 0.3
+      vx_min: -0.3
+      vx_max: 0.5
       vy_max: 0.0
       wz_max: 0.3
 
-      ax_min: -0.1
-      ax_max: 0.1
+      ax_min: -0.15
+      ax_max: 0.15
       ay_max: 0.0
       az_max: 0.1
 
@@ -62,15 +62,15 @@ controller_server:
       ConstraintCritic:
         cost_weight: 4.0
       ObstaclesCritic:
-        repulsion_weight: 1.0
-        cost_weight: 40.0
+        repulsion_weight: 5.0
+        cost_weight: 20.0
         collision_cost: 100000.0
       DynamicHumanCritic:
         enabled: true
         human_topic: /tracking/humans
         publish_debug: true
         debug_topic: /debug/dynamic_human_critic
-        cost_weight: 40.0
+        cost_weight: 100.0
         collision_cost: 100000.0
         safe_margin: 0.20
         human_min_radius: 0.01
@@ -86,7 +86,7 @@ controller_server:
         cost_weight: 22.0
         threshold_to_consider: 1.0
       PreferForwardCritic:
-        cost_weight: 50.0
+        cost_weight: 100.0
         threshold_to_consider: 0.5
 
 planner_server:

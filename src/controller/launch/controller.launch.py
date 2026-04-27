@@ -287,7 +287,7 @@ def generate_launch_description():
                 "follow_path_replan_min_interval_sec": 0.80,
                 "follow_path_replan_path_delta": 0.35,
                 "tf_timeout_sec": 0.10,
-                "obstacle_sample_step": 16,
+                "obstacle_sample_step": 2,
                 "scan_filter_enabled": True,
                 "scan_obstacle_max_range": 3.0,
                 "scan_neighbor_window": 2,

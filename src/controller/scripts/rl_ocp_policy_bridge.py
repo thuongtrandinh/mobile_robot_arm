@@ -68,7 +68,7 @@ class RlOcpPolicyBridge(Node):
         self.declare_parameter("human_max_age_sec", 0.6)
         self.declare_parameter("human_min_radius", 0.01)
         self.declare_parameter("human_max_radius", 1.50)
-        self.declare_parameter("human_safety_margin", 0.20)
+        self.declare_parameter("human_safety_margin", 0.40)
         self.declare_parameter("human_limit", 12)
         self.declare_parameter("auto_relax_constraints", False)
         self.declare_parameter("timer_period", 0.1)
