@@ -30,18 +30,16 @@ controller_server:
       batch_size: 2000
       
       # Giới hạn Động học & Vận tốc
-      ax_min: -0.1
-      ax_max: 0.1
-      ay_max: 0.0
-      ay_min: 0.0
-      az_min: -0.05
-      az_max: 0.05
       vx_min: 0.0
       vx_max: 0.3
-      vy_min: 0.0   # Bắt buộc = 0 cho DDMR
-      vy_max: 0.0
-      vz_min: -0.1
-      vz_max: 0.1
+      vy_max: 0.0     # DDMR không chạy ngang, chỉ cần khai báo max
+      wz_max: 0.3     # Thay thế hoàn toàn cho cặp vz_min / vz_max bị lỗi
+      
+      # --- Giới hạn Gia tốc ---
+      ax_min: -0.1
+      ax_max: 0.1
+      ay_max: 0.0     
+      az_max: 0.1    # Giới hạn gia tốc góc siêu êm, không dùng az_min
 
       # Thông số nội bộ của MPPI
       motion_model: "DiffDrive" # Khai báo rõ mô hình động học vi sai
