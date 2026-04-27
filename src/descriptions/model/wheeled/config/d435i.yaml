@@ -1,0 +1,29 @@
+# ===== D435i Configuration Flat Style (Fixed for IMU) =====
+camera_name: 'camera'
+camera_namespace: ''
+device_type: 'd435i'
+
+enable_color: 'true'
+enable_depth: 'true'
+enable_sync: 'true'
+align_depth.enable: 'true'
+
+# Ép bật IMU bằng chuỗi ký tự chuẩn
+enable_gyro: 'true'
+enable_accel: 'true'
+unite_imu_method: '2' 
+
+rgb_camera.color_profile: '640,480,30'
+depth_module.depth_profile: '640,480,30'
+depth_module.infra_profile: '640,480,30'
+
+pointcloud.enable: 'true'
+pointcloud.ordered_pc: 'true'
+
+# Bộ lọc
+decimation_filter.enable: 'true'
+decimation_filter.filter_magnitude: '2'
+hole_filling_filter.enable: 'true'
+
+# Reset phần cứng cực kỳ quan trọng cho D435i
+initial_reset: 'true'

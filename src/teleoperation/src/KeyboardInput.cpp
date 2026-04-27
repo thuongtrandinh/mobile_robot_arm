@@ -49,6 +49,8 @@ KeyboardInput::~KeyboardInput()
 
 void KeyboardInput::keyboardLoop()
 {
+    double current_linear = 0.0;
+    double current_angular = 0.0;
     char c;
     while (running_)
     {
@@ -62,22 +64,28 @@ void KeyboardInput::keyboardLoop()
         {
         case 'w':
         case 'W':
-            publishCmd(1.0, 0.0); // Tiến
+            current_linear = 0.2; // Tiến, giữ nguyên góc quay hiện tại
+            publishCmd(current_linear, current_angular);
             break;
         case 's':
         case 'S':
-            publishCmd(-1.0, 0.0); // Lùi
+            current_linear = -0.2; // Lùi, giữ nguyên góc quay hiện tại
+            publishCmd(current_linear, current_angular);
             break;
         case 'a':
         case 'A':
-            publishCmd(0.0, 1.0); // Quay trái
+            current_angular = 0.2; // Quay trái, giữ nguyên tốc độ tiến/lùi
+            publishCmd(current_linear, current_angular);
             break;
         case 'd':
         case 'D':
-            publishCmd(0.0, -1.0); // Quay phải
+            current_angular = -0.2; // Quay phải, giữ nguyên tốc độ tiến/lùi
+            publishCmd(current_linear, current_angular);
             break;
         case ' ':
-            publishCmd(0.0, 0.0); // Dừng
+            current_linear = 0.0;
+            current_angular = 0.0;
+            publishCmd(current_linear, current_angular); // Dừng
             break;
         default:
             break;

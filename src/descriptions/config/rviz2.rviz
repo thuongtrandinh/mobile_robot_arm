@@ -4,7 +4,6 @@ Panels:
     Name: Displays
     Property Tree Widget:
       Expanded:
-        - /Global Options1
         - /ParticleCloud1/Topic1
         - /MarkerArray3
       Splitter Ratio: 0.5
@@ -283,46 +282,13 @@ Visualization Manager:
         Depth: 5
         Durability Policy: Volatile
         History Policy: Keep Last
-        Reliability Policy: Reliable
-        Value: /zed/zed_node/rgb/color/rect/image
+        Reliability Policy: Best Effort
+        Value: /camera/color/image_raw
       Value: true
-    - Class: rviz_default_plugins/MarkerArray
-      Enabled: false
-      Name: MarkerArray
-      Namespaces:
-        {}
-      Topic:
-        Depth: 5
-        Durability Policy: Volatile
-        History Policy: Keep Last
-        Reliability Policy: Reliable
-        Value: /aruco/markers
-      Value: false
-    - Alpha: 0.699999988079071
-      Class: rviz_default_plugins/Map
-      Color Scheme: map
-      Draw Behind: false
-      Enabled: false
-      Name: Map
-      Topic:
-        Depth: 5
-        Durability Policy: Transient Local
-        Filter size: 10
-        History Policy: Keep Last
-        Reliability Policy: Reliable
-        Value: /map
-      Update Topic:
-        Depth: 5
-        Durability Policy: Volatile
-        History Policy: Keep Last
-        Reliability Policy: Reliable
-        Value: /map_updates
-      Use Timestamp: false
-      Value: false
     - Alpha: 1
       Class: nav2_rviz_plugins/ParticleCloud
       Color: 255; 25; 0
-      Enabled: true
+      Enabled: false
       Max Arrow Length: 0.30000001192092896
       Min Arrow Length: 0.019999999552965164
       Name: ParticleCloud
@@ -351,7 +317,7 @@ Visualization Manager:
       Class: rviz_default_plugins/Map
       Color Scheme: map
       Draw Behind: false
-      Enabled: true
+      Enabled: false
       Name: Map
       Topic:
         Depth: 5
@@ -400,7 +366,7 @@ Visualization Manager:
       Enabled: true
       Name: MarkerArray
       Namespaces:
-        {}
+        planner_scene: true
       Topic:
         Depth: 5
         Durability Policy: Volatile
@@ -408,11 +374,44 @@ Visualization Manager:
         Reliability Policy: Reliable
         Value: /planner/debug_markers
       Value: true
+    - Alpha: 0.699999988079071
+      Class: rviz_default_plugins/Map
+      Color Scheme: map
+      Draw Behind: false
+      Enabled: true
+      Name: Map
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /a_star/local_costmap
+      Update Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /a_star/local_costmap_updates
+      Use Timestamp: false
+      Value: true
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: false
+      Name: MarkerArray
+      Namespaces:
+        {}
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /trajectories
+      Value: true
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48
     Fixed Frame: map
-    Frame Rate: 30
+    Frame Rate: 60
   Name: root
   Tools:
     - Class: rviz_default_plugins/Interact
@@ -454,7 +453,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz_default_plugins/Orbit
-      Distance: 27.188703536987305
+      Distance: 26.030982971191406
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1

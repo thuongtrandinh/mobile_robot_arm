@@ -15,19 +15,19 @@ diff_cont:
     right_wheel_names: ["right_wheel_joint"]
 
     # Physical Parameters - CRITICAL: Đúng kích thước từ URDF
-    wheel_separation: 0.46  # m - distance between wheels
+    wheel_separation: 0.5  # m - distance between wheels
     wheel_radius: 0.05       # m - wheel radius
 
     # TF and Odometry Settings
     publish_odom: true            # Still publish /diff_cont/odom topic
     odom_frame_id: "odom"
     base_frame_id: "base_footprint"
-    enable_odom_tf: false          # CRITICAL: FALSE - Let EKF publish odom→base_footprint TF after sensor fusion!
+    enable_odom_tf: false          # EKF publishes odom->base_footprint; avoid duplicate TF from diff_drive_controller.
 
     # CRITICAL: Accept stamped cmd_vel
     cmd_vel_timeout: 0.5
     publish_rate: 50.0
-    use_stamped_vel: true  # IMPORTANT: Accept stamped Twist messages
+    use_stamped_vel: false  # IMPORTANT: Accept unstamped Twist messages (from Nav2)
     
     # Input/Output remapping
     cmd_vel: cmd_vel  # Subscribe to standard /cmd_vel topic

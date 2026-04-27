@@ -5,22 +5,34 @@ import os
 import shlex
 import subprocess
 import sys
-from typing import List, Optional, Tuple
+import threading
+from typing import Dict, List, Optional, Tuple
 
+import numpy as np
 import rclpy
-from interfaces.msg import ObstacleState, WallState, PolyState, Point as PolyPoint
+from rclpy.action import ActionClient
+from interfaces.msg import ObstacleState, WallState, PolyState, HumanState, HumanArray
 from interfaces.msg import JointState as InterfaceJointState
 from interfaces.srv import OcpLocalPlann
-from geometry_msgs.msg import PoseStamped, TwistStamped, Point as RosPoint
-from nav_msgs.msg import OccupancyGrid, Odometry
+from geometry_msgs.msg import PoseStamped, Twist
+from nav2_msgs.action import FollowPath
+from nav_msgs.msg import OccupancyGrid, Odometry, Path
+from nav2_msgs.action import FollowPath
+from nav_msgs.msg import OccupancyGrid, Odometry, Path
 from rcl_interfaces.msg import SetParametersResult
+from rclpy.duration import Duration
 from rclpy.node import Node
+from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
+from rclpy.time import Time
 from sensor_msgs.msg import LaserScan
 from std_msgs.msg import String
-from visualization_msgs.msg import Marker, MarkerArray
+from tf2_ros import Buffer, TransformException, TransformListener
 
 
 class RlOcpPolicyBridge(Node):
+    _GOAL_SOURCE_RL = "rl_local_goal"
+    _GOAL_SOURCE_RVIZ = "rviz_global_goal"
+
     def __init__(self):
         super().__init__("rl_ocp_policy_bridge")
 
@@ -37,17 +49,45 @@ class RlOcpPolicyBridge(Node):
         self.declare_parameter("v_pref", 0.8)
         self.declare_parameter("obstacle_radius", 0.2)
         self.declare_parameter("obstacle_sample_step", 16)
+        self.declare_parameter("scan_filter_enabled", True)
+        self.declare_parameter("scan_obstacle_max_range", 3.0)
+        self.declare_parameter("scan_neighbor_window", 2)
+        self.declare_parameter("scan_min_neighbor_count", 2)
+        self.declare_parameter("scan_neighbor_max_delta", 0.18)
+        self.declare_parameter("scan_persistence_hits", 2)
+        self.declare_parameter("scan_persistence_decay_scans", 4)
+        self.declare_parameter("scan_persistence_resolution", 0.12)
+        self.declare_parameter("scan_obstacle_limit", 60)
+        self.declare_parameter("use_map_static_obstacles", True)
+        self.declare_parameter("map_static_obstacle_radius", 0.2)
+        self.declare_parameter("map_static_sample_step_m", 0.3)
+        self.declare_parameter("map_static_obstacle_limit", 40)
+        self.declare_parameter("enforce_scene_entities", True)
+        self.declare_parameter("human_fallback_enabled", True)
+        self.declare_parameter("human_fallback_limit", 20)
+        self.declare_parameter("human_fallback_radius", 0.25)
+        self.declare_parameter("auto_relax_constraints", False)
         self.declare_parameter("timer_period", 0.1)
-        self.declare_parameter("control_dt", 0.25)
-        self.declare_parameter("max_linear_speed", 1.0)
-        self.declare_parameter("max_angular_speed", 3.0)
+        self.declare_parameter("policy_hz", 10.0)
+        self.declare_parameter("service_hz", 10.0)
+        self.declare_parameter("goal_source_mode", self._GOAL_SOURCE_RL)
+        self.declare_parameter("policy_period", 0.2)
 
         self.declare_parameter("planner_half_width", 5.8)
         self.declare_parameter("planner_half_height", 9.8)
         self.declare_parameter("planner_hard_half_width", 5.99)
         self.declare_parameter("planner_hard_half_height", 9.99)
-        self.declare_parameter("use_wall_constraints", True)
-        self.declare_parameter("use_demo_poly_obstacle", True)
+        self.declare_parameter("map_geometry_obstacle_threshold", 90)
+        self.declare_parameter("map_geometry_poly_epsilon_ratio", 0.02)
+        self.declare_parameter("map_geometry_wall_linearity_ratio", 20.0)
+        self.declare_parameter("map_geometry_wall_linearity_span", 0.50)
+        self.declare_parameter("map_geometry_boundary_span_threshold", 2.5)
+        self.declare_parameter("map_geometry_wall_min_segment_length", 0.35)
+        self.declare_parameter("map_geometry_wall_merge_angle_deg", 12.0)
+        self.declare_parameter("map_geometry_boundary_edge_margin_px", 8)
+        self.declare_parameter("map_geometry_boundary_area_ratio", 0.25)
+        self.declare_parameter("map_geometry_debug_log", True)
+        self.declare_parameter("map_geometry_debug_period_sec", 2.0)
         self.declare_parameter("visualize_actions", True)
         self.declare_parameter("action_marker_topic", "/policy/action_markers")
         self.declare_parameter("action_marker_frame", "odom")
@@ -59,13 +99,28 @@ class RlOcpPolicyBridge(Node):
         self.declare_parameter("visualize_planner_scene", True)
         self.declare_parameter("planner_scene_marker_topic", "/planner/debug_markers")
         self.declare_parameter("planner_scene_frame", "map")
+        self.declare_parameter("action_debug_topic", "/debug/policy_actions_scene")
+        self.declare_parameter("planner_scene_debug_topic", "/debug/planner_scene")
 
         self.declare_parameter("odom_topic", "/odometry/filtered")
         self.declare_parameter("scan_topic", "/scan")
         self.declare_parameter("goal_topic", "/goal_pose")
         self.declare_parameter("map_topic", "/map")
-        self.declare_parameter("cmd_topic", "/diff_cont/cmd_vel")
+        self.declare_parameter("human_topic", "/tracking/humans")
+        self.declare_parameter("map_frame", "map")
         self.declare_parameter("planner_service", "/ocp_plann")
+        self.declare_parameter("follow_path_action", "/follow_path")
+        self.declare_parameter("controller_id", "FollowPath")
+        self.declare_parameter("goal_checker_id", "general_goal_checker")
+        self.declare_parameter("local_goal_topic", "/rl/local_goal")
+        self.declare_parameter("local_path_topic", "/rl/local_path")
+        self.declare_parameter("follow_path_replan_min_interval_sec", 0.80)
+        self.declare_parameter("follow_path_replan_path_delta", 0.35)
+        self.declare_parameter("final_goal_approach_distance", 0.80)
+        self.declare_parameter("final_goal_xy_tolerance", 0.22)
+        self.declare_parameter("final_goal_yaw_tolerance", 0.25)
+        self.declare_parameter("final_goal_release_distance", 0.45)
+        self.declare_parameter("stop_cmd_topic", "/diff_cont/cmd_vel_unstamped")
 
         self.policy_env_name = self.get_parameter("policy_env_name").get_parameter_value().string_value
         self.halo_drl_dir = self.get_parameter("halo_drl_dir").get_parameter_value().string_value
@@ -80,17 +135,69 @@ class RlOcpPolicyBridge(Node):
         self.v_pref = self.get_parameter("v_pref").get_parameter_value().double_value
         self.obstacle_radius = self.get_parameter("obstacle_radius").get_parameter_value().double_value
         self.obstacle_sample_step = self.get_parameter("obstacle_sample_step").get_parameter_value().integer_value
-        self.control_dt = self.get_parameter("control_dt").get_parameter_value().double_value
-        self.max_linear_speed = self.get_parameter("max_linear_speed").get_parameter_value().double_value
-        self.max_angular_speed = self.get_parameter("max_angular_speed").get_parameter_value().double_value
+        self.scan_filter_enabled = self.get_parameter("scan_filter_enabled").get_parameter_value().bool_value
+        self.scan_obstacle_max_range = self.get_parameter("scan_obstacle_max_range").get_parameter_value().double_value
+        self.scan_neighbor_window = self.get_parameter("scan_neighbor_window").get_parameter_value().integer_value
+        self.scan_min_neighbor_count = self.get_parameter("scan_min_neighbor_count").get_parameter_value().integer_value
+        self.scan_neighbor_max_delta = self.get_parameter("scan_neighbor_max_delta").get_parameter_value().double_value
+        self.scan_persistence_hits = self.get_parameter("scan_persistence_hits").get_parameter_value().integer_value
+        self.scan_persistence_decay_scans = self.get_parameter("scan_persistence_decay_scans").get_parameter_value().integer_value
+        self.scan_persistence_resolution = self.get_parameter("scan_persistence_resolution").get_parameter_value().double_value
+        self.scan_obstacle_limit = self.get_parameter("scan_obstacle_limit").get_parameter_value().integer_value
+        self.use_map_static_obstacles = self.get_parameter("use_map_static_obstacles").get_parameter_value().bool_value
+        self.map_static_obstacle_radius = self.get_parameter("map_static_obstacle_radius").get_parameter_value().double_value
+        self.map_static_sample_step_m = self.get_parameter("map_static_sample_step_m").get_parameter_value().double_value
+        self.map_static_obstacle_limit = self.get_parameter("map_static_obstacle_limit").get_parameter_value().integer_value
+        self.enforce_scene_entities = self.get_parameter("enforce_scene_entities").get_parameter_value().bool_value
+        self.human_fallback_enabled = self.get_parameter("human_fallback_enabled").get_parameter_value().bool_value
+        self.human_fallback_limit = self.get_parameter("human_fallback_limit").get_parameter_value().integer_value
+        self.human_fallback_radius = self.get_parameter("human_fallback_radius").get_parameter_value().double_value
+        self.auto_relax_constraints = self.get_parameter("auto_relax_constraints").get_parameter_value().bool_value
+        self.policy_hz = max(0.001, self.get_parameter("policy_hz").get_parameter_value().double_value)
+        self.service_hz = max(0.001, self.get_parameter("service_hz").get_parameter_value().double_value)
+        self.goal_source_mode = self._normalize_goal_source_mode(
+            self.get_parameter("goal_source_mode").get_parameter_value().string_value
+        )
+        self.policy_period = 1.0 / self.policy_hz
+        self.service_period = 1.0 / self.service_hz
         self.planner_half_width = self.get_parameter("planner_half_width").get_parameter_value().double_value
         self.planner_half_height = self.get_parameter("planner_half_height").get_parameter_value().double_value
         self.planner_hard_half_width = self.get_parameter("planner_hard_half_width").get_parameter_value().double_value
         self.planner_hard_half_height = self.get_parameter("planner_hard_half_height").get_parameter_value().double_value
         self.effective_half_width = min(self.planner_half_width, self.planner_hard_half_width)
         self.effective_half_height = min(self.planner_half_height, self.planner_hard_half_height)
-        self.use_wall_constraints = self.get_parameter("use_wall_constraints").get_parameter_value().bool_value
-        self.use_demo_poly_obstacle = self.get_parameter("use_demo_poly_obstacle").get_parameter_value().bool_value
+        self.map_geometry_obstacle_threshold = int(
+            self.get_parameter("map_geometry_obstacle_threshold").get_parameter_value().integer_value
+        )
+        self.map_geometry_poly_epsilon_ratio = float(
+            self.get_parameter("map_geometry_poly_epsilon_ratio").get_parameter_value().double_value
+        )
+        self.map_geometry_wall_linearity_ratio = float(
+            self.get_parameter("map_geometry_wall_linearity_ratio").get_parameter_value().double_value
+        )
+        self.map_geometry_wall_linearity_span = float(
+            self.get_parameter("map_geometry_wall_linearity_span").get_parameter_value().double_value
+        )
+        self.map_geometry_boundary_span_threshold = float(
+            self.get_parameter("map_geometry_boundary_span_threshold").get_parameter_value().double_value
+        )
+        self.map_geometry_wall_min_segment_length = float(
+            self.get_parameter("map_geometry_wall_min_segment_length").get_parameter_value().double_value
+        )
+        self.map_geometry_wall_merge_angle_deg = float(
+            self.get_parameter("map_geometry_wall_merge_angle_deg").get_parameter_value().double_value
+        )
+        self.map_geometry_boundary_edge_margin_px = int(
+            self.get_parameter("map_geometry_boundary_edge_margin_px").get_parameter_value().integer_value
+        )
+        self.map_geometry_boundary_area_ratio = float(
+            self.get_parameter("map_geometry_boundary_area_ratio").get_parameter_value().double_value
+        )
+        self.map_geometry_debug_log = self.get_parameter("map_geometry_debug_log").get_parameter_value().bool_value
+        self.map_geometry_debug_period_sec = max(
+            0.1,
+            self.get_parameter("map_geometry_debug_period_sec").get_parameter_value().double_value,
+        )
         self.visualize_actions = self.get_parameter("visualize_actions").get_parameter_value().bool_value
         self.action_marker_topic = self.get_parameter("action_marker_topic").get_parameter_value().string_value
         self.action_marker_frame = self.get_parameter("action_marker_frame").get_parameter_value().string_value
@@ -102,56 +209,153 @@ class RlOcpPolicyBridge(Node):
         self.visualize_planner_scene = self.get_parameter("visualize_planner_scene").get_parameter_value().bool_value
         self.planner_scene_marker_topic = self.get_parameter("planner_scene_marker_topic").get_parameter_value().string_value
         self.planner_scene_frame = self.get_parameter("planner_scene_frame").get_parameter_value().string_value
+        self.action_debug_topic = self.get_parameter("action_debug_topic").get_parameter_value().string_value
+        self.planner_scene_debug_topic = self.get_parameter("planner_scene_debug_topic").get_parameter_value().string_value
 
         self.odom_topic = self.get_parameter("odom_topic").get_parameter_value().string_value
         self.scan_topic = self.get_parameter("scan_topic").get_parameter_value().string_value
         self.goal_topic = self.get_parameter("goal_topic").get_parameter_value().string_value
         self.map_topic = self.get_parameter("map_topic").get_parameter_value().string_value
-        self.cmd_topic = self.get_parameter("cmd_topic").get_parameter_value().string_value
+        self.human_topic = self.get_parameter("human_topic").get_parameter_value().string_value
+        self.map_frame = self.get_parameter("map_frame").get_parameter_value().string_value
         self.planner_service = self.get_parameter("planner_service").get_parameter_value().string_value
+        self.follow_path_action = self.get_parameter("follow_path_action").get_parameter_value().string_value
+        self.controller_id = self.get_parameter("controller_id").get_parameter_value().string_value
+        self.goal_checker_id = self.get_parameter("goal_checker_id").get_parameter_value().string_value
+        self.local_goal_topic = self.get_parameter("local_goal_topic").get_parameter_value().string_value
+        self.local_path_topic = self.get_parameter("local_path_topic").get_parameter_value().string_value
+        self.follow_path_replan_min_interval_sec = max(
+            0.0,
+            self.get_parameter("follow_path_replan_min_interval_sec").get_parameter_value().double_value,
+        )
+        self.follow_path_replan_path_delta = max(
+            0.01,
+            self.get_parameter("follow_path_replan_path_delta").get_parameter_value().double_value,
+        )
+        self.final_goal_approach_distance = max(
+            0.0,
+            self.get_parameter("final_goal_approach_distance").get_parameter_value().double_value,
+        )
+        self.final_goal_xy_tolerance = max(
+            0.01,
+            self.get_parameter("final_goal_xy_tolerance").get_parameter_value().double_value,
+        )
+        self.final_goal_yaw_tolerance = max(
+            0.01,
+            self.get_parameter("final_goal_yaw_tolerance").get_parameter_value().double_value,
+        )
+        self.final_goal_release_distance = max(
+            self.final_goal_xy_tolerance,
+            self.get_parameter("final_goal_release_distance").get_parameter_value().double_value,
+        )
+        self.stop_cmd_topic = self.get_parameter("stop_cmd_topic").get_parameter_value().string_value
 
         self.current_pose: Optional[Tuple[float, float, float]] = None
         self.current_twist: Optional[Tuple[float, float]] = None
-        self.current_goal: Optional[Tuple[float, float]] = None
+        self.current_goal: Optional[Tuple[float, float, float]] = None
+        self.current_goal_frame: str = ""
         self.latest_scan: Optional[LaserScan] = None
+        self.scan_seq = 0
+        self.scan_persistence: Dict[Tuple[int, int], Tuple[int, int]] = {}
+        self.latest_humans: Optional[HumanArray] = None
         self.map_bounds: Optional[Tuple[float, float, float, float]] = None
+        self.map_resolution: Optional[float] = None
+        self.map_width: int = 0
+        self.map_height: int = 0
+        self.map_origin_x: float = 0.0
+        self.map_origin_y: float = 0.0
+        self.map_data: Optional[List[int]] = None
+        self.map_occupancy_threshold: int = 50
+        self.pose_frame: str = ""
+        self._has_received_map = False
+        self.map_geometry_polygons: List[List[Tuple[float, float]]] = []
+        self.map_geometry_walls: List[Tuple[float, float, float, float]] = []
+        self.map_static_circles: List[Tuple[float, float, float]] = []
+        self.last_sent_map_polygons_count = 0
+        self.last_sent_map_walls_count = 0
+        self._last_map_geometry_log_ns = 0
+        self._last_sent_geometry_log_ns = 0
 
         # Keep Python-side request geometry aligned with hard-coded C++ planner map limits.
         self.planner_x_limit = 5.5
         self.planner_y_limit = 9.8
 
         self.pending_future = None
+        self.follow_path_goal_future = None
+        self.follow_path_result_future = None
+        self.follow_path_cancel_future = None
+        self.active_follow_path_goal_handle = None
+        self.pending_follow_path_msg: Optional[Path] = None
+        self.last_sent_follow_path: Optional[Path] = None
+        self.last_follow_path_send_ns: int = 0
         self.last_wheel_speed: Optional[Tuple[float, float]] = None
+        self.latest_sub_goal: Optional[Tuple[float, float]] = None
+        self.latest_sub_goal_seq = 0
+        self.last_requested_sub_goal_seq = -1
+        self.final_goal_latched = False
         self.worker: Optional[subprocess.Popen] = None
+        self.worker_stop_event = threading.Event()
+        self.worker_state_lock = threading.Lock()
+        self.worker_request_cond = threading.Condition(self.worker_state_lock)
+        self.policy_worker_thread: Optional[threading.Thread] = None
+        self.policy_worker_stderr_thread: Optional[threading.Thread] = None
+        self.pending_policy_request: Optional[dict] = None
+        self.pending_policy_request_seq = 0
+        self.latest_policy_result: Optional[Tuple[float, float]] = None
+        self.latest_policy_result_seq = -1
+        self.last_applied_policy_result_seq = -1
+        self.policy_worker_busy = False
+        self.policy_worker_ready = False
+        self.policy_worker_last_error = ""
         self.last_request_for_viz: Optional[OcpLocalPlann.Request] = None
-        self.last_pose_for_viz: Optional[Tuple[float, float, float]] = None
-        self.last_wheels_for_viz: Optional[Tuple[float, float]] = None
         self.consecutive_planner_failures = 0
-        self.runtime_use_walls = self.use_wall_constraints
-        self.runtime_use_poly = self.use_demo_poly_obstacle
         self.success_streak = 0
-
+        self.goal_reached = False
+        self.last_astar_path_for_viz: List[Tuple[float, float]] = []
+        self.last_mask_applied = False
+        self.last_mask_snap_distance = 0.0
+        self.tf_buffer = Buffer()
+        self.tf_listener = TransformListener(self.tf_buffer, self)
         self._start_policy_worker()
 
         self.create_subscription(Odometry, self.odom_topic, self._odom_callback, 10)
         self.create_subscription(LaserScan, self.scan_topic, self._scan_callback, 10)
         self.create_subscription(PoseStamped, self.goal_topic, self._goal_callback, 10)
-        self.create_subscription(OccupancyGrid, self.map_topic, self._map_callback, 10)
+        self.create_subscription(HumanArray, self.human_topic, self._human_callback, 10)
+        map_qos = QoSProfile(
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+        )
+        self.create_subscription(OccupancyGrid, self.map_topic, self._map_callback, map_qos)
 
-        self.cmd_pub = self.create_publisher(TwistStamped, self.cmd_topic, 10)
-        self.action_viz_pub = self.create_publisher(MarkerArray, self.action_marker_topic, 10)
-        self.scene_viz_pub = self.create_publisher(MarkerArray, self.planner_scene_marker_topic, 10)
         self.debug_joint_state_pub = self.create_publisher(InterfaceJointState, self.debug_joint_state_topic, 10)
         self.policy_debug_status_pub = self.create_publisher(String, self.policy_debug_status_topic, 10)
+        self.action_debug_pub = self.create_publisher(String, self.action_debug_topic, 10)
+        self.planner_scene_debug_pub = self.create_publisher(String, self.planner_scene_debug_topic, 10)
+        self.local_goal_pub = self.create_publisher(PoseStamped, self.local_goal_topic, 10)
+        self.local_path_pub = self.create_publisher(Path, self.local_path_topic, 10)
+        self.stop_cmd_pub = self.create_publisher(Twist, self.stop_cmd_topic, 10)
         self.ocp_client = self.create_client(OcpLocalPlann, self.planner_service)
+        self.follow_path_client = ActionClient(self, FollowPath, self.follow_path_action)
         self.add_on_set_parameters_callback(self._on_parameters_changed)
 
-        timer_period = self.get_parameter("timer_period").get_parameter_value().double_value
-        self.create_timer(timer_period, self._control_loop)
+        # Keep legacy timer_period declared for backward compatibility,
+        # but run policy and planner/service loops on dedicated timers.
+        self.create_timer(self.policy_period, self._policy_loop)
+        self.create_timer(self.service_period, self._planner_loop)
 
         self.get_logger().info("RL OCP policy bridge started")
         self.get_logger().info(f"Model: {self.model_path}")
         self.get_logger().info(f"Service: {self.planner_service}")
+        self.get_logger().info(f"FollowPath action: {self.follow_path_action}")
+        self.get_logger().info(
+            f"Loop rates: RL={1.0 / self.policy_period:.2f} Hz, service={1.0 / self.service_period:.2f} Hz"
+        )
+        self.get_logger().info(f"Goal source mode: {self.goal_source_mode}")
+        self.get_logger().info("Pipeline mode: RL/RViz local goal -> A* service -> MPPI FollowPath")
+        self.get_logger().info(f"Auto relax constraints: {self.auto_relax_constraints}")
         self.get_logger().info(f"Action visualization: {self.visualize_actions} ({self.action_marker_topic})")
         self.get_logger().info(
             f"JointState debug topic: {self.publish_debug_joint_state} ({self.debug_joint_state_topic})"
@@ -161,15 +365,19 @@ class RlOcpPolicyBridge(Node):
         )
 
     def _on_parameters_changed(self, params):
+        update_loop_hz = False
         update_effective_bounds = False
         for p in params:
-            if p.name == "use_demo_poly_obstacle":
-                self.use_demo_poly_obstacle = bool(p.value)
-                self.runtime_use_poly = self.use_demo_poly_obstacle
-            elif p.name == "use_wall_constraints":
-                self.use_wall_constraints = bool(p.value)
-                self.runtime_use_walls = self.use_wall_constraints
-            elif p.name == "visualize_actions":
+            if p.name == "policy_hz":
+                self.policy_hz = max(0.001, float(p.value))
+                update_loop_hz = True
+            elif p.name == "service_hz":
+                self.service_hz = max(0.001, float(p.value))
+                update_loop_hz = True
+            elif p.name == "goal_source_mode":
+                self.goal_source_mode = self._normalize_goal_source_mode(str(p.value))
+                self.get_logger().info(f"Updated goal_source_mode: {self.goal_source_mode}")
+            if p.name == "visualize_actions":
                 self.visualize_actions = bool(p.value)
             elif p.name == "publish_debug_joint_state":
                 self.publish_debug_joint_state = bool(p.value)
@@ -177,10 +385,49 @@ class RlOcpPolicyBridge(Node):
                 self.publish_policy_debug_status = bool(p.value)
             elif p.name == "visualize_planner_scene":
                 self.visualize_planner_scene = bool(p.value)
+            elif p.name == "use_map_static_obstacles":
+                self.use_map_static_obstacles = bool(p.value)
+            elif p.name == "map_static_obstacle_radius":
+                self.map_static_obstacle_radius = float(p.value)
+            elif p.name == "map_static_sample_step_m":
+                self.map_static_sample_step_m = float(p.value)
+            elif p.name == "map_static_obstacle_limit":
+                self.map_static_obstacle_limit = int(p.value)
+            elif p.name == "enforce_scene_entities":
+                self.enforce_scene_entities = bool(p.value)
+            elif p.name == "human_fallback_enabled":
+                self.human_fallback_enabled = bool(p.value)
+            elif p.name == "human_fallback_limit":
+                self.human_fallback_limit = int(p.value)
+            elif p.name == "human_fallback_radius":
+                self.human_fallback_radius = float(p.value)
+            elif p.name == "auto_relax_constraints":
+                self.auto_relax_constraints = bool(p.value)
             elif p.name == "action_dim":
                 self.action_dim = max(2, int(p.value))
             elif p.name == "action_range":
                 self.action_range = float(p.value)
+            elif p.name == "obstacle_sample_step":
+                self.obstacle_sample_step = max(1, int(p.value))
+            elif p.name == "scan_filter_enabled":
+                self.scan_filter_enabled = bool(p.value)
+            elif p.name == "scan_obstacle_max_range":
+                self.scan_obstacle_max_range = max(0.0, float(p.value))
+            elif p.name == "scan_neighbor_window":
+                self.scan_neighbor_window = max(0, int(p.value))
+            elif p.name == "scan_min_neighbor_count":
+                self.scan_min_neighbor_count = max(0, int(p.value))
+            elif p.name == "scan_neighbor_max_delta":
+                self.scan_neighbor_max_delta = max(0.0, float(p.value))
+            elif p.name == "scan_persistence_hits":
+                self.scan_persistence_hits = max(1, int(p.value))
+            elif p.name == "scan_persistence_decay_scans":
+                self.scan_persistence_decay_scans = max(1, int(p.value))
+            elif p.name == "scan_persistence_resolution":
+                self.scan_persistence_resolution = max(0.01, float(p.value))
+                self.scan_persistence.clear()
+            elif p.name == "scan_obstacle_limit":
+                self.scan_obstacle_limit = max(1, int(p.value))
             elif p.name == "planner_half_width":
                 self.planner_half_width = float(p.value)
                 update_effective_bounds = True
@@ -193,12 +440,59 @@ class RlOcpPolicyBridge(Node):
             elif p.name == "planner_hard_half_height":
                 self.planner_hard_half_height = float(p.value)
                 update_effective_bounds = True
+            elif p.name == "map_geometry_obstacle_threshold":
+                self.map_geometry_obstacle_threshold = int(p.value)
+            elif p.name == "map_geometry_poly_epsilon_ratio":
+                self.map_geometry_poly_epsilon_ratio = float(p.value)
+            elif p.name == "map_geometry_wall_linearity_ratio":
+                self.map_geometry_wall_linearity_ratio = float(p.value)
+            elif p.name == "map_geometry_wall_linearity_span":
+                self.map_geometry_wall_linearity_span = float(p.value)
+            elif p.name == "map_geometry_boundary_span_threshold":
+                self.map_geometry_boundary_span_threshold = max(0.1, float(p.value))
+            elif p.name == "map_geometry_wall_min_segment_length":
+                self.map_geometry_wall_min_segment_length = max(0.01, float(p.value))
+            elif p.name == "map_geometry_wall_merge_angle_deg":
+                self.map_geometry_wall_merge_angle_deg = max(0.1, float(p.value))
+            elif p.name == "map_geometry_boundary_edge_margin_px":
+                self.map_geometry_boundary_edge_margin_px = max(0, int(p.value))
+            elif p.name == "map_geometry_boundary_area_ratio":
+                self.map_geometry_boundary_area_ratio = max(0.01, min(1.0, float(p.value)))
+            elif p.name == "follow_path_replan_min_interval_sec":
+                self.follow_path_replan_min_interval_sec = max(0.0, float(p.value))
+            elif p.name == "follow_path_replan_path_delta":
+                self.follow_path_replan_path_delta = max(0.01, float(p.value))
+            elif p.name == "final_goal_approach_distance":
+                self.final_goal_approach_distance = max(0.0, float(p.value))
+            elif p.name == "final_goal_xy_tolerance":
+                self.final_goal_xy_tolerance = max(0.01, float(p.value))
+                self.final_goal_release_distance = max(
+                    self.final_goal_release_distance, self.final_goal_xy_tolerance
+                )
+            elif p.name == "final_goal_yaw_tolerance":
+                self.final_goal_yaw_tolerance = max(0.01, float(p.value))
+            elif p.name == "final_goal_release_distance":
+                self.final_goal_release_distance = max(self.final_goal_xy_tolerance, float(p.value))
 
         if update_effective_bounds:
             self.effective_half_width = min(self.planner_half_width, self.planner_hard_half_width)
             self.effective_half_height = min(self.planner_half_height, self.planner_hard_half_height)
 
+        if update_loop_hz:
+            self.policy_period = 1.0 / self.policy_hz
+            self.service_period = 1.0 / self.service_hz
+
         return SetParametersResult(successful=True)
+
+    def _normalize_goal_source_mode(self, mode: str) -> str:
+        mode_norm = str(mode).strip().lower()
+        if mode_norm in (self._GOAL_SOURCE_RL, self._GOAL_SOURCE_RVIZ):
+            return mode_norm
+        self.get_logger().warn(
+            "Unsupported goal_source_mode '%s', fallback to '%s'"
+            % (str(mode), self._GOAL_SOURCE_RL)
+        )
+        return self._GOAL_SOURCE_RL
 
     def _start_policy_worker(self) -> None:
         worker_script = os.path.join(os.path.dirname(__file__), "rl_policy_worker.py")
@@ -226,14 +520,79 @@ class RlOcpPolicyBridge(Node):
             text=True,
             bufsize=1,
         )
+        self.policy_worker_thread = threading.Thread(
+            target=self._policy_worker_loop,
+            name="rl_policy_worker_loop",
+            daemon=True,
+        )
+        self.policy_worker_thread.start()
+        self.policy_worker_stderr_thread = threading.Thread(
+            target=self._policy_worker_stderr_loop,
+            name="rl_policy_worker_stderr",
+            daemon=True,
+        )
+        self.policy_worker_stderr_thread.start()
+
+    def _policy_worker_stderr_loop(self) -> None:
+        if self.worker is None or self.worker.stderr is None:
+            return
+        for line in self.worker.stderr:
+            if self.worker_stop_event.is_set():
+                break
+            msg = line.strip()
+            if not msg:
+                continue
+            with self.worker_state_lock:
+                self.policy_worker_last_error = msg
+
+    def _submit_policy_request(self, subgoal_req: dict) -> None:
+        with self.worker_request_cond:
+            self.pending_policy_request_seq += 1
+            self.pending_policy_request = {
+                "seq": int(self.pending_policy_request_seq),
+                "payload": subgoal_req,
+            }
+            self.worker_request_cond.notify()
+
+    def _take_latest_policy_result(self) -> Optional[Tuple[Tuple[float, float], int]]:
+        with self.worker_state_lock:
+            if self.latest_policy_result is None:
+                return None
+            if self.latest_policy_result_seq <= self.last_applied_policy_result_seq:
+                return None
+            self.last_applied_policy_result_seq = int(self.latest_policy_result_seq)
+            return self.latest_policy_result, int(self.latest_policy_result_seq)
+
+    def _policy_worker_loop(self) -> None:
+        while not self.worker_stop_event.is_set():
+            request = None
+            with self.worker_request_cond:
+                while self.pending_policy_request is None and not self.worker_stop_event.is_set():
+                    self.worker_request_cond.wait(timeout=0.1)
+                if self.worker_stop_event.is_set():
+                    return
+                request = self.pending_policy_request
+                self.pending_policy_request = None
+                self.policy_worker_busy = True
+
+            if request is None:
+                continue
+
+            sub_goal = self._query_policy_worker(request["payload"])
+
+            with self.worker_state_lock:
+                self.policy_worker_busy = False
+                if sub_goal is None:
+                    continue
+                self.policy_worker_ready = True
+                self.latest_policy_result = (float(sub_goal[0]), float(sub_goal[1]))
+                self.latest_policy_result_seq = int(request["seq"])
 
     def _query_policy_worker(self, subgoal_req: dict) -> Optional[Tuple[float, float]]:
         if self.worker is None:
             return None
         if self.worker.poll() is not None:
-            err = ""
-            if self.worker.stderr is not None:
-                err = self.worker.stderr.read().strip()
+            err = self.policy_worker_last_error
             self.get_logger().error(f"Policy worker exited unexpectedly: {err}")
             return None
 
@@ -261,6 +620,194 @@ class RlOcpPolicyBridge(Node):
         return float(sub_goal[0]), float(sub_goal[1])
 
     @staticmethod
+    def _normalize_angle(angle: float) -> float:
+        while angle > math.pi:
+            angle -= 2.0 * math.pi
+        while angle < -math.pi:
+            angle += 2.0 * math.pi
+        return angle
+
+    @staticmethod
+    def _quaternion_from_yaw(yaw: float) -> Tuple[float, float]:
+        half_yaw = 0.5 * yaw
+        return math.sin(half_yaw), math.cos(half_yaw)
+
+    def _publish_zero_cmd(self) -> None:
+        self.stop_cmd_pub.publish(Twist())
+
+    def _publish_local_goal(self, sub_goal: Tuple[float, float]) -> None:
+        msg = PoseStamped()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.frame_id = self.map_frame
+        msg.pose.position.x = float(sub_goal[0])
+        msg.pose.position.y = float(sub_goal[1])
+        msg.pose.orientation.w = 1.0
+        self.local_goal_pub.publish(msg)
+
+    def _build_path_msg(self, path_points, frame_id: str, final_yaw: Optional[float] = None) -> Path:
+        path_msg = Path()
+        path_msg.header.stamp = self.get_clock().now().to_msg()
+        path_msg.header.frame_id = frame_id if frame_id else self.map_frame
+        point_list = list(path_points)
+        for i, pt in enumerate(point_list):
+            pose = PoseStamped()
+            pose.header = path_msg.header
+            pose.pose.position.x = float(pt.x)
+            pose.pose.position.y = float(pt.y)
+            yaw = final_yaw if final_yaw is not None else 0.0
+            if i + 1 < len(point_list):
+                next_pt = point_list[i + 1]
+                dx = float(next_pt.x) - float(pt.x)
+                dy = float(next_pt.y) - float(pt.y)
+                if math.hypot(dx, dy) > 1e-6:
+                    yaw = math.atan2(dy, dx)
+            elif final_yaw is None and len(path_msg.poses) > 0:
+                pose.pose.orientation = path_msg.poses[-1].pose.orientation
+                path_msg.poses.append(pose)
+                continue
+            qz, qw = self._quaternion_from_yaw(yaw)
+            pose.pose.orientation.z = qz
+            pose.pose.orientation.w = qw
+            path_msg.poses.append(pose)
+        return path_msg
+
+    def _build_final_alignment_path(
+        self,
+        pose_map_with_yaw: Tuple[float, float, float],
+        goal_map_with_yaw: Tuple[float, float, float],
+    ) -> Path:
+        path_msg = Path()
+        path_msg.header.stamp = self.get_clock().now().to_msg()
+        path_msg.header.frame_id = self.map_frame
+        for x, y, yaw in (pose_map_with_yaw, goal_map_with_yaw):
+            pose = PoseStamped()
+            pose.header = path_msg.header
+            pose.pose.position.x = float(x)
+            pose.pose.position.y = float(y)
+            qz, qw = self._quaternion_from_yaw(float(yaw))
+            pose.pose.orientation.z = qz
+            pose.pose.orientation.w = qw
+            path_msg.poses.append(pose)
+        return path_msg
+
+    def _cancel_follow_path_goal(self) -> None:
+        if self.active_follow_path_goal_handle is None:
+            return
+        if self.follow_path_cancel_future is not None and not self.follow_path_cancel_future.done():
+            return
+        self.follow_path_cancel_future = self.active_follow_path_goal_handle.cancel_goal_async()
+        self.follow_path_cancel_future.add_done_callback(self._on_follow_path_cancel_done)
+
+    def _path_distance(self, a: Path, b: Path) -> float:
+        if len(a.poses) == 0 or len(b.poses) == 0:
+            return float("inf")
+        count = min(len(a.poses), len(b.poses))
+        if count <= 0:
+            return float("inf")
+        stride = max(1, count // 20)
+        max_dist = 0.0
+        for i in range(0, count, stride):
+            pa = a.poses[i].pose.position
+            pb = b.poses[i].pose.position
+            dist = math.hypot(float(pa.x) - float(pb.x), float(pa.y) - float(pb.y))
+            max_dist = max(max_dist, dist)
+
+        a_end = a.poses[-1].pose.position
+        b_end = b.poses[-1].pose.position
+        end_dist = math.hypot(float(a_end.x) - float(b_end.x), float(a_end.y) - float(b_end.y))
+        return max(max_dist, end_dist)
+
+    def _should_replan_follow_path(self, path_msg: Path) -> bool:
+        if self.last_sent_follow_path is None:
+            return True
+        path_delta = self._path_distance(path_msg, self.last_sent_follow_path)
+        if path_delta < self.follow_path_replan_path_delta:
+            return False
+
+        now_ns = int(self.get_clock().now().nanoseconds)
+        elapsed = (now_ns - int(self.last_follow_path_send_ns)) / 1e9
+        return elapsed >= self.follow_path_replan_min_interval_sec
+
+    def _send_new_follow_path_goal(self, goal_msg: FollowPath.Goal) -> None:
+        sent_path = goal_msg.path
+        self.follow_path_goal_future = self.follow_path_client.send_goal_async(goal_msg)
+        self.follow_path_goal_future.add_done_callback(
+            lambda future, path=sent_path: self._on_follow_path_goal_response(future, path)
+        )
+
+    def _on_follow_path_cancel_done(self, future) -> None:
+        try:
+            _ = future.result()
+        except Exception as exc:
+            self.get_logger().warn(f"FollowPath cancel failed: {exc}")
+        finally:
+            self.follow_path_cancel_future = None
+            self.active_follow_path_goal_handle = None
+
+        if self.pending_follow_path_msg is None:
+            return
+        goal_msg = FollowPath.Goal()
+        goal_msg.path = self.pending_follow_path_msg
+        goal_msg.controller_id = self.controller_id
+        goal_msg.goal_checker_id = self.goal_checker_id
+        self.pending_follow_path_msg = None
+        self._send_new_follow_path_goal(goal_msg)
+
+    def _send_follow_path_goal(self, path_msg: Path) -> None:
+        if len(path_msg.poses) < 2:
+            self.get_logger().warn("Skip FollowPath goal because A* path has fewer than 2 poses")
+            return
+        if not self.follow_path_client.wait_for_server(timeout_sec=0.05):
+            self.get_logger().warn(f"FollowPath action {self.follow_path_action} not available")
+            return
+
+        goal_msg = FollowPath.Goal()
+        goal_msg.path = path_msg
+        goal_msg.controller_id = self.controller_id
+        goal_msg.goal_checker_id = self.goal_checker_id
+
+        if self.active_follow_path_goal_handle is not None:
+            if not self._should_replan_follow_path(path_msg):
+                return
+            self._send_new_follow_path_goal(goal_msg)
+            return
+
+        self._send_new_follow_path_goal(goal_msg)
+
+    def _on_follow_path_goal_response(self, future, sent_path: Path) -> None:
+        self.follow_path_goal_future = None
+        try:
+            goal_handle = future.result()
+        except Exception as exc:
+            self.get_logger().error(f"FollowPath goal send failed: {exc}")
+            return
+
+        if goal_handle is None or not goal_handle.accepted:
+            self.get_logger().warn("FollowPath goal was rejected by controller_server")
+            return
+
+        self.active_follow_path_goal_handle = goal_handle
+        self.last_sent_follow_path = sent_path
+        self.last_follow_path_send_ns = int(self.get_clock().now().nanoseconds)
+        self.follow_path_result_future = goal_handle.get_result_async()
+        self.follow_path_result_future.add_done_callback(self._on_follow_path_result)
+
+    def _on_follow_path_result(self, future) -> None:
+        try:
+            result = future.result()
+        except Exception as exc:
+            self.get_logger().error(f"FollowPath result failed: {exc}")
+            return
+
+        self.active_follow_path_goal_handle = None
+        if result is None:
+            return
+
+    @staticmethod
+    def _path_points_from_response(res) -> List[Tuple[float, float]]:
+        return [(float(pt.x), float(pt.y)) for pt in res.astar_path]
+
+    @staticmethod
     def _yaw_from_quaternion(x: float, y: float, z: float, w: float) -> float:
         siny_cosp = 2.0 * (w * z + x * y)
         cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
@@ -276,6 +823,7 @@ class RlOcpPolicyBridge(Node):
         q = msg.pose.pose.orientation
         yaw = self._yaw_from_quaternion(q.x, q.y, q.z, q.w)
         self.current_pose = (px, py, yaw)
+        self.pose_frame = msg.header.frame_id if msg.header.frame_id else self.pose_frame
 
         v = msg.twist.twist.linear.x
         w = msg.twist.twist.angular.z
@@ -283,115 +831,554 @@ class RlOcpPolicyBridge(Node):
 
     def _scan_callback(self, msg: LaserScan) -> None:
         self.latest_scan = msg
+        self.scan_seq += 1
 
     def _goal_callback(self, msg: PoseStamped) -> None:
-        self.current_goal = (msg.pose.position.x, msg.pose.position.y)
+        q = msg.pose.orientation
+        goal_yaw = self._yaw_from_quaternion(q.x, q.y, q.z, q.w)
+        self.current_goal = (msg.pose.position.x, msg.pose.position.y, goal_yaw)
+        self.current_goal_frame = msg.header.frame_id if msg.header.frame_id else self.current_goal_frame
+        self.final_goal_latched = False
+        self.goal_reached = False
+        self.latest_sub_goal = None
+        self.pending_follow_path_msg = None
+        self.last_sent_follow_path = None
+
+    def _human_callback(self, msg: HumanArray) -> None:
+        self.latest_humans = msg
 
     def _map_callback(self, msg: OccupancyGrid) -> None:
+        if msg.header.frame_id:
+            self.map_frame = msg.header.frame_id
         origin_x = msg.info.origin.position.x
         origin_y = msg.info.origin.position.y
         width_m = msg.info.width * msg.info.resolution
         height_m = msg.info.height * msg.info.resolution
         self.map_bounds = (origin_x, origin_x + width_m, origin_y, origin_y + height_m)
+        self.map_resolution = float(msg.info.resolution)
+        self.map_width = int(msg.info.width)
+        self.map_height = int(msg.info.height)
+        self.map_origin_x = float(origin_x)
+        self.map_origin_y = float(origin_y)
+        self.map_data = list(msg.data)
 
-    def _build_wall_tuples(self) -> List[Tuple[float, float, float, float]]:
-        if self.map_bounds is None:
-            if self.current_pose is None:
-                xmin, xmax, ymin, ymax = -10.0, 10.0, -10.0, 10.0
-            else:
-                px, py, _ = self.current_pose
-                xmin, xmax, ymin, ymax = px - 10.0, px + 10.0, py - 10.0, py + 10.0
-        else:
-            xmin, xmax, ymin, ymax = self.map_bounds
+        if not self._has_received_map:
+            self._has_received_map = True
+            self.get_logger().info(
+                "Received map: frame=%s size=%dx%d res=%.3f origin=(%.2f, %.2f)"
+                % (
+                    str(self.map_frame),
+                    int(self.map_width),
+                    int(self.map_height),
+                    float(self.map_resolution),
+                    float(self.map_origin_x),
+                    float(self.map_origin_y),
+                )
+            )
 
-        return [
-            (xmin, ymin, xmin, ymax),
-            (xmax, ymin, xmax, ymax),
-            (xmin, ymin, xmax, ymin),
-            (xmin, ymax, xmax, ymax),
-        ]
+        if msg.info.width == 0 or msg.info.height == 0:
+            self.map_geometry_polygons = []
+            self.map_geometry_walls = []
+            self.map_static_circles = []
+            return
 
-    def _build_wall_msgs(self) -> List[WallState]:
-        if not self.use_wall_constraints:
+        # Grid-based circle sampling mode: disable contour/polygon/wall extraction entirely.
+        self.map_geometry_polygons = []
+        self.map_geometry_walls = []
+        self.map_static_circles = []
+
+        if self.map_geometry_debug_log:
+            self._throttled_log(
+                "_last_map_geometry_log_ns",
+                self.map_geometry_debug_period_sec,
+                "[map_geometry/grid] map updated; walls=0 polygons=0 (using OccupancyGrid sampling)",
+            )
+
+    def _pixel_to_meter(self, u: int, v: int) -> Tuple[float, float]:
+        row_occ = self.map_height - 1 - v
+        x_world = self.map_origin_x + (float(u) + 0.5) * self.map_resolution
+        y_world = self.map_origin_y + (float(row_occ) + 0.5) * self.map_resolution
+        return x_world, y_world
+
+    def _is_wall_like_geometry(self, points: List[Tuple[float, float]]) -> bool:
+        if len(points) < 2:
+            return False
+
+        arr = np.array(points, dtype=np.float64)
+        diffs = arr[:, None, :] - arr[None, :, :]
+        dists = np.linalg.norm(diffs, axis=2)
+        span = float(np.max(dists)) if dists.size > 0 else 0.0
+        if span < self.map_geometry_wall_linearity_span:
+            return False
+
+        if arr.shape[0] < 3:
+            return True
+
+        centered = arr - np.mean(arr, axis=0)
+        cov = np.cov(centered, rowvar=False)
+        if cov.shape != (2, 2):
+            return False
+
+        eigvals = np.linalg.eigvalsh(cov)
+        eigvals = np.sort(np.abs(eigvals))
+        small = float(eigvals[0])
+        large = float(eigvals[1])
+        linearity = large / (small + 1e-9)
+        return linearity >= self.map_geometry_wall_linearity_ratio
+
+    @staticmethod
+    def _wall_segment_from_points(
+        points: List[Tuple[float, float]],
+    ) -> Optional[Tuple[float, float, float, float]]:
+        if len(points) < 2:
+            return None
+        arr = np.array(points, dtype=np.float64)
+        diffs = arr[:, None, :] - arr[None, :, :]
+        dists = np.linalg.norm(diffs, axis=2)
+        max_idx = np.unravel_index(np.argmax(dists), dists.shape)
+        p1 = arr[max_idx[0]]
+        p2 = arr[max_idx[1]]
+        return (float(p1[0]), float(p1[1]), float(p2[0]), float(p2[1]))
+
+    @staticmethod
+    def _segment_length(sx: float, sy: float, ex: float, ey: float) -> float:
+        return math.hypot(float(ex) - float(sx), float(ey) - float(sy))
+
+    def _is_map_boundary_contour(self, contour, area_ratio: float) -> bool:
+        if contour is None or len(contour) == 0:
+            return False
+
+        margin = max(0, int(self.map_geometry_boundary_edge_margin_px))
+        x, y, w, h = self.cv2.boundingRect(contour)
+        near_left = x <= margin
+        near_top = y <= margin
+        near_right = (x + w) >= (self.map_width - 1 - margin)
+        near_bottom = (y + h) >= (self.map_height - 1 - margin)
+        touch_count = int(near_left) + int(near_top) + int(near_right) + int(near_bottom)
+
+        if touch_count >= 2:
+            return True
+        if area_ratio >= float(self.map_geometry_boundary_area_ratio):
+            return True
+        return False
+
+    def _rectangle_walls_from_contour(self, contour) -> List[Tuple[float, float, float, float]]:
+        if contour is None or len(contour) < 2:
             return []
 
-        # Intersect optional map bounds with planner limits to avoid ClipWall errors.
-        x_lim = min(self.effective_half_width, self.planner_x_limit)
-        y_lim = min(self.effective_half_height, self.planner_y_limit)
+        rect = self.cv2.minAreaRect(contour)
+        box = self.cv2.boxPoints(rect)
+        if box is None or len(box) != 4:
+            return []
 
-        xmin, xmax = -x_lim, x_lim
-        ymin, ymax = -y_lim, y_lim
-        if self.map_bounds is not None:
-            map_xmin, map_xmax, map_ymin, map_ymax = self.map_bounds
-            xmin = max(xmin, map_xmin)
-            xmax = min(xmax, map_xmax)
-            ymin = max(ymin, map_ymin)
-            ymax = min(ymax, map_ymax)
+        pts: List[Tuple[float, float]] = []
+        for p in box:
+            u = int(round(float(p[0])))
+            v = int(round(float(p[1])))
+            x_m, y_m = self._pixel_to_meter(u, v)
+            pts.append((float(x_m), float(y_m)))
 
-        # Fallback to planner box if map intersection is degenerate.
-        if xmin >= xmax or ymin >= ymax:
-            xmin, xmax = -x_lim, x_lim
-            ymin, ymax = -y_lim, y_lim
+        walls: List[Tuple[float, float, float, float]] = []
+        min_len = max(0.01, float(self.map_geometry_wall_min_segment_length))
+        for i in range(4):
+            sx, sy = pts[i]
+            ex, ey = pts[(i + 1) % 4]
+            if self._segment_length(sx, sy, ex, ey) < min_len:
+                continue
+            walls.append((sx, sy, ex, ey))
+        return walls
 
-        eps = 1e-3
-        # MPC expects exactly 2 vertical walls with specific orientation:
-        # left wall: top -> bottom, right wall: bottom -> top.
-        wall_segments = [
-            (xmin, ymax, xmin, ymin),
-            (xmax, ymin, xmax, ymax),
-        ]
+    def _simplify_wall_loop(
+        self,
+        points: List[Tuple[float, float]],
+    ) -> List[Tuple[float, float, float, float]]:
+        if len(points) < 2:
+            return []
 
-        walls = []
-        for sx, sy, ex, ey in wall_segments:
-            wall = WallState()
-            wall.sx = self._clamp(float(sx), -x_lim + eps, x_lim - eps)
-            wall.sy = self._clamp(float(sy), -y_lim + eps, y_lim - eps)
-            wall.ex = self._clamp(float(ex), -x_lim + eps, x_lim - eps)
-            wall.ey = self._clamp(float(ey), -y_lim + eps, y_lim - eps)
-            walls.append(wall)
+        min_len = max(0.01, float(self.map_geometry_wall_min_segment_length))
+        merge_angle_deg = max(0.1, float(self.map_geometry_wall_merge_angle_deg))
+        angle_thr = math.radians(merge_angle_deg)
+
+        loop: List[Tuple[float, float]] = []
+        for x, y in points:
+            if not loop:
+                loop.append((float(x), float(y)))
+                continue
+            px, py = loop[-1]
+            if self._segment_length(px, py, x, y) < 1e-3:
+                continue
+            loop.append((float(x), float(y)))
+
+        if len(loop) < 2:
+            return []
+
+        changed = True
+        max_iter = max(8, len(loop) * 2)
+        iter_count = 0
+        while changed and len(loop) > 3 and iter_count < max_iter:
+            changed = False
+            iter_count += 1
+            n = len(loop)
+            next_loop: List[Tuple[float, float]] = []
+
+            for i in range(n):
+                prev_pt = loop[(i - 1) % n]
+                cur_pt = loop[i]
+                next_pt = loop[(i + 1) % n]
+
+                v1x = cur_pt[0] - prev_pt[0]
+                v1y = cur_pt[1] - prev_pt[1]
+                v2x = next_pt[0] - cur_pt[0]
+                v2y = next_pt[1] - cur_pt[1]
+                l1 = math.hypot(v1x, v1y)
+                l2 = math.hypot(v2x, v2y)
+
+                if l1 < 1e-6 or l2 < 1e-6:
+                    changed = True
+                    continue
+
+                dot = (v1x * v2x + v1y * v2y) / (l1 * l2)
+                dot = max(-1.0, min(1.0, dot))
+                turn = math.acos(dot)
+
+                # Remove middle points on nearly straight runs to prevent over-segmentation.
+                if turn <= angle_thr and dot > 0.0:
+                    changed = True
+                    continue
+
+                next_loop.append(cur_pt)
+
+            if len(next_loop) >= 3:
+                loop = next_loop
+            else:
+                break
+
+        walls: List[Tuple[float, float, float, float]] = []
+        n = len(loop)
+        if n < 2:
+            return walls
+
+        for i in range(n):
+            sx, sy = loop[i]
+            ex, ey = loop[(i + 1) % n]
+            if self._segment_length(sx, sy, ex, ey) < min_len:
+                continue
+            walls.append((float(sx), float(sy), float(ex), float(ey)))
 
         return walls
 
-    def _build_poly_msgs(self) -> List[PolyState]:
-        """Optional demo polygon obstacle for debugging planner constraints."""
-        if not self.use_demo_poly_obstacle:
+    def _get_map_geometry_msgs(self) -> Tuple[List[PolyState], List[WallState]]:
+        self.last_sent_map_polygons_count = 0
+        self.last_sent_map_walls_count = 0
+        return [], []
+
+    def _throttled_log(self, stamp_attr: str, period_sec: float, message: str) -> None:
+        now_ns = int(self.get_clock().now().nanoseconds)
+        last_ns = int(getattr(self, stamp_attr, 0))
+        if now_ns - last_ns < int(max(0.1, period_sec) * 1e9):
+            return
+        setattr(self, stamp_attr, now_ns)
+        self.get_logger().info(message)
+
+    def _transform_point_2d(
+        self,
+        x: float,
+        y: float,
+        source_frame: str,
+        target_frame: str,
+    ) -> Optional[Tuple[float, float]]:
+        if not source_frame or not target_frame:
+            return None
+        if source_frame == target_frame:
+            return float(x), float(y)
+
+        try:
+            tf_msg = self.tf_buffer.lookup_transform(
+                target_frame,
+                source_frame,
+                Time(),
+                timeout=Duration(seconds=0.05),
+            )
+        except TransformException:
+            return None
+
+        t = tf_msg.transform.translation
+        r = tf_msg.transform.rotation
+        yaw = self._yaw_from_quaternion(r.x, r.y, r.z, r.w)
+
+        tx = float(t.x)
+        ty = float(t.y)
+        cx = math.cos(yaw)
+        sx = math.sin(yaw)
+        x_out = tx + (cx * float(x)) - (sx * float(y))
+        y_out = ty + (sx * float(x)) + (cx * float(y))
+        return x_out, y_out
+
+    def _point_to_map_frame(self, x: float, y: float) -> Optional[Tuple[float, float]]:
+        source_frame = self.pose_frame if self.pose_frame else self.map_frame
+        return self._transform_point_2d(x, y, source_frame, self.map_frame)
+
+    def _process_human_msgs(self) -> List[HumanState]:
+        if self.latest_humans is None or not self.latest_humans.humans:
             return []
 
-        # Build one small square near a corner, avoiding the robot/goal corridor.
-        x_lim = min(self.effective_half_width, self.planner_x_limit)
-        y_lim = min(self.effective_half_height, self.planner_y_limit)
-        margin = 0.9
-        size = 0.8
+        source_frame = self.latest_humans.header.frame_id if self.latest_humans.header.frame_id else self.map_frame
+        humans_map: List[HumanState] = []
 
-        cx = x_lim - margin
-        cy = y_lim - margin
-        if self.current_pose is not None:
-            px, py, _ = self.current_pose
-            if math.hypot(cx - px, cy - py) < 1.5:
-                cy = -y_lim + margin
+        tf_yaw = 0.0
+        if source_frame != self.map_frame:
+            try:
+                tf_msg = self.tf_buffer.lookup_transform(
+                    self.map_frame,
+                    source_frame,
+                    Time(),
+                    timeout=Duration(seconds=0.05),
+                )
+            except TransformException as exc:
+                self._throttled_log(
+                    "_last_human_tf_warn_ns",
+                    2.0,
+                    "[human_tracking] waiting TF %s -> %s: %s"
+                    % (str(source_frame), str(self.map_frame), str(exc)),
+                )
+                return []
 
-        if self.current_goal is not None:
-            gx, gy = self.current_goal
-            if math.hypot(cx - gx, cy - gy) < 1.5:
-                cx = -x_lim + margin
+            r = tf_msg.transform.rotation
+            tf_yaw = self._yaw_from_quaternion(r.x, r.y, r.z, r.w)
 
-        poly = PolyState()
-        poly.is_clockwise = True
-        poly.vertices = [
-            PolyPoint(x=cx - size, y=cy - size),
-            PolyPoint(x=cx + size, y=cy - size),
-            PolyPoint(x=cx + size, y=cy + size),
-            PolyPoint(x=cx - size, y=cy + size),
+        for src_human in self.latest_humans.humans:
+            map_xy = self._transform_point_2d(src_human.px, src_human.py, source_frame, self.map_frame)
+            if map_xy is None:
+                continue
+
+            cos_yaw = math.cos(tf_yaw)
+            sin_yaw = math.sin(tf_yaw)
+            vx_map = float(src_human.vx) * cos_yaw - float(src_human.vy) * sin_yaw
+            vy_map = float(src_human.vx) * sin_yaw + float(src_human.vy) * cos_yaw
+
+            human_state = HumanState()
+            human_state.id = int(src_human.id)
+            human_state.px = float(map_xy[0])
+            human_state.py = float(map_xy[1])
+            human_state.vx = float(vx_map)
+            human_state.vy = float(vy_map)
+            human_state.radius = float(src_human.radius)
+            if hasattr(src_human, "trajectory"):
+                human_state.trajectory = src_human.trajectory
+            humans_map.append(human_state)
+
+        return humans_map
+
+    def _current_pose_in_map_frame(self) -> Optional[Tuple[float, float]]:
+        if self.current_pose is None:
+            return None
+        px, py, _ = self.current_pose
+        return self._point_to_map_frame(px, py)
+
+    def _current_pose_with_yaw_in_map_frame(self) -> Optional[Tuple[float, float, float]]:
+        if self.current_pose is None:
+            return None
+
+        px, py, yaw = self.current_pose
+        source_frame = self.pose_frame if self.pose_frame else self.map_frame
+        map_xy = self._transform_point_2d(px, py, source_frame, self.map_frame)
+        if map_xy is None:
+            return None
+
+        if source_frame == self.map_frame:
+            return float(map_xy[0]), float(map_xy[1]), float(yaw)
+
+        try:
+            tf_msg = self.tf_buffer.lookup_transform(
+                self.map_frame,
+                source_frame,
+                Time(),
+                timeout=Duration(seconds=0.05),
+            )
+        except TransformException:
+            return None
+
+        r = tf_msg.transform.rotation
+        tf_yaw = self._yaw_from_quaternion(r.x, r.y, r.z, r.w)
+        yaw_map = float(yaw + tf_yaw)
+        while yaw_map > math.pi:
+            yaw_map -= 2.0 * math.pi
+        while yaw_map < -math.pi:
+            yaw_map += 2.0 * math.pi
+
+        return float(map_xy[0]), float(map_xy[1]), yaw_map
+
+    def _current_goal_in_map_frame(self) -> Optional[Tuple[float, float]]:
+        goal_pose = self._current_goal_pose_in_map_frame()
+        if goal_pose is None:
+            return None
+        return goal_pose[0], goal_pose[1]
+
+    def _current_goal_pose_in_map_frame(self) -> Optional[Tuple[float, float, float]]:
+        if self.current_goal is None:
+            return None
+        gx, gy, goal_yaw = self.current_goal
+        source_frame = self.current_goal_frame if self.current_goal_frame else self.map_frame
+        map_xy = self._transform_point_2d(gx, gy, source_frame, self.map_frame)
+        if map_xy is None:
+            return None
+
+        if source_frame == self.map_frame:
+            return float(map_xy[0]), float(map_xy[1]), float(goal_yaw)
+
+        try:
+            tf_msg = self.tf_buffer.lookup_transform(
+                self.map_frame,
+                source_frame,
+                Time(),
+                timeout=Duration(seconds=0.05),
+            )
+        except TransformException:
+            return None
+
+        r = tf_msg.transform.rotation
+        tf_yaw = self._yaw_from_quaternion(r.x, r.y, r.z, r.w)
+        return float(map_xy[0]), float(map_xy[1]), self._normalize_angle(float(goal_yaw + tf_yaw))
+
+    def _final_goal_error(
+        self,
+        pose_map_with_yaw: Tuple[float, float, float],
+        goal_map_with_yaw: Tuple[float, float, float],
+    ) -> Tuple[float, float]:
+        px, py, yaw = pose_map_with_yaw
+        gx, gy, goal_yaw = goal_map_with_yaw
+        xy_error = math.hypot(float(gx) - float(px), float(gy) - float(py))
+        yaw_error = abs(self._normalize_angle(float(goal_yaw) - float(yaw)))
+        return xy_error, yaw_error
+
+    def _update_final_goal_latch(
+        self,
+        pose_map_with_yaw: Tuple[float, float, float],
+        goal_map_with_yaw: Tuple[float, float, float],
+    ) -> Tuple[bool, float, float]:
+        xy_error, yaw_error = self._final_goal_error(pose_map_with_yaw, goal_map_with_yaw)
+        if self.final_goal_latched:
+            if xy_error > self.final_goal_release_distance:
+                self.final_goal_latched = False
+            else:
+                return True, xy_error, yaw_error
+
+        if xy_error <= self.final_goal_xy_tolerance and yaw_error <= self.final_goal_yaw_tolerance:
+            self.final_goal_latched = True
+            return True, xy_error, yaw_error
+
+        return False, xy_error, yaw_error
+
+    def _hold_final_goal_stop(self) -> None:
+        self.goal_reached = True
+        self.latest_sub_goal = None
+        self.last_astar_path_for_viz = []
+        self.last_sent_follow_path = None
+        self.pending_follow_path_msg = None
+        self._cancel_follow_path_goal()
+        self._publish_zero_cmd()
+        self._publish_action_visualization(None)
+
+    def _is_occupied_from_map(self, world_x: float, world_y: float, clearance: float) -> bool:
+        if (
+            self.map_data is None
+            or self.map_resolution is None
+            or self.map_width <= 0
+            or self.map_height <= 0
+        ):
+            return False
+
+        mx = int((world_x - self.map_origin_x) / self.map_resolution)
+        my = int((world_y - self.map_origin_y) / self.map_resolution)
+        if mx < 0 or mx >= self.map_width or my < 0 or my >= self.map_height:
+            return True
+
+        inflate_cells = int(math.ceil(max(0.0, clearance) / self.map_resolution))
+        for dy in range(-inflate_cells, inflate_cells + 1):
+            for dx in range(-inflate_cells, inflate_cells + 1):
+                if dx * dx + dy * dy > inflate_cells * inflate_cells:
+                    continue
+                cx = mx + dx
+                cy = my + dy
+                if cx < 0 or cx >= self.map_width or cy < 0 or cy >= self.map_height:
+                    return True
+                idx = cy * self.map_width + cx
+                occ = self.map_data[idx]
+                if occ >= self.map_occupancy_threshold:
+                    return True
+        return False
+
+    def _scan_has_neighbor_support(self, index: int, range_value: float) -> bool:
+        if not self.scan_filter_enabled:
+            return True
+        if self.latest_scan is None:
+            return False
+
+        window = max(0, int(self.scan_neighbor_window))
+        required = max(0, int(self.scan_min_neighbor_count))
+        if window == 0 or required == 0:
+            return True
+
+        ranges = self.latest_scan.ranges
+        r_min = self.latest_scan.range_min
+        r_max = self.latest_scan.range_max
+        max_delta = max(0.0, float(self.scan_neighbor_max_delta))
+        support_count = 0
+
+        for offset in range(-window, window + 1):
+            if offset == 0:
+                continue
+            j = index + offset
+            if j < 0 or j >= len(ranges):
+                continue
+            neighbor = ranges[j]
+            if not math.isfinite(neighbor):
+                continue
+            if neighbor < r_min or neighbor > r_max:
+                continue
+            if abs(float(neighbor) - float(range_value)) <= max_delta:
+                support_count += 1
+                if support_count >= required:
+                    return True
+
+        return False
+
+    def _scan_persistence_key(self, x: float, y: float) -> Tuple[int, int]:
+        resolution = max(0.01, float(self.scan_persistence_resolution))
+        return (int(round(float(x) / resolution)), int(round(float(y) / resolution)))
+
+    def _scan_is_persistent(self, x: float, y: float) -> bool:
+        if not self.scan_filter_enabled:
+            return True
+
+        required_hits = max(1, int(self.scan_persistence_hits))
+        decay_scans = max(1, int(self.scan_persistence_decay_scans))
+        key = self._scan_persistence_key(x, y)
+        count, last_seen = self.scan_persistence.get(key, (0, -1))
+        if last_seen != self.scan_seq:
+            count = min(required_hits, count + 1)
+        self.scan_persistence[key] = (count, self.scan_seq)
+
+        stale_keys = [
+            stale_key
+            for stale_key, (_, last_seen) in self.scan_persistence.items()
+            if self.scan_seq - last_seen > decay_scans
         ]
+        for stale_key in stale_keys:
+            self.scan_persistence.pop(stale_key, None)
 
-        return [poly]
+        return count >= required_hits
 
-    def _scan_to_obstacle_tuples(self) -> List[Tuple[float, float, float]]:
+    def _scan_only_obstacle_tuples(self) -> List[Tuple[float, float, float]]:
         obstacles = []
         if self.latest_scan is None or self.current_pose is None:
             return obstacles
 
         px, py, yaw = self.current_pose
+        pose_map = self._current_pose_in_map_frame()
+        if pose_map is None:
+            return obstacles
+        px_map, py_map = pose_map
         x_lim = min(self.effective_half_width, self.planner_x_limit)
         y_lim = min(self.effective_half_height, self.planner_y_limit)
         min_safe_range = self.robot_radius + 0.12
@@ -400,6 +1387,8 @@ class RlOcpPolicyBridge(Node):
         angle_inc = self.latest_scan.angle_increment
         r_min = self.latest_scan.range_min
         r_max = self.latest_scan.range_max
+        if self.scan_filter_enabled and self.scan_obstacle_max_range > 0.0:
+            r_max = min(r_max, float(self.scan_obstacle_max_range))
 
         for i in range(0, len(ranges), max(1, self.obstacle_sample_step)):
             r = ranges[i]
@@ -409,15 +1398,93 @@ class RlOcpPolicyBridge(Node):
                 continue
             if r < min_safe_range:
                 continue
+            if not self._scan_has_neighbor_support(i, float(r)):
+                continue
 
             ang = yaw + angle_min + i * angle_inc
             ox = px + r * math.cos(ang)
             oy = py + r * math.sin(ang)
-            if abs(ox) >= x_lim or abs(oy) >= y_lim:
+
+            map_xy = self._point_to_map_frame(ox, oy)
+            if map_xy is None:
+                continue
+            ox, oy = map_xy
+
+            if abs(ox - px_map) >= x_lim or abs(oy - py_map) >= y_lim:
+                continue
+            if not self._scan_is_persistent(ox, oy):
                 continue
             obstacles.append((ox, oy, self.obstacle_radius))
 
+        if len(obstacles) > max(1, int(self.scan_obstacle_limit)):
+            obstacles.sort(key=lambda p: math.hypot(float(p[0]) - px_map, float(p[1]) - py_map))
+            obstacles = obstacles[: max(1, int(self.scan_obstacle_limit))]
+
         return obstacles
+
+    def _scan_to_obstacle_tuples(self) -> List[Tuple[float, float, float]]:
+        obstacles = self._scan_only_obstacle_tuples()
+        obstacles.extend(self._map_to_obstacle_tuples())
+
+        return obstacles
+
+    def _map_to_obstacle_tuples(self) -> List[Tuple[float, float, float]]:
+        if not self.use_map_static_obstacles:
+            self.map_static_circles = []
+            return []
+        if self.current_pose is None:
+            self.map_static_circles = []
+            return []
+        if (
+            self.map_data is None
+            or self.map_resolution is None
+            or self.map_width <= 0
+            or self.map_height <= 0
+        ):
+            self.map_static_circles = []
+            return []
+
+        pose_map = self._current_pose_in_map_frame()
+        if pose_map is None:
+            self.map_static_circles = []
+            return []
+        px, py = pose_map
+        x_lim = min(self.effective_half_width, self.planner_x_limit)
+        y_lim = min(self.effective_half_height, self.planner_y_limit)
+        cell_step = max(1, int(round(max(0.05, self.map_static_sample_step_m) / self.map_resolution)))
+        rx = int((px - self.map_origin_x) / self.map_resolution)
+        ry = int((py - self.map_origin_y) / self.map_resolution)
+        wx = int(x_lim / self.map_resolution)
+        wy = int(y_lim / self.map_resolution)
+
+        x0 = max(0, rx - wx)
+        x1 = min(self.map_width - 1, rx + wx)
+        y0 = max(0, ry - wy)
+        y1 = min(self.map_height - 1, ry + wy)
+
+        static_obs: List[Tuple[float, float, float]] = []
+        for my in range(y0, y1 + 1, cell_step):
+            for mx in range(x0, x1 + 1, cell_step):
+                idx = my * self.map_width + mx
+                occ = self.map_data[idx]
+                if occ < self.map_occupancy_threshold:
+                    continue
+                ox = self.map_origin_x + (mx + 0.5) * self.map_resolution
+                oy = self.map_origin_y + (my + 0.5) * self.map_resolution
+                if abs(ox - px) >= x_lim or abs(oy - py) >= y_lim:
+                    continue
+                # avoid flooding with cells under robot footprint
+                if math.hypot(ox - px, oy - py) < (self.robot_radius + 0.05):
+                    continue
+                static_obs.append((ox, oy, max(0.05, self.map_static_obstacle_radius)))
+
+        if len(static_obs) > max(1, self.map_static_obstacle_limit):
+            static_obs.sort(key=lambda p: math.hypot(p[0] - px, p[1] - py))
+            static_obs = static_obs[: max(1, self.map_static_obstacle_limit)]
+
+        self.map_static_circles = list(static_obs)
+
+        return static_obs
 
     @staticmethod
     def _rotate_to_world(px: float, py: float, yaw: float, lx: float, ly: float) -> Tuple[float, float]:
@@ -454,40 +1521,91 @@ class RlOcpPolicyBridge(Node):
         if abs(local_x) > self.planner_half_width or abs(local_y) > self.planner_half_height:
             return True
 
+        map_xy = self._point_to_map_frame(world_x, world_y)
+        if map_xy is None:
+            return False
+        map_x, map_y = map_xy
+
         if self.map_bounds is not None:
             xmin, xmax, ymin, ymax = self.map_bounds
-            if world_x < xmin or world_x > xmax or world_y < ymin or world_y > ymax:
+            if map_x < xmin or map_x > xmax or map_y < ymin or map_y > ymax:
                 return True
 
         inflate = self.robot_radius + self.action_mask_clearance
+        if self._is_occupied_from_map(map_x, map_y, inflate):
+            return True
+
         for ox, oy, radius in obstacles:
-            if math.hypot(world_x - ox, world_y - oy) < (inflate + radius):
+            # Obstacles are represented in map frame; compare in map frame.
+            if math.hypot(map_x - ox, map_y - oy) < (inflate + radius):
                 return True
 
         return False
 
+    def _apply_action_mask_to_sub_goal(
+        self,
+        sub_goal_map: Tuple[float, float],
+    ) -> Tuple[Tuple[float, float], bool, float]:
+        """Project sub-goal onto the nearest valid discrete action in map frame."""
+        candidates = self._generate_action_candidates()
+        if not candidates:
+            return sub_goal_map, False, 0.0
+
+        dynamic_obstacles = self._scan_only_obstacle_tuples()
+        static_obstacles = self._map_to_obstacle_tuples()
+        obstacles = dynamic_obstacles + static_obstacles
+
+        best_valid: Optional[Tuple[float, float]] = None
+        best_dist = float("inf")
+
+        for lx, ly, wx, wy in candidates:
+            if self._is_action_masked(lx, ly, wx, wy, obstacles):
+                continue
+            map_xy = self._point_to_map_frame(wx, wy)
+            if map_xy is None:
+                continue
+            cx, cy = map_xy
+            dist = math.hypot(float(sub_goal_map[0]) - cx, float(sub_goal_map[1]) - cy)
+            if dist < best_dist:
+                best_dist = dist
+                best_valid = (float(cx), float(cy))
+
+        if best_valid is None:
+            robot_map = self._current_pose_in_map_frame()
+            if robot_map is not None:
+                fallback = (float(robot_map[0]), float(robot_map[1]))
+                snap_dist = math.hypot(float(sub_goal_map[0]) - fallback[0], float(sub_goal_map[1]) - fallback[1])
+                return fallback, True, float(snap_dist)
+            return sub_goal_map, True, 0.0
+
+        snap_dist = math.hypot(float(sub_goal_map[0]) - best_valid[0], float(sub_goal_map[1]) - best_valid[1])
+        applied = bool(snap_dist > 1e-3)
+        return best_valid, applied, float(snap_dist)
+
     def _publish_action_visualization(self, selected_sub_goal: Optional[Tuple[float, float]]) -> None:
         if self.current_pose is None:
             return
-
-        now = self.get_clock().now().to_msg()
         candidates = self._generate_action_candidates()
-        obstacles = self._scan_to_obstacle_tuples()
+        dynamic_obstacles = self._scan_only_obstacle_tuples()
+        static_obstacles = self._map_to_obstacle_tuples()
+        obstacles = dynamic_obstacles + static_obstacles
 
-        valid_points: List[RosPoint] = []
-        masked_points: List[RosPoint] = []
+        valid_points: List[Tuple[float, float]] = []
+        masked_points: List[Tuple[float, float]] = []
         closest_selected: Optional[Tuple[float, float]] = None
         best_dist = float("inf")
 
         for lx, ly, wx, wy in candidates:
-            p = RosPoint(x=float(wx), y=float(wy), z=0.05)
             if self._is_action_masked(lx, ly, wx, wy, obstacles):
-                masked_points.append(p)
+                masked_points.append((float(wx), float(wy)))
             else:
-                valid_points.append(p)
+                valid_points.append((float(wx), float(wy)))
 
             if selected_sub_goal is not None:
-                dist = math.hypot(selected_sub_goal[0] - wx, selected_sub_goal[1] - wy)
+                cand_map = self._point_to_map_frame(wx, wy)
+                if cand_map is None:
+                    continue
+                dist = math.hypot(selected_sub_goal[0] - cand_map[0], selected_sub_goal[1] - cand_map[1])
                 if dist < best_dist:
                     best_dist = dist
                     closest_selected = (wx, wy)
@@ -499,151 +1617,89 @@ class RlOcpPolicyBridge(Node):
                 "expected_count": int(self.action_dim) * int(self.action_dim),
                 "valid_count": len(valid_points),
                 "masked_count": len(masked_points),
-                "walls_enabled": bool(self.runtime_use_walls),
-                "poly_enabled": bool(self.runtime_use_poly),
+                "dynamic_count": len(dynamic_obstacles),
+                "static_count": len(static_obstacles),
+                "map_walls_count": len(self.map_geometry_walls),
+                "map_polygons_count": len(self.map_geometry_polygons),
+                "map_local_walls_count": int(self.last_sent_map_walls_count),
+                "map_local_polygons_count": int(self.last_sent_map_polygons_count),
                 "planner_fail_streak": int(self.consecutive_planner_failures),
+                "policy_hz": float(1.0 / self.policy_period),
+                "planner_service_hz": float(1.0 / self.service_period),
+                "goal_source_mode": str(self.goal_source_mode),
                 "selected_sub_goal": list(selected_sub_goal) if selected_sub_goal is not None else None,
+                "cached_sub_goal": list(self.latest_sub_goal) if self.latest_sub_goal is not None else None,
+                "cached_sub_goal_seq": int(self.latest_sub_goal_seq),
+                "goal_reached": bool(self.goal_reached),
+                "mask_applied": bool(self.last_mask_applied),
+                "mask_snap_distance": float(self.last_mask_snap_distance),
             }
             msg = String()
             msg.data = json.dumps(status)
             self.policy_debug_status_pub.publish(msg)
 
-        if not self.visualize_actions:
-            return
-
-        markers = MarkerArray()
-
-        delete_all = Marker()
-        delete_all.header.frame_id = self.action_marker_frame
-        delete_all.header.stamp = now
-        delete_all.action = Marker.DELETEALL
-        markers.markers.append(delete_all)
-
-        valid_marker = Marker()
-        valid_marker.header.frame_id = self.action_marker_frame
-        valid_marker.header.stamp = now
-        valid_marker.ns = "policy_actions"
-        valid_marker.id = 1
-        valid_marker.type = Marker.SPHERE_LIST
-        valid_marker.action = Marker.ADD
-        valid_marker.scale.x = 0.10
-        valid_marker.scale.y = 0.10
-        valid_marker.scale.z = 0.10
-        valid_marker.color.r = 0.0
-        valid_marker.color.g = 1.0
-        valid_marker.color.b = 0.25
-        valid_marker.color.a = 0.85
-        valid_marker.points = valid_points
-        markers.markers.append(valid_marker)
-
-        masked_marker = Marker()
-        masked_marker.header.frame_id = self.action_marker_frame
-        masked_marker.header.stamp = now
-        masked_marker.ns = "policy_actions"
-        masked_marker.id = 2
-        masked_marker.type = Marker.SPHERE_LIST
-        masked_marker.action = Marker.ADD
-        masked_marker.scale.x = 0.08
-        masked_marker.scale.y = 0.08
-        masked_marker.scale.z = 0.08
-        masked_marker.color.r = 1.0
-        masked_marker.color.g = 0.1
-        masked_marker.color.b = 0.1
-        masked_marker.color.a = 0.65
-        masked_marker.points = masked_points
-        markers.markers.append(masked_marker)
-
-        selected_marker = Marker()
-        selected_marker.header.frame_id = self.action_marker_frame
-        selected_marker.header.stamp = now
-        selected_marker.ns = "policy_actions"
-        selected_marker.id = 3
-        selected_marker.type = Marker.SPHERE
-        selected_marker.action = Marker.ADD
-        selected_marker.scale.x = 0.18
-        selected_marker.scale.y = 0.18
-        selected_marker.scale.z = 0.18
-        selected_marker.color.r = 0.1
-        selected_marker.color.g = 0.4
-        selected_marker.color.b = 1.0
-        selected_marker.color.a = 1.0
-        if closest_selected is not None:
-            selected_marker.pose.position.x = float(closest_selected[0])
-            selected_marker.pose.position.y = float(closest_selected[1])
-            selected_marker.pose.position.z = 0.12
-        else:
-            selected_marker.action = Marker.DELETE
-        markers.markers.append(selected_marker)
-
-        info_marker = Marker()
-        info_marker.header.frame_id = self.action_marker_frame
-        info_marker.header.stamp = now
-        info_marker.ns = "policy_actions"
-        info_marker.id = 4
-        info_marker.type = Marker.TEXT_VIEW_FACING
-        info_marker.action = Marker.ADD
-        info_marker.scale.z = 0.25
-        info_marker.color.r = 1.0
-        info_marker.color.g = 1.0
-        info_marker.color.b = 1.0
-        info_marker.color.a = 0.95
-        px, py, _ = self.current_pose
-        info_marker.pose.position.x = float(px)
-        info_marker.pose.position.y = float(py)
-        info_marker.pose.position.z = 0.6
-        info_marker.text = f"actions={len(candidates)} valid={len(valid_points)} masked={len(masked_points)}"
-        markers.markers.append(info_marker)
-
-        self.action_viz_pub.publish(markers)
+        action_payload = {
+            "frame_id": self.action_marker_frame,
+            "goal_reached": bool(self.goal_reached),
+            "current_pose": [float(self.current_pose[0]), float(self.current_pose[1]), float(self.current_pose[2])],
+            "valid_points": valid_points,
+            "masked_points": masked_points,
+            "selected_point": [float(closest_selected[0]), float(closest_selected[1])] if closest_selected is not None else None,
+            "candidate_count": len(candidates),
+            "valid_count": len(valid_points),
+            "masked_count": len(masked_points),
+        }
+        msg = String()
+        msg.data = json.dumps(action_payload)
+        self.action_debug_pub.publish(msg)
 
     def _scan_to_obstacle_msgs(self) -> List[ObstacleState]:
+        # Use both lidar and map-grid circles, then keep only nearest obstacles.
+        obs_tuples = self._scan_to_obstacle_tuples()
+        pose_map = self._current_pose_in_map_frame()
+        if pose_map is not None:
+            px, py = pose_map
+            obs_tuples.sort(key=lambda o: math.hypot(float(o[0]) - px, float(o[1]) - py))
+
+        # Keep the nearest obstacles to keep planner requests bounded.
+        max_supported = 40
+        keep_n = min(max_supported, max(1, int(self.map_static_obstacle_limit)))
+        obs_tuples = obs_tuples[:keep_n]
+
         obstacles = []
-        if self.latest_scan is None or self.current_pose is None:
-            return obstacles
-
-        px, py, yaw = self.current_pose
-        x_lim = min(self.effective_half_width, self.planner_x_limit)
-        y_lim = min(self.effective_half_height, self.planner_y_limit)
-        min_safe_range = self.robot_radius + 0.12
-        ranges = self.latest_scan.ranges
-        angle_min = self.latest_scan.angle_min
-        angle_inc = self.latest_scan.angle_increment
-        r_min = self.latest_scan.range_min
-        r_max = self.latest_scan.range_max
-
-        for i in range(0, len(ranges), max(1, self.obstacle_sample_step)):
-            r = ranges[i]
-            if not math.isfinite(r):
-                continue
-            if r < r_min or r > r_max:
-                continue
-            if r < min_safe_range:
-                continue
-
-            ang = yaw + angle_min + i * angle_inc
-            obs_x = px + r * math.cos(ang)
-            obs_y = py + r * math.sin(ang)
-            if abs(obs_x - px) > x_lim or abs(obs_y - py) > y_lim:
-                continue
-            if abs(obs_x) >= x_lim or abs(obs_y) >= y_lim:
-                continue
+        for obs_x, obs_y, radius in obs_tuples:
             obstacle = ObstacleState()
             obstacle.px = float(obs_x)
             obstacle.py = float(obs_y)
-            obstacle.radius = float(self.obstacle_radius)
+            obstacle.radius = float(radius)
             obstacles.append(obstacle)
-
         return obstacles
 
-    def _publish_stop(self) -> None:
-        if not rclpy.ok():
-            return
-        msg = TwistStamped()
-        msg.header.stamp = self.get_clock().now().to_msg()
-        msg.header.frame_id = "base_link"
-        msg.twist.linear.x = 0.0
-        msg.twist.angular.z = 0.0
-        self.cmd_pub.publish(msg)
+    def _build_human_fallback_msgs(self, obstacle_msgs: List[ObstacleState]) -> List[HumanState]:
+        if not self.human_fallback_enabled:
+            return []
+        if self.current_pose is None:
+            return []
+
+        px, py, _ = self.current_pose
+        limit = max(0, int(self.human_fallback_limit))
+        if limit == 0:
+            return []
+
+        obs_sorted = sorted(
+            obstacle_msgs,
+            key=lambda o: math.hypot(float(o.px) - px, float(o.py) - py),
+        )
+        humans: List[HumanState] = []
+        for o in obs_sorted[:limit]:
+            h = HumanState()
+            h.px = float(o.px)
+            h.py = float(o.py)
+            h.vx = 0.0
+            h.vy = 0.0
+            h.radius = float(max(0.05, self.human_fallback_radius))
+            humans.append(h)
+        return humans
 
     def _wheel_speeds_from_twist(self) -> Optional[Tuple[float, float]]:
         if self.current_twist is None:
@@ -654,19 +1710,24 @@ class RlOcpPolicyBridge(Node):
         v_right = v + self.axle_half_width * w
         return v_left, v_right
 
-    def _get_sub_goal_from_policy(self) -> Optional[Tuple[float, float]]:
+    def _build_policy_worker_request(self) -> Optional[dict]:
         if self.current_pose is None or self.current_twist is None or self.current_goal is None:
             return None
 
-        px, py, yaw = self.current_pose
-        gx, gy = self.current_goal
+        pose_map = self._current_pose_with_yaw_in_map_frame()
+        goal_map = self._current_goal_in_map_frame()
+        if pose_map is None or goal_map is None:
+            return None
+
+        px, py, yaw = pose_map
+        gx, gy = goal_map
 
         wheel_speeds = self._wheel_speeds_from_twist()
         if wheel_speeds is None:
             return None
         v_left, v_right = wheel_speeds
 
-        worker_req = {
+        return {
             "px": px,
             "py": py,
             "yaw": yaw,
@@ -675,9 +1736,8 @@ class RlOcpPolicyBridge(Node):
             "gx": gx,
             "gy": gy,
             "obstacles": self._scan_to_obstacle_tuples(),
-            "walls": self._build_wall_tuples(),
+            "walls": [],
         }
-        return self._query_policy_worker(worker_req)
 
     def _send_planner_request(self, sub_goal: Tuple[float, float]) -> None:
         if self.current_pose is None or self.current_twist is None or self.current_goal is None:
@@ -687,8 +1747,19 @@ class RlOcpPolicyBridge(Node):
             self.get_logger().warn(f"Service {self.planner_service} not available")
             return
 
-        px, py, yaw = self.current_pose
-        gx, gy = self.current_goal
+        pose_map = self._current_pose_with_yaw_in_map_frame()
+        goal_map = self._current_goal_in_map_frame()
+        if pose_map is None or goal_map is None:
+            self._throttled_log(
+                "_last_request_wait_tf_log_ns",
+                2.0,
+                "[planner_request] waiting TF for pose/goal -> map (pose_frame=%s goal_frame=%s map_frame=%s)"
+                % (str(self.pose_frame), str(self.current_goal_frame), str(self.map_frame)),
+            )
+            return
+
+        px, py, yaw = pose_map
+        gx, gy = goal_map
         wheel_speeds = self._wheel_speeds_from_twist()
         if wheel_speeds is None:
             return
@@ -706,8 +1777,10 @@ class RlOcpPolicyBridge(Node):
         req.ob.robot_state.radius = float(self.axle_half_width)
 
         req.ob.obstacle_states = self._scan_to_obstacle_msgs()
-        req.ob.walls = self._build_wall_msgs() if self.runtime_use_walls else []
-        req.ob.poly_states = self._build_poly_msgs() if self.runtime_use_poly else []
+        poly_states, walls = self._get_map_geometry_msgs()
+        req.ob.walls = walls
+        req.ob.poly_states = poly_states
+        req.ob.human_states = self._process_human_msgs() if self.enforce_scene_entities else []
         req.ob.header.stamp = self.get_clock().now().to_msg()
         req.ob.header.frame_id = "map"
 
@@ -717,209 +1790,73 @@ class RlOcpPolicyBridge(Node):
         req.sub_goal.x = float(sub_goal[0])
         req.sub_goal.y = float(sub_goal[1])
 
+        self._publish_local_goal(sub_goal)
         self.last_wheel_speed = (v_left, v_right)
         self.last_request_for_viz = req
-        self.last_pose_for_viz = (px, py, yaw)
-        self.last_wheels_for_viz = (v_left, v_right)
 
         future = self.ocp_client.call_async(req)
         future.add_done_callback(self._on_planner_response)
         self.pending_future = future
 
-    def _predict_mpc_trajectory(
-        self,
-        start_pose: Tuple[float, float, float],
-        start_wheels: Tuple[float, float],
-        control_vars,
-    ) -> List[Tuple[float, float]]:
-        px, py, yaw = start_pose
-        vl, vr = start_wheels
-        dt = float(self.control_dt)
-
-        points: List[Tuple[float, float]] = [(float(px), float(py))]
-        for cv in control_vars:
-            vl += float(cv.al) * dt
-            vr += float(cv.ar) * dt
-            v = 0.5 * (vl + vr)
-            w = (vr - vl) / (2.0 * self.axle_half_width)
-
-            yaw += w * dt
-            px += v * math.cos(yaw) * dt
-            py += v * math.sin(yaw) * dt
-            points.append((float(px), float(py)))
-
-        return points
-
-    def _publish_planner_scene_markers(
+    def _publish_planner_scene_debug(
         self,
         req: OcpLocalPlann.Request,
-        predicted_traj: List[Tuple[float, float]],
+        astar_path: List[Tuple[float, float]],
     ) -> None:
-        if not self.visualize_planner_scene:
-            return
-
-        now = self.get_clock().now().to_msg()
-        markers = MarkerArray()
-
-        delete_all = Marker()
-        delete_all.header.frame_id = self.planner_scene_frame
-        delete_all.header.stamp = now
-        delete_all.action = Marker.DELETEALL
-        markers.markers.append(delete_all)
-
-        robot_marker = Marker()
-        robot_marker.header.frame_id = self.planner_scene_frame
-        robot_marker.header.stamp = now
-        robot_marker.ns = "planner_scene"
-        robot_marker.id = 100
-        robot_marker.type = Marker.CYLINDER
-        robot_marker.action = Marker.ADD
-        robot_marker.pose.position.x = float(req.ob.robot_state.pose.x)
-        robot_marker.pose.position.y = float(req.ob.robot_state.pose.y)
-        robot_marker.pose.position.z = 0.05
-        robot_marker.pose.orientation.w = 1.0
-        robot_marker.scale.x = 2.0 * float(self.robot_radius)
-        robot_marker.scale.y = 2.0 * float(self.robot_radius)
-        robot_marker.scale.z = 0.10
-        robot_marker.color.r = 1.0
-        robot_marker.color.g = 0.35
-        robot_marker.color.b = 0.35
-        robot_marker.color.a = 0.85
-        markers.markers.append(robot_marker)
-
-        goal_marker = Marker()
-        goal_marker.header.frame_id = self.planner_scene_frame
-        goal_marker.header.stamp = now
-        goal_marker.ns = "planner_scene"
-        goal_marker.id = 101
-        goal_marker.type = Marker.SPHERE
-        goal_marker.action = Marker.ADD
-        goal_marker.pose.position.x = float(req.ob.robot_state.gx)
-        goal_marker.pose.position.y = float(req.ob.robot_state.gy)
-        goal_marker.pose.position.z = 0.05
-        goal_marker.pose.orientation.w = 1.0
-        goal_marker.scale.x = 0.20
-        goal_marker.scale.y = 0.20
-        goal_marker.scale.z = 0.20
-        goal_marker.color.r = 0.10
-        goal_marker.color.g = 0.95
-        goal_marker.color.b = 0.95
-        goal_marker.color.a = 0.95
-        markers.markers.append(goal_marker)
-
-        sub_goal_marker = Marker()
-        sub_goal_marker.header.frame_id = self.planner_scene_frame
-        sub_goal_marker.header.stamp = now
-        sub_goal_marker.ns = "planner_scene"
-        sub_goal_marker.id = 102
-        sub_goal_marker.type = Marker.SPHERE
-        sub_goal_marker.action = Marker.ADD
-        sub_goal_marker.pose.position.x = float(req.sub_goal.x)
-        sub_goal_marker.pose.position.y = float(req.sub_goal.y)
-        sub_goal_marker.pose.position.z = 0.05
-        sub_goal_marker.pose.orientation.w = 1.0
-        sub_goal_marker.scale.x = 0.16
-        sub_goal_marker.scale.y = 0.16
-        sub_goal_marker.scale.z = 0.16
-        sub_goal_marker.color.r = 0.30
-        sub_goal_marker.color.g = 0.55
-        sub_goal_marker.color.b = 1.0
-        sub_goal_marker.color.a = 0.95
-        markers.markers.append(sub_goal_marker)
-
-        wall_marker = Marker()
-        wall_marker.header.frame_id = self.planner_scene_frame
-        wall_marker.header.stamp = now
-        wall_marker.ns = "planner_scene"
-        wall_marker.id = 110
-        wall_marker.type = Marker.LINE_LIST
-        wall_marker.action = Marker.ADD
-        wall_marker.scale.x = 0.07
-        wall_marker.color.r = 0.95
-        wall_marker.color.g = 0.90
-        wall_marker.color.b = 0.20
-        wall_marker.color.a = 0.95
-        for wall in req.ob.walls:
-            wall_marker.points.append(RosPoint(x=float(wall.sx), y=float(wall.sy), z=0.05))
-            wall_marker.points.append(RosPoint(x=float(wall.ex), y=float(wall.ey), z=0.05))
-        markers.markers.append(wall_marker)
-
-        poly_marker = Marker()
-        poly_marker.header.frame_id = self.planner_scene_frame
-        poly_marker.header.stamp = now
-        poly_marker.ns = "planner_scene"
-        poly_marker.id = 120
-        poly_marker.type = Marker.LINE_LIST
-        poly_marker.action = Marker.ADD
-        poly_marker.scale.x = 0.06
-        poly_marker.color.r = 0.75
-        poly_marker.color.g = 0.35
-        poly_marker.color.b = 1.0
-        poly_marker.color.a = 0.95
-        for poly in req.ob.poly_states:
-            n = len(poly.vertices)
-            if n < 2:
-                continue
-            for i in range(n):
-                p1 = poly.vertices[i]
-                p2 = poly.vertices[(i + 1) % n]
-                poly_marker.points.append(RosPoint(x=float(p1.x), y=float(p1.y), z=0.05))
-                poly_marker.points.append(RosPoint(x=float(p2.x), y=float(p2.y), z=0.05))
-        markers.markers.append(poly_marker)
-
-        obst_marker = Marker()
-        obst_marker.header.frame_id = self.planner_scene_frame
-        obst_marker.header.stamp = now
-        obst_marker.ns = "planner_scene"
-        obst_marker.id = 130
-        obst_marker.type = Marker.SPHERE_LIST
-        obst_marker.action = Marker.ADD
-        obst_marker.scale.x = 2.0 * float(self.obstacle_radius)
-        obst_marker.scale.y = 2.0 * float(self.obstacle_radius)
-        obst_marker.scale.z = 0.10
-        obst_marker.color.r = 1.0
-        obst_marker.color.g = 0.10
-        obst_marker.color.b = 0.10
-        obst_marker.color.a = 0.85
-        for obs in req.ob.obstacle_states:
-            obst_marker.points.append(RosPoint(x=float(obs.px), y=float(obs.py), z=0.05))
-        markers.markers.append(obst_marker)
-
-        human_marker = Marker()
-        human_marker.header.frame_id = self.planner_scene_frame
-        human_marker.header.stamp = now
-        human_marker.ns = "planner_scene"
-        human_marker.id = 140
-        human_marker.type = Marker.SPHERE_LIST
-        human_marker.action = Marker.ADD
-        human_marker.scale.x = 0.25
-        human_marker.scale.y = 0.25
-        human_marker.scale.z = 0.10
-        human_marker.color.r = 0.20
-        human_marker.color.g = 0.95
-        human_marker.color.b = 0.20
-        human_marker.color.a = 0.85
-        for hum in req.ob.human_states:
-            human_marker.points.append(RosPoint(x=float(hum.px), y=float(hum.py), z=0.05))
-        markers.markers.append(human_marker)
-
-        traj_marker = Marker()
-        traj_marker.header.frame_id = self.planner_scene_frame
-        traj_marker.header.stamp = now
-        traj_marker.ns = "planner_scene"
-        traj_marker.id = 150
-        traj_marker.type = Marker.LINE_STRIP
-        traj_marker.action = Marker.ADD
-        traj_marker.scale.x = 0.08
-        traj_marker.color.r = 0.10
-        traj_marker.color.g = 0.55
-        traj_marker.color.b = 1.00
-        traj_marker.color.a = 0.95
-        for tx, ty in predicted_traj:
-            traj_marker.points.append(RosPoint(x=float(tx), y=float(ty), z=0.08))
-        markers.markers.append(traj_marker)
-
-        self.scene_viz_pub.publish(markers)
+        x_lim = min(self.effective_half_width, self.planner_x_limit)
+        y_lim = min(self.effective_half_height, self.planner_y_limit)
+        payload = {
+            "frame_id": self.planner_scene_frame,
+            "goal_reached": bool(self.goal_reached),
+            "bounds": {
+                "xmin": float(-x_lim),
+                "xmax": float(x_lim),
+                "ymin": float(-y_lim),
+                "ymax": float(y_lim),
+            },
+            "robot": {
+                "x": float(req.ob.robot_state.pose.x),
+                "y": float(req.ob.robot_state.pose.y),
+                "theta": float(req.ob.robot_state.pose.theta),
+                "radius": float(self.robot_radius),
+            },
+            "goal": {
+                "x": float(req.ob.robot_state.gx),
+                "y": float(req.ob.robot_state.gy),
+            },
+            "sub_goal": {
+                "x": float(req.sub_goal.x),
+                "y": float(req.sub_goal.y),
+            },
+            "walls": [
+                [float(w.sx), float(w.sy), float(w.ex), float(w.ey)] for w in req.ob.walls
+            ],
+            "obstacles": [
+                [float(o.px), float(o.py), float(o.radius)] for o in req.ob.obstacle_states
+            ],
+            "polygons": [
+                [[float(v.x), float(v.y)] for v in poly.vertices] for poly in req.ob.poly_states
+            ],
+            "humans": [
+                {
+                    "px": float(h.px),
+                    "py": float(h.py),
+                    "vx": float(h.vx),
+                    "vy": float(h.vy),
+                    "radius": float(h.radius),
+                }
+                for h in req.ob.human_states
+            ],
+            "trajectory": [[float(px), float(py)] for px, py in astar_path],
+            "path_debug": {
+                "astar_points": int(len(astar_path)),
+                "goal_source_mode": str(self.goal_source_mode),
+                "tracking_controller": "nav2_mppi_controller::MPPIController",
+            },
+        }
+        msg = String()
+        msg.data = json.dumps(payload)
+        self.planner_scene_debug_pub.publish(msg)
 
     def _on_planner_response(self, future) -> None:
         self.pending_future = None
@@ -927,94 +1864,203 @@ class RlOcpPolicyBridge(Node):
             res = future.result()
         except Exception as exc:
             self.get_logger().error(f"Planner service call failed: {exc}")
-            self._publish_stop()
             return
 
         if res.success:
             self.consecutive_planner_failures = 0
             self.success_streak += 1
-
-            # If we had to relax constraints, try restoring them after stable success.
-            if self.success_streak >= 20:
-                if self.use_wall_constraints and not self.runtime_use_walls:
-                    self.runtime_use_walls = True
-                    self.get_logger().info("Re-enabled wall constraints after stable planner success")
-                    self.success_streak = 0
-                elif self.use_demo_poly_obstacle and not self.runtime_use_poly:
-                    self.runtime_use_poly = True
-                    self.get_logger().info("Re-enabled demo polygon after stable planner success")
-                    self.success_streak = 0
         else:
             self.success_streak = 0
             self.consecutive_planner_failures += 1
-            if self.consecutive_planner_failures >= 6 and self.runtime_use_poly:
-                self.runtime_use_poly = False
-                self.get_logger().warn("Temporarily disabled demo polygon constraints due to repeated planner failures")
-                self.consecutive_planner_failures = 0
-            elif self.consecutive_planner_failures >= 10 and self.runtime_use_walls:
-                self.runtime_use_walls = False
-                self.get_logger().warn("Temporarily disabled wall constraints due to repeated planner failures")
-                self.consecutive_planner_failures = 0
+            if self.consecutive_planner_failures % 5 == 1:
+                self.get_logger().warn(
+                    "Planner reported failure (count=%d, map_walls=%d, map_polygons=%d)"
+                    % (
+                        int(self.consecutive_planner_failures),
+                        int(len(self.map_geometry_walls)),
+                        int(len(self.map_geometry_polygons)),
+                )
+                )
 
-        if self.last_request_for_viz is not None and self.last_pose_for_viz is not None and self.last_wheels_for_viz is not None:
-            predicted_traj = self._predict_mpc_trajectory(
-                self.last_pose_for_viz,
-                self.last_wheels_for_viz,
-                res.control_vars,
-            )
-            self._publish_planner_scene_markers(self.last_request_for_viz, predicted_traj)
+        astar_path = self._path_points_from_response(res)
+        self.last_astar_path_for_viz = list(astar_path)
+        if self.last_request_for_viz is not None:
+            self._publish_planner_scene_debug(self.last_request_for_viz, astar_path)
 
-        if self.last_wheel_speed is None:
-            wheel_speeds = self._wheel_speeds_from_twist()
-            if wheel_speeds is None:
-                self._publish_stop()
-                return
-            v_left, v_right = wheel_speeds
-        else:
-            v_left, v_right = self.last_wheel_speed
+        if res.success:
+            goal_pose = self._current_goal_pose_in_map_frame()
+            final_yaw = goal_pose[2] if goal_pose is not None else None
+            path_msg = self._build_path_msg(res.astar_path, self.map_frame, final_yaw=final_yaw)
+            self.local_path_pub.publish(path_msg)
+            self._send_follow_path_goal(path_msg)
 
-        v_left_cmd = v_left + res.al * self.control_dt
-        v_right_cmd = v_right + res.ar * self.control_dt
-
-        linear = 0.5 * (v_left_cmd + v_right_cmd)
-        angular = (v_right_cmd - v_left_cmd) / (2.0 * self.axle_half_width)
-
-        linear = self._clamp(linear, -self.max_linear_speed, self.max_linear_speed)
-        angular = self._clamp(angular, -self.max_angular_speed, self.max_angular_speed)
-
-        msg = TwistStamped()
-        msg.header.stamp = self.get_clock().now().to_msg()
-        msg.header.frame_id = "base_link"
-        msg.twist.linear.x = float(linear)
-        msg.twist.angular.z = float(angular)
-        self.cmd_pub.publish(msg)
-
-    def _control_loop(self) -> None:
-        if self.worker is None:
+    def _policy_loop(self) -> None:
+        if self.goal_source_mode == self._GOAL_SOURCE_RL and self.worker is None:
             return
 
         if self.current_pose is None or self.current_goal is None:
+            self._throttled_log(
+                "_last_policy_wait_log_ns",
+                2.0,
+                "[policy_loop] waiting pose/goal (pose=%s goal=%s)"
+                % (str(self.current_pose is not None), str(self.current_goal is not None)),
+            )
             return
 
-        px, py, _ = self.current_pose
-        gx, gy = self.current_goal
-        if math.hypot(gx - px, gy - py) < self.goal_tolerance:
-            self._publish_stop()
+        if self.map_data is None:
+            self._throttled_log(
+                "_last_policy_wait_map_log_ns",
+                2.0,
+                "[policy_loop] waiting map data on topic %s (grid sampling not started yet)"
+                % str(self.map_topic),
+            )
             return
 
-        if self.pending_future is not None:
+        pose_map_with_yaw = self._current_pose_with_yaw_in_map_frame()
+        goal_map_with_yaw = self._current_goal_pose_in_map_frame()
+        if pose_map_with_yaw is None or goal_map_with_yaw is None:
+            self._throttled_log(
+                "_last_policy_wait_tf_log_ns",
+                2.0,
+                "[policy_loop] waiting TF for pose/goal -> map",
+            )
+            return
+
+        px, py, _ = pose_map_with_yaw
+        gx, gy, _ = goal_map_with_yaw
+        final_latched, xy_error, _ = self._update_final_goal_latch(
+            pose_map_with_yaw, goal_map_with_yaw
+        )
+        if final_latched:
+            self._hold_final_goal_stop()
+            return
+
+        self.goal_reached = False
+        if xy_error <= self.final_goal_approach_distance:
+            self.latest_sub_goal = (float(gx), float(gy))
+            self.latest_sub_goal_seq += 1
+            self.last_mask_applied = False
+            self.last_mask_snap_distance = 0.0
+            self._publish_action_visualization(self.latest_sub_goal)
+            return
+
+        if self.goal_source_mode == self._GOAL_SOURCE_RVIZ:
+            self.latest_sub_goal = (float(gx), float(gy))
+            self.latest_sub_goal_seq += 1
+            self.last_mask_applied = False
+            self.last_mask_snap_distance = 0.0
+            self._publish_action_visualization(self.latest_sub_goal)
             return
 
         try:
-            sub_goal = self._get_sub_goal_from_policy()
-            if sub_goal is None:
+            worker_req = self._build_policy_worker_request()
+            if worker_req is None:
                 self._publish_action_visualization(None)
                 return
-            self._publish_action_visualization(sub_goal)
-            self._send_planner_request(sub_goal)
+            self._submit_policy_request(worker_req)
+            latest_policy_result = self._take_latest_policy_result()
+            if latest_policy_result is None:
+                if self.latest_sub_goal is not None:
+                    self._publish_action_visualization(self.latest_sub_goal)
+                self._throttled_log(
+                    "_last_policy_worker_wait_result_log_ns",
+                    2.0,
+                    "[policy_loop] waiting non-blocking response from policy worker",
+                )
+                return
+            sub_goal, _ = latest_policy_result
+            masked_sub_goal, mask_applied, snap_dist = self._apply_action_mask_to_sub_goal(sub_goal)
+            self.last_mask_applied = bool(mask_applied)
+            self.last_mask_snap_distance = float(snap_dist)
+            self.latest_sub_goal = masked_sub_goal
+            self.latest_sub_goal_seq += 1
+            self._publish_action_visualization(masked_sub_goal)
         except Exception as exc:
-            self.get_logger().error(f"Control loop failed: {exc}")
-            self._publish_stop()
+            self.get_logger().error(f"Policy loop failed: {exc}")
+
+    def _planner_loop(self) -> None:
+        if self.current_pose is None or self.current_goal is None:
+            self._throttled_log(
+                "_last_planner_wait_log_ns",
+                2.0,
+                "[planner_loop] waiting pose/goal (pose=%s goal=%s)"
+                % (str(self.current_pose is not None), str(self.current_goal is not None)),
+            )
+            return
+
+        if self.map_data is None:
+            self._throttled_log(
+                "_last_planner_wait_map_log_ns",
+                2.0,
+                "[planner_loop] waiting map data on topic %s"
+                % str(self.map_topic),
+            )
+            return
+
+        pose_map_with_yaw = self._current_pose_with_yaw_in_map_frame()
+        goal_map_with_yaw = self._current_goal_pose_in_map_frame()
+        if pose_map_with_yaw is None or goal_map_with_yaw is None:
+            self._throttled_log(
+                "_last_planner_wait_tf_log_ns",
+                2.0,
+                "[planner_loop] waiting TF for pose/goal -> map",
+            )
+            return
+
+        px, py, _ = pose_map_with_yaw
+        gx, gy, _ = goal_map_with_yaw
+        final_latched, xy_error, _ = self._update_final_goal_latch(
+            pose_map_with_yaw, goal_map_with_yaw
+        )
+        if final_latched:
+            self._hold_final_goal_stop()
+            return
+
+        self.goal_reached = False
+        if self.pending_future is not None:
+            return
+
+        if self.goal_source_mode == self._GOAL_SOURCE_RVIZ:
+            try:
+                if xy_error <= self.final_goal_xy_tolerance:
+                    path_msg = self._build_final_alignment_path(
+                        pose_map_with_yaw, goal_map_with_yaw
+                    )
+                    self.local_path_pub.publish(path_msg)
+                    self._send_follow_path_goal(path_msg)
+                else:
+                    self._send_planner_request((float(gx), float(gy)))
+            except Exception as exc:
+                self.get_logger().error(f"Planner loop failed (rviz_global_goal mode): {exc}")
+            return
+
+        if xy_error <= self.final_goal_approach_distance:
+            try:
+                if xy_error <= self.final_goal_xy_tolerance:
+                    path_msg = self._build_final_alignment_path(
+                        pose_map_with_yaw, goal_map_with_yaw
+                    )
+                    self.local_path_pub.publish(path_msg)
+                    self._send_follow_path_goal(path_msg)
+                else:
+                    self._send_planner_request((float(gx), float(gy)))
+            except Exception as exc:
+                self.get_logger().error(f"Planner loop failed (final approach): {exc}")
+            return
+
+        if self.latest_sub_goal is None:
+            self._throttled_log(
+                "_last_planner_wait_subgoal_log_ns",
+                2.0,
+                "[planner_loop] waiting latest_sub_goal from policy worker",
+            )
+            return
+
+        try:
+            self._send_planner_request(self.latest_sub_goal)
+            self.last_requested_sub_goal_seq = self.latest_sub_goal_seq
+        except Exception as exc:
+            self.get_logger().error(f"Planner loop failed: {exc}")
 
 
 def main(args=None):
@@ -1025,13 +2071,15 @@ def main(args=None):
     except KeyboardInterrupt:
         pass
     finally:
+        node.worker_stop_event.set()
+        with node.worker_request_cond:
+            node.worker_request_cond.notify_all()
         if node.worker is not None and node.worker.poll() is None:
             node.worker.terminate()
             try:
                 node.worker.wait(timeout=2.0)
             except Exception:
                 pass
-        node._publish_stop()
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()

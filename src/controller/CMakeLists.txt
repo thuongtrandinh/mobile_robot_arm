@@ -25,7 +25,6 @@ find_package(GDAL REQUIRED)
 add_library(controller_core SHARED
   src/astar.cc
   src/lookahead.cc
-  src/mpc.cc
   src/planner.cc
   src/smooth.cc
 )
@@ -49,7 +48,6 @@ target_link_libraries(controller_core
   ${OpenCV_LIBS}
   TIFF::TIFF
   GDAL::GDAL
-  casadi
 )
 
 target_compile_definitions(controller_core PUBLIC ROS_BUILD)
@@ -93,13 +91,29 @@ install(
   DESTINATION share/${PROJECT_NAME}
 )
 
-install(
-  PROGRAMS
-    scripts/eval_ppo.py
-    scripts/rl_ocp_policy_bridge.py
-    scripts/rl_policy_worker.py
-  DESTINATION lib/${PROJECT_NAME}
+set(CONTROLLER_SCRIPT_FILES
+  scripts/ampcc_rviz_visualizer.py
+  scripts/custom_env_visualizer_node.py
+  scripts/eval_ppo.py
+  scripts/rl_ocp_policy_bridge.py
+  scripts/rl_policy_worker.py
 )
+
+set(CONTROLLER_EXISTING_SCRIPT_FILES "")
+foreach(_script IN LISTS CONTROLLER_SCRIPT_FILES)
+  if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${_script}")
+    list(APPEND CONTROLLER_EXISTING_SCRIPT_FILES ${_script})
+  else()
+    message(STATUS "Skip missing script in install(PROGRAMS): ${_script}")
+  endif()
+endforeach()
+
+if(CONTROLLER_EXISTING_SCRIPT_FILES)
+  install(
+    PROGRAMS ${CONTROLLER_EXISTING_SCRIPT_FILES}
+    DESTINATION lib/${PROJECT_NAME}
+  )
+endif()
 
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/config")
   install(

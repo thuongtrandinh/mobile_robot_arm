@@ -12,6 +12,8 @@
   */
 #include "planner.h"
 
+#include <algorithm>
+
 namespace robot_plann {
 
 cv::Point Planner::MapCoord2ImgIdx(const Eigen::Vector2d &pt, bool vis) const {
@@ -66,16 +68,61 @@ Eigen::Vector2d Planner::ImgIdx2MapCoord(const cv::Point &idx, bool vis) const {
   return pt;
 }
 
-MpcReturn Planner::PlannExec(const JointState &state,
-                             Eigen::Vector2d &sub_goal) {
-  if (!has_map_) return {MpcStages(), false};
+#ifdef ROS_BUILD
+nav_msgs::msg::OccupancyGrid Planner::GetLocalCostMap(
+    const std::string &frame_id) const {
+  nav_msgs::msg::OccupancyGrid msg;
+  msg.header.frame_id = frame_id;
+
+  if (cost_map_.empty()) {
+    msg.info.resolution = static_cast<float>(kMapResol);
+    msg.info.width = 0;
+    msg.info.height = 0;
+    msg.info.origin.orientation.w = 1.0;
+    return msg;
+  }
+
+  const int width = cost_map_.cols;
+  const int height = cost_map_.rows;
+
+  msg.info.resolution = static_cast<float>(kMapResol);
+  msg.info.width = static_cast<uint32_t>(width);
+  msg.info.height = static_cast<uint32_t>(height);
+  msg.info.origin.position.x = window_center_x_ - 0.5 * width * kMapResol;
+  msg.info.origin.position.y = window_center_y_ - 0.5 * height * kMapResol;
+  msg.info.origin.position.z = 0.0;
+  msg.info.origin.orientation.x = 0.0;
+  msg.info.origin.orientation.y = 0.0;
+  msg.info.origin.orientation.z = 0.0;
+  msg.info.origin.orientation.w = 1.0;
+
+  msg.data.assign(static_cast<size_t>(width * height), 0);
+  // Convert OpenCV image coordinates (y-down) to OccupancyGrid (y-up).
+  for (int row = 0; row < height; ++row) {
+    const int src_row = height - 1 - row;
+    const int row_offset = row * width;
+    for (int col = 0; col < width; ++col) {
+      const int gray = static_cast<int>(cost_map_.at<u_char>(src_row, col));
+      int occ = static_cast<int>(std::lround((255.0 - gray) * 100.0 / 255.0));
+      occ = std::max(0, std::min(100, occ));
+      msg.data[static_cast<size_t>(row_offset + col)] = static_cast<int8_t>(occ);
+    }
+  }
+
+  return msg;
+}
+#endif
+
+bool Planner::UpdateReferenceOnly(const JointState &state,
+                                  Eigen::Vector2d &sub_goal) {
+  if (!has_map_) return false;
   try {
     this->UpdateCostMap(state);
   } catch (const std::string &e) {
     if (verbose_ >= 1) {
       std::cout << "Cost map update failed! " << e << std::endl;
     }
-    return {MpcStages(), false};
+    return false;
   }
   
   Eigen::Vector2d start_pt = {state.robot.px, state.robot.py};
@@ -85,32 +132,45 @@ MpcReturn Planner::PlannExec(const JointState &state,
     if (verbose_ >= 1) {
       std::cout << "Failed to escape from obstacle! " << std::endl;
     }
-    return {MpcStages(), false};
+    return false;
   } 
 
 
-  if (!CheckNavGoal(sub_goal, goal_pt, start_pt, state.rect.vertices)) {
-    if (verbose_ >= 1) {
-      std::cout << "Sub goal is unreachable!!!" << std::endl;
+  if (!use_direct_goal_xref_) {
+    if (!CheckNavGoal(sub_goal, goal_pt, start_pt, state.rect.vertices)) {
+      if (verbose_ >= 1) {
+        std::cout << "Sub goal is unreachable!!!" << std::endl;
+      }
+      return false;
     }
-    return {MpcStages(), false};
   }
   
   if (verbose_ > 1) std::cout << "DEBUG: check done!" << std::endl;
-
-  auto astar_path = astar_planner_->SearchPath(
-      cost_map_, start_pt, sub_goal, window_center_x_, window_center_y_);
-  if (astar_path.size() < 2) {
-    if (verbose_ >= 1) { 
-      std::cout << "Invalid A* path with len = " << astar_path.size() << 
-          std::endl;
+  std::vector<Point> final_path;
+  if (use_direct_goal_xref_) {
+    final_path = BuildDirectReferenceTrajectory(state, goal_pt);
+  } else {
+    auto astar_path = astar_planner_->SearchPath(
+        cost_map_, start_pt, sub_goal, window_center_x_, window_center_y_);
+    if (astar_path.size() < 2) {
+      if (verbose_ >= 1) {
+        std::cout << "Invalid A* path with len = " << astar_path.size()
+                  << std::endl;
+      }
+      return false;
     }
-    return {MpcStages(), false};
+
+    auto smooth_path = path_smoother_->SmoothSharpCorner(cost_map_, astar_path);
+    final_path = vel_planner_->UpdateVelocity(smooth_path, state.robot.v);
   }
 
-  auto smooth_path = path_smoother_->SmoothSharpCorner(cost_map_, astar_path);
-
-  auto final_path = vel_planner_->UpdateVelocity(smooth_path, state.robot.v);
+  if (final_path.size() < 2) {
+    if (verbose_ >= 1) {
+      std::cout << "Invalid reference path with len = " << final_path.size()
+                << std::endl;
+    }
+    return false;
+  }
 
   {
 #ifdef ROS_BUILD
@@ -128,71 +188,67 @@ MpcReturn Planner::PlannExec(const JointState &state,
     astar_path_ = final_path;
   }
 
+  return true;
+}
 
-  auto revised_state = state;
-  if (final_path.size() < 2) {
-    if (verbose_ >= 1) {
-      std::cout << "Invalid reference trajectory with len = " << 
-          final_path.size() << std::endl;
-    }
-    Eigen::Vector2d pid_acc = this->PidCalc(state);
-    auto mpc_stages = MpcStages();
-    mpc_stages[0].uk.acc = pid_acc(0);
-    mpc_stages[0].uk.dr = pid_acc(1);
-    return {mpc_stages, true};
-  } 
-  else {
-    double phi_0 = atan2(final_path[1].y - final_path[0].y,
-                         final_path[1].x - final_path[0].x);
+std::vector<Point> Planner::BuildDirectReferenceTrajectory(
+    const JointState &state, const Eigen::Vector2d &goal) const {
+  std::vector<Point> path;
+  const int horizon = std::max(2, static_cast<int>(GetReferenceHorizonSteps()));
+  path.reserve(static_cast<std::size_t>(horizon));
 
-    double yaw_error = state.robot.yaw - phi_0;
-    Unwrap(yaw_error);
-    
-    if (abs(yaw_error) > M_PI / 2) {
-      revised_state.robot.yaw -= M_PI;
-      Unwrap(revised_state.robot.yaw);
-      revised_state.robot.v = -revised_state.robot.v;
-      move_forward_ = false;
-    } else {
-      move_forward_ = true;
-    }
+  const double sx = state.robot.px;
+  const double sy = state.robot.py;
+  const double gx = goal.x();
+  const double gy = goal.y();
+  const double dx = gx - sx;
+  const double dy = gy - sy;
+  const double dist = std::hypot(dx, dy);
 
-    while(final_path.size() < kNP) {
-      final_path.push_back(final_path.back());
+  if (dist < 1e-6) {
+    Point p{};
+    p.x = sx;
+    p.y = sy;
+    p.v = 0.0;
+    for (int i = 0; i < horizon; ++i) {
+      path.push_back(p);
     }
+    return path;
   }
-  
-  if (verbose_ > 1) std::cout << "DEBUG: geo plann done!" << std::endl;
 
-  auto mpc_return = ocp_planner_->RunMpc(revised_state, final_path);
+  for (int i = 0; i < horizon; ++i) {
+    const double t = static_cast<double>(i) / static_cast<double>(horizon - 1);
+    Point p{};
+    p.x = sx + t * dx;
+    p.y = sy + t * dy;
 
-  // std::cout << "===" << std::endl;
-  if (visual_flag_) {
-    for (int i = 0; i < final_path.size(); i++) {
-      Eigen::Vector2d path_pt(final_path[i].x, final_path[i].y);
-      cv::Point visual_pt = MapCoord2ImgIdx(path_pt, true);
-      cv::circle(visual_map_, visual_pt, 3, cv::Scalar(200, 0, 0), 2);
-    }
-    if (mpc_return.success) {
-      for (int k = 0; k < mpc_return.stages.size(); k++) {
-        Eigen::Vector2d path_pt(mpc_return.stages[k].xk.X, 
-                                mpc_return.stages[k].xk.Y);
-        
-        cv::Point visual_pt = MapCoord2ImgIdx(path_pt, true);
-        cv::circle(visual_map_, visual_pt, 3, cv::Scalar(0, 0, 200), 2);
-      }
-    }
-
-    cv::imshow("debug!", visual_map_);
-    cv::waitKey(5);
+    const double remaining = std::max(0.0, (1.0 - t) * dist);
+    p.v = ComputeDirectReferenceSpeed(remaining);
+    path.push_back(p);
   }
-  if (mpc_return.success && !move_forward_) {
-    for (std::size_t t = 0; t < mpc_return.stages.size(); ++t) {
-      mpc_return.stages[t].uk.acc = -mpc_return.stages[t].uk.acc;
-    }
-    // mpc_return.stages[0].uk.acc = -mpc_return.stages[0].uk.acc;
+
+  path.back().x = gx;
+  path.back().y = gy;
+  path.back().v = 0.0;
+  return path;
+}
+
+double Planner::ComputeDirectReferenceSpeed(double remaining_distance) const {
+  const double v_cap = std::max(0.0, std::min(debug_xref_v_max_, params_->max_linear_vel));
+  const double v_floor = std::max(0.0, std::min(debug_xref_v_min_, v_cap));
+  const double slow_dist = std::max(0.05, debug_xref_slowdown_distance_);
+  const double k = std::max(0.0, debug_xref_kp_dist_);
+
+  const double ratio = std::min(1.0, std::max(0.0, remaining_distance / slow_dist));
+  const double v_ratio = v_floor + (v_cap - v_floor) * ratio;
+  const double v_linear = v_floor + k * remaining_distance;
+
+  double v_ref = std::min(v_ratio, v_linear);
+  v_ref = std::max(v_floor, std::min(v_ref, v_cap));
+  if (remaining_distance < 0.06) {
+    v_ref = 0.0;
   }
-  return mpc_return;
+  return v_ref;
 }
 
 bool Planner::CheckAround(Eigen::Vector2d &pos) {
@@ -223,7 +279,7 @@ bool Planner::CheckAround(Eigen::Vector2d &pos) {
     while (++pixel.x < cost_map_.cols) {
       if (255 - cost_map_.at<u_char>(pixel.y, pixel.x) <= 250) {
         pos = ImgIdx2MapCoord(pixel);
-        if (verbose_ >=1) std::cout << "Escape from x right!" << std::endl;
+        if (verbose_ >= 3) std::cout << "Escape from x right!" << std::endl;
         return true;
       }
     }
@@ -231,7 +287,7 @@ bool Planner::CheckAround(Eigen::Vector2d &pos) {
     while (--pixel.y > 0) {
       if (255 - cost_map_.at<u_char>(pixel.y, pixel.x) <= 250) {
         pos = ImgIdx2MapCoord(pixel);
-        if (verbose_ >=1) std::cout << "Escape from y up!" << std::endl;
+        if (verbose_ >= 3) std::cout << "Escape from y up!" << std::endl;
         return true;
       }      
     }
@@ -239,7 +295,7 @@ bool Planner::CheckAround(Eigen::Vector2d &pos) {
     while (--pixel.x > 0) {
       if (255 - cost_map_.at<u_char>(pixel.y, pixel.x) <= 250) {
         pos = ImgIdx2MapCoord(pixel);
-        if (verbose_ >=1) std::cout << "Escape from x left!" << std::endl;
+        if (verbose_ >= 3) std::cout << "Escape from x left!" << std::endl;
         return true;
       }      
     }
@@ -247,7 +303,7 @@ bool Planner::CheckAround(Eigen::Vector2d &pos) {
     while (++pixel.y < cost_map_.rows) {
       if (255 - cost_map_.at<u_char>(pixel.y, pixel.x) <= 250) {
         pos = ImgIdx2MapCoord(pixel);
-        if (verbose_ >=1) std::cout << "Escape from y down!" << std::endl;
+        if (verbose_ >= 3) std::cout << "Escape from y down!" << std::endl;
         return true;
       }      
     }
@@ -259,109 +315,32 @@ bool Planner::CheckNavGoal(Eigen::Vector2d &sub_goal,
                            const Eigen::Vector2d &nav_goal,
                            const Eigen::Vector2d &pos,
                            const std::vector<Eigen::Vector2d> &vertices) {
-  float distance = (sub_goal - pos).norm();
-  if (distance < 0.1) return false;
+  (void)nav_goal;
+  (void)vertices;
 
+  // 1. Kiểm tra khoảng cách: Nếu điểm RL cấp quá gần, từ chối để RL lấy điểm mới.
+  // Tuyệt đối không tự ý đẩy điểm hướng về nav_goal (Global Goal) nữa.
+  float distance = (sub_goal - pos).norm();
+  if (distance < 0.05) {
+    return false;
+  }
+
+  // 2. Tôn trọng tuyệt đối điểm của RL.
+  // Chỉ cần kiểm tra xem có đường ngắm thẳng (Line of sight) từ Robot tới điểm đó không.
   try {
     (void)MapCoord2ImgIdx(sub_goal);
   } catch (const std::string &) {
-    if (!this->SimpleRayCast(sub_goal, pos)) return false;
-    if (verbose_ >= 1) {
-      std::cout << "Wall, sub goal changed to " << sub_goal.transpose() << 
-          std::endl;
-    }
-  }
-  // polygon fix
-  if (PointInPloy(sub_goal.x(), sub_goal.y(), vertices)) {
-    Eigen::Vector2d vec = nav_goal - pos;
-    Eigen::Vector2d grad = Eigen::Vector2d(-vec.y(), vec.x()).normalized();
-    Eigen::Vector2d left_candidate = sub_goal;
-    Eigen::Vector2d right_candidate = sub_goal;
-    const double step = 0.1;
-    while (true) {
-      left_candidate += step * grad;
-      cv::Point pixel;
-      try {
-        pixel = MapCoord2ImgIdx(left_candidate);
-      } catch (const std::string &) {
-        left_candidate = {99.9, 99.9};  // as a large num
-        break;
+    if (!this->SimpleRayCast(sub_goal, pos)) {
+      if (verbose_ >= 1) {
+        std::cout << "RL point blocked by wall, Raycast failed. Requesting new point." << std::endl;
       }
-      if (PointInPloy(left_candidate.x(), left_candidate.y(), vertices)) {
-        continue;
-      }
-      // a collision-free pt outside poly is found
-      if (cost_map_.at<u_char>(pixel.y, pixel.x) >= 100) break;
-    }
-    std::cout << "2" << std::endl;
-    while (true) {
-      right_candidate -= step * grad;
-      cv::Point pixel;
-      try {
-        pixel = MapCoord2ImgIdx(right_candidate);
-      } catch (const std::string &) {
-        right_candidate = {99.9, 99.9};
-        break;
-      }
-      if (PointInPloy(right_candidate.x(), right_candidate.y(), vertices)) {
-        continue;
-      }
-      // a collision-free pt outside poly is found
-      if (cost_map_.at<u_char>(pixel.y, pixel.x) >= 100) break;
-    }
-
-    if (left_candidate.norm() > 90.0f && right_candidate.norm() > 90.0f) {
-      return false;
-    }
-
-    double left_distance = (left_candidate - sub_goal).norm();
-    double right_distance = (right_candidate - sub_goal).norm();
-    if (left_distance < right_distance) {
-      sub_goal = left_candidate;
-    } else {
-      sub_goal = right_candidate;
-    }
-    if (verbose_ >= 1) {
-      std::cout << "Poly, sub goal changed to " << sub_goal.transpose() << 
-          std::endl;
+      return false;  // Điểm RL bị khuất tường hoàn toàn -> Trả về false để từ chối
     }
   }
 
-  cv::Point pixel = MapCoord2ImgIdx(sub_goal);
-  if (255 - cost_map_.at<u_char>(pixel.y, pixel.x) <= 250) return true;
-  // circular fix
-  const int kPointNum = 8;
-  const double kRadius = 0.5;
-  Eigen::Vector2d revised_goal, candidate_goal;
-  distance = 100.0f;
-  for (int i = 0; i < kPointNum; i++) {
-    candidate_goal = sub_goal + kRadius * Eigen::Vector2d(
-        std::sin(M_PI * 2 * i / kPointNum),
-        std::cos(M_PI * 2 * i / kPointNum));
-    try {
-      pixel = MapCoord2ImgIdx(candidate_goal);
-    } catch (const std::string &) {
-      continue;
-    }
-    if (cost_map_.at<u_char>(pixel.y, pixel.x) < 100) continue;
-    if ((candidate_goal - pos).norm() <= 0.2f) continue;
-    if (PointInPloy(candidate_goal(0), candidate_goal(1), vertices)) continue;
-    
-    double candidate_distance = (candidate_goal - sub_goal).norm();
-    if (candidate_distance >= distance) continue;
-    /* update revised goal to the nearest */
-    distance = candidate_distance;
-    revised_goal = candidate_goal;
-  }
-  if (distance >= 90.0f) {
-    return false;
-  } else {
-    sub_goal = revised_goal;
-    if (verbose_ >= 1) {
-      std::cout << "Sub goal changed to " << sub_goal.transpose() << std::endl;
-    }
-    return true;
-  }
+  // 3. Đã xóa toàn bộ logic Polygon Fix và Circular Fix.
+  // The RL sub-goal is valid for local A* reference generation.
+  return true;
 }
 
 void Planner::UpdateCostMap(const JointState &state) {
@@ -371,13 +350,28 @@ void Planner::UpdateCostMap(const JointState &state) {
   cost_map_ = map_.clone();
   std::size_t skipped_invalid_points = 0;
 
+  // Clip walls against the local sliding window to keep both endpoints valid.
+  const double half_w = (cost_map_.cols / 2.0) * kMapResol;
+  const double half_h = (cost_map_.rows / 2.0) * kMapResol;
+  const double x_min = window_center_x_ - half_w + 0.02;
+  const double x_max = window_center_x_ + half_w - 0.02;
+  const double y_min = window_center_y_ - half_h + 0.02;
+  const double y_max = window_center_y_ + half_h - 0.02;
+
   for (const auto &wall : state.walls) {
-    try {
-      cv::Point p1 = MapCoord2ImgIdx({wall.first.x, wall.first.y});
-      cv::Point p2 = MapCoord2ImgIdx({wall.second.x, wall.second.y});
-      cv::line(cost_map_, p1, p2, cv::Scalar(0), 1);
-    } catch (const std::string &) {
-      skipped_invalid_points++;
+    double x1 = wall.first.x;
+    double y1 = wall.first.y;
+    double x2 = wall.second.x;
+    double y2 = wall.second.y;
+
+    if (ClipLine(x1, y1, x2, y2, x_min, x_max, y_min, y_max)) {
+      try {
+        cv::Point p1 = MapCoord2ImgIdx({x1, y1});
+        cv::Point p2 = MapCoord2ImgIdx({x2, y2});
+        cv::line(cost_map_, p1, p2, cv::Scalar(0), 1);
+      } catch (const std::string &) {
+        skipped_invalid_points++;
+      }
     }
   }
 
@@ -404,7 +398,7 @@ void Planner::UpdateCostMap(const JointState &state) {
     }
   }
 
-  if (verbose_ >= 1 && skipped_invalid_points > 0) {
+  if (verbose_ >= 2 && skipped_invalid_points > 0) {
     std::cout << "Skip " << skipped_invalid_points
               << " invalid map points in UpdateCostMap" << std::endl;
   }
@@ -451,206 +445,73 @@ bool Planner::SimpleRayCast(Eigen::Vector2d &goal,
   return ((goal - pos).norm() < 0.1)? false: true;
 }
 
-Eigen::Vector2d Planner::PidCalc(const JointState &state) {
-  Eigen::Vector3d robot_pose;
-  robot_pose << state.robot.px, state.robot.py, state.robot.yaw;
-  
-  Eigen::Vector2d desired_pos;
-  desired_pos << state.robot.gx, state.robot.gy;
-
-  double alpha = 
-      atan2(desired_pos(1) - robot_pose(1), desired_pos(0) - robot_pose(0)) - 
-      robot_pose(2);
-  
-  Unwrap(alpha);
-
-  double forward = (alpha <= M_PI / 2 && alpha > -M_PI / 2)? 1.0: -1.0;
-  double dist_error = forward * 
-      EuclideanNorm(desired_pos(0) - robot_pose(0), 
-                    desired_pos(1) - robot_pose(1));
-
-  if (abs(dist_error) < 0.05) alpha = 0;
-
-  Eigen::Vector2d acc_ctrl;
-  Eigen::Vector2d desired_vel;
-  desired_vel << 0.8 * dist_error, 2.0 * alpha;
-
-  acc_ctrl(0) = (desired_vel(0) - state.robot.v) / (kDT * 0.5);
-  acc_ctrl(1) = (desired_vel(1) - state.robot.yaw_rate) / (kDT * 0.5);
-
-  return acc_ctrl;
-}
-
 cv::Mat Planner::CreateMap() {
   cv::Mat map(400, 240, CV_8UC1, cv::Scalar(255));  // TODO: change to 10 x 20
 
   std::cout << "create map" << std::endl;
-  return std::move(map);
+  return map;
 };
 
-robot_plann::MPCOutputForPython Planner::RunSlover(
-  const robot_plann::MPCInputForPython& input) {
-  
-  robot_plann::MPCOutputForPython ans{};
-  ans.astar_path.clear();
-  ans.control_vars.clear();
-  ans.success = false;
-  if (input.valid == false) {
-    return ans;
-  }
-  robot_plann::JointState ob_state;
+// Cohen-Sutherland line clipping against an axis-aligned box.
+bool Planner::ClipLine(double &x1, double &y1, double &x2, double &y2,
+                       double x_min, double x_max, double y_min,
+                       double y_max) {
+  auto compute_outcode = [&](double x, double y) {
+    int code = 0;
+    if (x < x_min) code |= 1;       // LEFT
+    else if (x > x_max) code |= 2;  // RIGHT
+    if (y < y_min) code |= 4;       // BOTTOM
+    else if (y > y_max) code |= 8;  // TOP
+    return code;
+  };
 
-  PybindInputDataChange(input, ob_state);
-  Eigen::Vector2d sub_goal = {input.sub_goal.x, input.sub_goal.y};
+  int outcode1 = compute_outcode(x1, y1);
+  int outcode2 = compute_outcode(x2, y2);
 
-  auto start_stamp = std::chrono::high_resolution_clock::now();
-  auto mpc_return = this->PlannExec(ob_state, sub_goal);
-  auto end_stamp = std::chrono::high_resolution_clock::now();
-  double time_cost =
-      std::chrono::duration<double, std::milli>(end_stamp - start_stamp)
-          .count();
-
-  std::vector<robot_plann::Point> astar_path = this->GetAStarPath();
-  for (int i = 0; i < astar_path.size(); ++i) {
-    robot_plann::Point pt;
-    pt.x = astar_path.at(i).x;
-    pt.y = astar_path.at(i).y;
-    pt.v = 0.0;
-    ans.astar_path.push_back(pt);
-
-  }
-
-  robot_plann::ControlVar cur_control_var{};
-  if (!mpc_return.success) {
-    ans.al = 0.0;
-    ans.ar = 0.0;
-    ans.revised_goal.x = input.sub_goal.x;
-    ans.revised_goal.y = input.sub_goal.y;
-    std::cout << "Ocp plann failed!" << std::endl;
-    cur_control_var.al = ans.al;
-    cur_control_var.ar = ans.ar;
-    for (int i = 0; i < kNP; ++i) {
-      ans.control_vars.push_back(cur_control_var);
+  while (true) {
+    if (!(outcode1 | outcode2)) {
+      return true;
+    }
+    if (outcode1 & outcode2) {
+      return false;
     }
 
-  } else {
-    ans.al = mpc_return.stages[0].uk.acc - mpc_return.stages[0].uk.dr * 0.3;
-    ans.ar = mpc_return.stages[0].uk.acc + mpc_return.stages[0].uk.dr * 0.3;
-    ans.revised_goal.x = input.sub_goal.x;
-    ans.revised_goal.y = input.sub_goal.y;
-   
-    for (int i = 0; i < kNP; ++i) {
-      cur_control_var.al =
-          mpc_return.stages.at(i).uk.acc - mpc_return.stages.at(i).uk.dr * 0.3;
-      cur_control_var.ar =
-          mpc_return.stages.at(i).uk.acc + mpc_return.stages.at(i).uk.dr * 0.3;
+    const int outcode_out = outcode1 ? outcode1 : outcode2;
+    double x = 0.0;
+    double y = 0.0;
 
-      ans.control_vars.push_back(cur_control_var);
-    }
-    ans.success = true;
-    std::cout << "Time cost: " << time_cost << std::endl;
-
-  }
-
-  return std::move(ans);
-}
-
-
-void Planner::PybindInputDataChange(const robot_plann::MPCInputForPython& input,
-                               robot_plann::JointState &ob_state) {
-  
-  const auto &robot_state = input.ob.robot;
-  ob_state.robot.px = robot_state.px;
-  ob_state.robot.py = robot_state.py;
-  ob_state.robot.yaw = robot_state.yaw;
-  ob_state.robot.v = robot_state.v;
-  ob_state.robot.yaw_rate = robot_state.yaw_rate;
-
-  ob_state.robot.v_pref = robot_state.v_pref;
-  ob_state.robot.radius = robot_state.radius;
-  ob_state.robot.gx = robot_state.gx;
-  ob_state.robot.gy = robot_state.gy;
-
-  for (const auto &hum_iter : input.ob.hum) {
-    robot_plann::HumanState hum_state;
-    hum_state.px = hum_iter.px;
-    hum_state.py = hum_iter.py;
-    hum_state.vx = hum_iter.vx;
-    hum_state.vy = hum_iter.vy;
-    hum_state.radius = hum_iter.radius;
-
-    ob_state.hum.push_back(hum_state);
-  }
-
-  for (const auto &obst_iter : input.ob.obst) {
-    robot_plann::ObstacleState obst_state;
-    obst_state.px = obst_iter.px;
-    obst_state.py = obst_iter.py;
-    obst_state.radius = obst_iter.radius;
-    ob_state.obst.push_back(obst_state);
-  }
-
-  ob_state.rect.vertices.clear();
-  // for (const auto &poly_iter : input.ob.rect) {
-  for (const auto &vertex : input.ob.rect.vertices) {
-    Eigen::Vector2d pt(vertex.x, vertex.y);
-    ob_state.rect.vertices.push_back(pt);
-  }
-
-  ob_state.walls.clear();
-  for (const auto &input_wall : input.ob.walls) {
-    Wall wall = ClipWall(input_wall.sx, input_wall.sy, input_wall.ex, input_wall.ey, -5.5, 5.5);
-
-    ob_state.walls.push_back(wall);
-  }
-
-}
-
-Wall Planner::ClipWall(double x1, double y1, double x2, double y2, double x_min, double x_max) {
-    Wall ans;
-    bool swap_flag = false;
-    if (x1 > x2) {
-      std::swap(x1, x2);
-      std::swap(y1, y2);
-      swap_flag = true;
-    }
-
-    if (x2 < x_min || x1 > x_max) {
-        std::cerr << "===error wall===" << std::endl;
-        return ans;
-    }
-
-    double slope = 0;
-    if (x1 != x2) {
-        slope = (y2 - y1) / (x2 - x1);
+    if (outcode_out & 8) {
+      const double dy = y2 - y1;
+      if (std::abs(dy) < 1e-12) return false;
+      x = x1 + (x2 - x1) * (y_max - y1) / dy;
+      y = y_max;
+    } else if (outcode_out & 4) {
+      const double dy = y2 - y1;
+      if (std::abs(dy) < 1e-12) return false;
+      x = x1 + (x2 - x1) * (y_min - y1) / dy;
+      y = y_min;
+    } else if (outcode_out & 2) {
+      const double dx = x2 - x1;
+      if (std::abs(dx) < 1e-12) return false;
+      y = y1 + (y2 - y1) * (x_max - x1) / dx;
+      x = x_max;
     } else {
-      if (x1 < x_min || x1 > x_max) {
-        std::cerr << "===error wall===" << std::endl;
-        return ans;
-      } else {
-        ans.first.x = swap_flag ? x2 : x1;
-        ans.first.y = swap_flag ? y2 : y1;
-        ans.second.x = swap_flag ? x1 : x2;
-        ans.second.y = swap_flag ? y1 : y2;
-        return ans;
-      }
+      const double dx = x2 - x1;
+      if (std::abs(dx) < 1e-12) return false;
+      y = y1 + (y2 - y1) * (x_min - x1) / dx;
+      x = x_min;
     }
 
-    if (x1 < x_min) {
-        y1 = y1 + slope * (x_min - x1);
-        x1 = x_min;
+    if (outcode_out == outcode1) {
+      x1 = x;
+      y1 = y;
+      outcode1 = compute_outcode(x1, y1);
+    } else {
+      x2 = x;
+      y2 = y;
+      outcode2 = compute_outcode(x2, y2);
     }
-
-    if (x2 > x_max) {
-        y2 = y1 + slope * (x_max - x1);
-        x2 = x_max;
-    }
-
-    ans.first.x = swap_flag ? x2 : x1;
-    ans.first.y = swap_flag ? y2 : y1;
-    ans.second.x = swap_flag ? x1 : x2;
-    ans.second.y = swap_flag ? y1 : y2;
-    return ans;
+  }
 }
 
 }  // namespace robot_plann

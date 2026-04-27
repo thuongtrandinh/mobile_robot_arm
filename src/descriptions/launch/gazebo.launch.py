@@ -4,7 +4,7 @@ import os
 import xacro
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument, OpaqueFunction, RegisterEventHandler
+from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument, OpaqueFunction, RegisterEventHandler, SetEnvironmentVariable
 from launch.event_handlers import OnProcessExit
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import PathJoinSubstitution
@@ -18,20 +18,25 @@ def launch_setup(context, *args, **kwargs):
     use_sim_time = use_sim_time_str.lower() == 'true'
     init_x = context.launch_configurations.get('x_pos', '0.0')
     init_y = context.launch_configurations.get('y_pos', '0.0')
+    init_yaw = context.launch_configurations.get('yaw', '0.0')
     init_height = context.launch_configurations.get('height', '0.1')
-    world_name = context.launch_configurations.get('world', 'amr_simulation.world')
+    world_name = context.launch_configurations.get('world', 'parallel_hallways.world')
     launch_rviz_str = context.launch_configurations.get('launch_rviz', 'true')
     launch_rviz = launch_rviz_str.lower() == 'true'
     headless = context.launch_configurations.get('headless', 'false').lower() == 'true'
     spawn_controllers = context.launch_configurations.get('spawn_controllers', 'true').lower() == 'true'
 
     pkg_path = get_package_share_directory(package_name)
+    realsense_desc_share = get_package_share_directory('realsense2_description')
     xacro_file = os.path.join(pkg_path, 'model', 'wheeled', 'urdf', 'mobile_robot.urdf.xacro')
 
-    # Set Gazebo resource paths
-    models_path = os.path.join(pkg_path, 'model')
-    os.environ['GZ_SIM_RESOURCE_PATH'] = models_path + ':' + os.environ.get('GZ_SIM_RESOURCE_PATH', '')
-    os.environ['IGN_GAZEBO_RESOURCE_PATH'] = models_path + ':' + os.environ.get('IGN_GAZEBO_RESOURCE_PATH', '')
+    # Gazebo must search in the parent of package share for model://<package_name>/...
+    resource_roots = [
+        pkg_path,
+        os.path.dirname(pkg_path),
+        os.path.dirname(realsense_desc_share),
+    ]
+    resource_path = ':'.join(resource_roots)
 
     # World file
     world_file = os.path.join(pkg_path, 'worlds', world_name)
@@ -78,7 +83,7 @@ def launch_setup(context, *args, **kwargs):
         executable='create',
         output='screen',
         arguments=['-topic', 'robot_description', '-entity', 'mobile_robot',
-                   '-x', init_x, '-y', init_y, '-z', init_height],
+                   '-x', init_x, '-y', init_y, '-z', init_height, '-Y', init_yaw],
         parameters=[{'use_sim_time': use_sim_time}],
     )
 
@@ -106,16 +111,33 @@ def launch_setup(context, *args, **kwargs):
         arguments=[
             '/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock',
             '/scan@sensor_msgs/msg/LaserScan[gz.msgs.LaserScan',
-            '/zed/zed_node/imu/data@sensor_msgs/msg/Imu[gz.msgs.IMU',
-            '/zed/zed_node/left/image_rect_color/image@sensor_msgs/msg/Image[gz.msgs.Image',
-            '/zed/zed_node/left/image_rect_color/camera_info@sensor_msgs/msg/CameraInfo[gz.msgs.CameraInfo',
-            '/zed/zed_node/left/image_rect_color/depth_image@sensor_msgs/msg/Image[gz.msgs.Image',
+            # Bridge cho IMU của D435i
+            '/imu@sensor_msgs/msg/Imu[ignition.msgs.IMU',
+            
+            # Bridge cho Camera D435i (RGB, Depth, Info)
+            '/camera/image@sensor_msgs/msg/Image[ignition.msgs.Image',
+            '/camera/depth_image@sensor_msgs/msg/Image[ignition.msgs.Image',
+            '/camera/camera_info@sensor_msgs/msg/CameraInfo[ignition.msgs.CameraInfo',
+        ],
+
+        remappings=[
+            ('/imu', '/camera/imu'),
+            ('/camera/image', '/camera/color/image_raw'),
+            ('/camera/depth_image', '/camera/depth/image_rect_raw'),
+            ('/camera/camera_info', '/camera/color/camera_info'),
+        ],
+        parameters=[{'use_sim_time': use_sim_time}],
+        output='screen'
+    )
+
+    aligned_depth_bridge = Node(
+        package='ros_gz_bridge',
+        executable='parameter_bridge',
+        arguments=[
+            '/camera/depth_image@sensor_msgs/msg/Image[ignition.msgs.Image',
         ],
         remappings=[
-            ('/zed/zed_node/imu/data', '/imu'),
-            ('/zed/zed_node/left/image_rect_color/image', '/zed/zed_node/rgb/color/rect/image'),
-            ('/zed/zed_node/left/image_rect_color/camera_info', '/zed/zed_node/rgb/color/rect/camera_info'),
-            ('/zed/zed_node/left/image_rect_color/depth_image', '/zed/zed_node/depth/depth_registered'),
+            ('/camera/depth_image', '/camera/aligned_depth_to_color/image_raw'),
         ],
         parameters=[{'use_sim_time': use_sim_time}],
         output='screen'
@@ -139,8 +161,17 @@ def launch_setup(context, *args, **kwargs):
 
     # Build launch list
     nodes_to_launch = [
+        SetEnvironmentVariable(
+            name='GZ_SIM_RESOURCE_PATH',
+            value=resource_path + ':' + os.environ.get('GZ_SIM_RESOURCE_PATH', ''),
+        ),
+        SetEnvironmentVariable(
+            name='IGN_GAZEBO_RESOURCE_PATH',
+            value=resource_path + ':' + os.environ.get('IGN_GAZEBO_RESOURCE_PATH', ''),
+        ),
         gazebo_launch,
         bridge,
+        aligned_depth_bridge,
         robot_state_publisher,
         spawn_entity,
     ]
@@ -175,12 +206,13 @@ def generate_launch_description():
         DeclareLaunchArgument('use_sim_time', default_value='true', description='Use simulation time'),
         DeclareLaunchArgument('x_pos', default_value='0.0', description='Initial X position'),
         DeclareLaunchArgument('y_pos', default_value='0.0', description='Initial Y position'),
+        DeclareLaunchArgument('yaw', default_value='0.0', description='Initial yaw angle in radians'),
         DeclareLaunchArgument('height', default_value='0.1', description='Initial spawn height'),
         DeclareLaunchArgument('launch_rviz', default_value='true', description='Launch RViz2'),
         DeclareLaunchArgument('headless', default_value='false', description='Run Gazebo in server-only mode'),
         DeclareLaunchArgument('spawn_controllers', default_value='true', description='Spawn ros2_control controllers'),
-        DeclareLaunchArgument('world', default_value='room_20x20.world',
+        DeclareLaunchArgument('world', default_value='parallel_hallways.world',
                               description='World file to load',
-                              choices=['amr_simulation.world', 'empty.world', 'room_20x20.world', 'small_house.world', 'small_warehouse.world']),
+                              choices=['amr_simulation.world', 'empty.world', 'parallel_hallways.world', 'room_20x20.world', 'small_house.world', 'small_warehouse.world']),
         OpaqueFunction(function=launch_setup),
     ])

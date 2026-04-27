@@ -13,6 +13,11 @@ install(
   DESTINATION share/${PROJECT_NAME}
 )
 
+install(PROGRAMS
+  scripts/odom_calculator.py
+  DESTINATION lib/${PROJECT_NAME}
+)
+
 # uncomment the following section in order to fill in
 # further dependencies manually.
 # find_package(<dependency> REQUIRED)

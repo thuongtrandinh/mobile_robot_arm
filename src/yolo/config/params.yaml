@@ -1,25 +1,80 @@
-# ZED2 Hand Sign Detector Configuration
+multi_object_tracking_node:
+  ros__parameters:
+    # ===== MODEL & HARDWARE =====
+    model_path: 'yolov8n.pt'
+    use_sim_time: false
+    use_cuda: true
+    use_fp16: true
 
-# Detection parameters
-detection_conf: 0.5          # YOLO confidence threshold
-person_radius: 0.3           # Estimated person radius (meters)
+    # ===== ROS TOPICS =====
+    topics:
+      rgb: '/camera/color/image_raw'
+      depth: '/camera/aligned_depth_to_color/image_raw'
+      camera_info: '/camera/color/camera_info'
+    
+    # ===== YOLO DETECTION PARAMETERS =====
+    yolo:
+      # Object detection confidence threshold (reduced to prevent losing targets during pose changes)
+      object_conf_thresh: 0.40       # Reduced to 0.40 for better arm/extended pose detection
+      
+      # Non-Maximum Suppression - STRENGTHENED to eliminate ghosting
+      # When arms extend, body+arms may create 2 overlapping BBoxes
+      # Strong NMS (0.35) merges them into single unified bbox
+      iou_thresh: 0.35               # Reduced from 0.50 to 0.35 for aggressive bbox merging
+      
+      # Depth-Aware NMS (3D space filtering)
+      depth_nms_threshold: 0.5       # Objetos >0.5m apart em Z = ambos mantidos
+      
+      # Class filtering (COCO index - APENAS PESSOA)
+      # Classe 0 = person (otimizado para person-following)
+      dynamic_classes: [0]           # Detect only 'person' class (COCO index 0)
 
-# Model paths (absolute or relative to package share dir)
-hand_model_path: 'handsign.pt'
-person_model_path: 'yolov8n.pt'
+    # ===== TRACKING PARAMETERS (SHORT-TERM MEMORY) =====
+    tracking:
+      # Timeout & buffer - OPTIMIZED for dynamic obstacle avoidance (NOT person-following)
+      # Goal: Eliminate ghost bboxes from stale poses (arm raised, etc)
+      tracking_timeout: 0.5          # Reduced from 2.0s to 0.5s: aggressive EKF cleanup
+      track_buffer: 30               # Reduced from 90: remove stale obstacles faster
+      max_age_before_predict: 30     # Keep at 30 for motion prediction during brief occlusion
+      
+      # BoT-SORT matching thresholds - RELAXED for continuous tracking
+      track_thresh: 0.30             # Relaxed from 0.45 to 0.30 for better weak detection capture
+      track_low_thresh: 0.05         # Relaxed from 0.10 to 0.05 for BYTE Association sensitivity
+      match_thresh: 0.95             # Relaxed from 0.70 to 0.95 (allows IoU as low as 0.05)
+      
+      # Appearance features (Re-ID para estabilidade de ID)
+      use_appearance: false          # Desabilitado para economia de GPU
+      appearance_weight: 0.5         # Balance spatial (0.5) + appearance (0.5)
 
-# Visualization
-enable_visualization: false  # Show opencv window (requires display)
+    # ===== DEPTH FILTERING (3D VALIDATION) =====
+    depth_filter:
+      # Valid depth range for obstacle detection
+      min_depth_m: 0.2               # Reduced from 0.3 to 0.2 (20cm) to handle close-range tracking
+      max_depth_m: 6.0               # Ignorar objetos > 6m (confiança baixa)
+      
+    # ===== VELOCITY FILTER =====
+    velocity_filter:
+      alpha: 0.25                     # EMA smoothing factor para velocidade
 
-# Tracking
-tracker:
-  track_thresh: 0.5
-  track_buffer: 30
-  match_thresh: 0.8
+    # ===== ROS 2 QoS CONFIGURATION =====
+    ros2_qos:
+      # Publisher: Always latest (for controller)
+      publisher_depth: 1             # KEEP_LAST=1 (latest only)
+      
+      # Subscriber: Camera input buffer
+      subscriber_depth: 30           # Buffer para D435i (sincronização ApproximateTime)
+      
+      # Synchronization tolerance
+      sync_slop: 0.1                 # ±100ms para D435i
+      sync_queue_size: 30            # Buffer do TimeSynchronizer
 
-# Velocity filtering
-velocity_filter:
-  alpha: 0.3                 # Smoothing factor (0.1-0.5 recommended)
-  
-# Publishing
-publish_rate: 30             # Hz
+    # ===== D435i CAMERA INTRINSICS (VGA - 640x480) =====
+    # Values extracted from /camera/color/camera_info (aligned depth uses color intrinsics)
+    camera:
+      frame_id: 'camera_link'
+      width: 640
+      height: 480
+      fx: 609.268    # Focal length X (K[0])
+      fy: 609.338    # Focal length Y (K[4])
+      cx: 323.599    # Principal point X (K[2])
+      cy: 246.130    # Principal point Y (K[5])

@@ -11,12 +11,14 @@ def generate_launch_description():
     # Khai báo đường dẫn các gói
     descriptions_pkg = get_package_share_directory('descriptions')
     lidar_pkg = get_package_share_directory('lidar')   
-    zed_wrapper_pkg = get_package_share_directory('zed_wrapper') 
+    realsense2_camera_pkg = get_package_share_directory('realsense2_camera') 
     
     # Đường dẫn file cấu hình
     xacro_file = os.path.join(descriptions_pkg, 'model', 'wheeled', 'urdf', 'mobile_robot.urdf.xacro')
     controller_config = os.path.join(descriptions_pkg, 'model', 'wheeled', 'config', 'ros2_control.yaml')
-    custom_zed_config_dir = os.path.join(zed_wrapper_pkg, 'config')
+    
+    # Đường dẫn config D435i
+    d435i_config = os.path.join(descriptions_pkg, 'model', 'wheeled', 'config', 'd435i.yaml')
 
     # 1. ROBOT STATE PUBLISHER (Truyền is_sim:=false vào Xacro)
     robot_description_content = ParameterValue(
@@ -31,63 +33,71 @@ def generate_launch_description():
         output='screen'
     )
 
-    # 2. ROS2 CONTROL NODE (Manager)
-    controller_manager = Node(
-        package='controller_manager',
-        executable='ros2_control_node',
-        parameters=[{'robot_description': robot_description_content}, controller_config],
+    # 2. ODOMETRY CALCULATOR NODE
+    # Nút Python tính toán odometry từ joint_states và phát ra /diff_cont/odom cho EKF
+    odom_calculator_node = Node(
+        package='bringup',
+        executable='odom_calculator.py',
+        name='diff_cont',  # Đặt tên này để nó tự vào yaml đọc thông số wheel_radius, wheel_separation
+        parameters=[controller_config],
         output='screen'
     )
 
-    # 3. SPAWNERS (Bộ điều khiển)
-    # Khởi tạo Joint State Broadcaster
-    joint_broad_spawner = Node(
-        package="controller_manager",
-        executable="spawner",
-        arguments=["joint_broad"],
-    )
+    # # 4. MICRO-ROS AGENT
+    # micro_ros_agent_node = Node(
+    #     package='micro_ros_agent',
+    #     executable='micro_ros_agent',
+    #     arguments=['serial', '--dev', '/dev/uart', '-b', '115200'], 
+    #     output='screen'
+    # )
 
-    # Khởi tạo Differential Drive Controller (Odom & Cmd_vel)
-    diff_drive_spawner = Node(
-        package="controller_manager",
-        executable="spawner",
-        arguments=["diff_cont"],
-        remappings=[
-            ('/diff_cont/odom', '/odom'),
-            ('/diff_cont/cmd_vel_unstamped', '/cmd_vel')
-        ]
-    )
-
-    # 4. MICRO-ROS AGENT
-    micro_ros_agent_node = Node(
-        package='micro_ros_agent',
-        executable='micro_ros_agent',
-        arguments=['serial', '--dev', '/dev/uart', '-b', '115200'], 
-        output='screen'
-    )
-
-    # 5. SENSORS (Lidar & ZED2)
+    # 5. SENSORS (Lidar & D435i Camera)
     lidar_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(os.path.join(lidar_pkg, 'launch', 'a2m8.launch.py')),
-        launch_arguments={'baud_rate': '256000', 'serial_port': '/dev/rplidar', 'frame_id': 'laser'}.items()
+        launch_arguments={'serial_baudrate': '256000', 'serial_port': '/dev/rplidar', 'frame_id': 'laser'}.items()
     )
 
-    zed2_launch = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(os.path.join(zed_wrapper_pkg, 'launch', 'zed_camera.launch.py')),
-        launch_arguments={'camera_model': 'zed2', 'config_path': custom_zed_config_dir}.items()
+    # --- SỬA LẠI KHỞI TẠO D435i Ở ĐÂY ---
+    d435i_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(os.path.join(realsense2_camera_pkg, 'launch', 'rs_launch.py')),
+        launch_arguments={
+            'camera_name': 'camera',
+            'camera_namespace': '',                 # Để trống để sửa lỗi lặp /camera/camera
+            'config_file': d435i_config,            # Vẫn nạp YAML để lấy cấu hình các bộ lọc phụ
+            'device_type': 'd435i',
+            'enable_gyro': 'true',                  # Bắt buộc bật Gyro
+            'enable_accel': 'true',                 # Bắt buộc bật Accel
+            'unite_imu_method': '2',                # Nội suy IMU tạo ra topic /camera/imu cho EKF
+            'enable_sync': 'true',                  # Đồng bộ thời gian ảnh Color và Depth
+            'align_depth.enable': 'true',           # Căn chỉnh khung hình Depth khớp với RGB
+            'rgb_camera.profile': '640,480,30',     # Cấu hình chuẩn 640x480 @ 30FPS
+            'depth_module.profile': '640,480,30',   # Cấu hình chuẩn 640x480 @ 30FPS
+
+            # Spatial: Khử nhiễu theo không gian (làm mượt các lỗ thủng depth)
+            'filters': 'temporal,spatial,hole_filling',
+            
+            # 2. Cấu hình chi tiết cho Temporal Filter (để khử rung mạnh hơn)
+            'temporal_filter.smooth_alpha': '0.4', # Càng thấp càng mượt, nhưng sẽ hơi trễ ảnh depth
+            'temporal_filter.smooth_delta': '20',
+            
+            # 3. Khử răng cưa cho vùng biên đối tượng (giúp BBox ổn định hơn)
+            'spatial_filter.holes_fill': '2', 
+            
+            # 4. Đảm bảo Exposure ổn định (tránh rung do thay đổi ánh sáng đột ngột)
+            'rgb_camera.auto_exposure_priority': 'false', 
+            'depth_module.auto_exposure_priority': 'false',
+
+            'initial_reset': 'true'                # Reset camera ngay khi khởi động để tránh lỗi ban đầu,               
+        }.items()
     )
 
     return LaunchDescription([
         # Khởi động ngay lập tức
         robot_state_publisher_node,
-        micro_ros_agent_node,
-        controller_manager,
+        odom_calculator_node,
+        # micro_ros_agent_node,
         
-        # Đợi tuần tự để ổn định hệ thống
-        TimerAction(period=5.0, actions=[joint_broad_spawner]),
-        TimerAction(period=5.0, actions=[diff_drive_spawner]),
-        
-        # Khởi động cảm biến sau cùng
+        # Khởi động cảm biến sau cùng (Lidar trước, Camera 10s sau để tránh quá tải CPU/USB)
         TimerAction(period=5.0, actions=[lidar_launch]),
-        TimerAction(period=10.0, actions=[zed2_launch])
+        TimerAction(period=10.0, actions=[d435i_launch])
     ])

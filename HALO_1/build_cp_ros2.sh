@@ -8,6 +8,11 @@ source ~/miniconda3/etc/profile.d/conda.sh
 conda activate mpc_rl
 source /opt/ros/humble/setup.bash
 
+# Reuse external ROS interfaces package from the parent workspace.
+if [[ -f "${SCRIPT_DIR}/../install/setup.bash" ]]; then
+	source "${SCRIPT_DIR}/../install/setup.bash"
+fi
+
 cd "${SCRIPT_DIR}"
 colcon build --packages-select ocp_planner --symlink-install --cmake-args -Dcasadi_DIR=/usr/local/lib/cmake/casadi
 
