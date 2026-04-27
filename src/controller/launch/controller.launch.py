@@ -1,5 +1,5 @@
 import os
-from ament_index_python.packages import get_package_share_directory
+from ament_index_python.packages import get_package_prefix, get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, SetEnvironmentVariable
 from launch.conditions import IfCondition
@@ -10,6 +10,11 @@ from launch_ros.substitutions import FindPackageShare
 from nav2_common.launch import RewrittenYaml
 
 def generate_launch_description():
+    controller_prefix = get_package_prefix("controller")
+    workspace_root = os.path.dirname(os.path.dirname(controller_prefix))
+    custom_mppi_prefix = os.path.join(workspace_root, "install", "nav2_mppi_controller")
+    custom_mppi_lib = os.path.join(custom_mppi_prefix, "lib")
+
     use_sim_time = LaunchConfiguration("use_sim_time")
     respawn = LaunchConfiguration("respawn")
     log_level = LaunchConfiguration("log_level")
@@ -74,7 +79,7 @@ def generate_launch_description():
 
     visualize_actions_arg = DeclareLaunchArgument("visualize_actions", default_value="true")
     action_marker_topic_arg = DeclareLaunchArgument("action_marker_topic", default_value="/policy/action_markers")
-    action_marker_frame_arg = DeclareLaunchArgument("action_marker_frame", default_value="odom")
+    action_marker_frame_arg = DeclareLaunchArgument("action_marker_frame", default_value="map")
     publish_debug_joint_state_arg = DeclareLaunchArgument("publish_debug_joint_state", default_value="true")
     debug_joint_state_topic_arg = DeclareLaunchArgument("debug_joint_state_topic", default_value="/debug/joint_state_req")
     publish_policy_debug_status_arg = DeclareLaunchArgument("publish_policy_debug_status", default_value="true")
@@ -107,6 +112,30 @@ def generate_launch_description():
 
     nav2_buffered_logging = SetEnvironmentVariable(
         "RCUTILS_LOGGING_BUFFERED_STREAM", "1"
+    )
+    custom_mppi_ament_prefix = SetEnvironmentVariable(
+        "AMENT_PREFIX_PATH",
+        os.pathsep.join(
+            path
+            for path in [custom_mppi_prefix, os.environ.get("AMENT_PREFIX_PATH", "")]
+            if path
+        ),
+    )
+    custom_mppi_cmake_prefix = SetEnvironmentVariable(
+        "CMAKE_PREFIX_PATH",
+        os.pathsep.join(
+            path
+            for path in [custom_mppi_prefix, os.environ.get("CMAKE_PREFIX_PATH", "")]
+            if path
+        ),
+    )
+    custom_mppi_library_path = SetEnvironmentVariable(
+        "LD_LIBRARY_PATH",
+        os.pathsep.join(
+            path
+            for path in [custom_mppi_lib, os.environ.get("LD_LIBRARY_PATH", "")]
+            if path
+        ),
     )
 
     controller_server = Node(
@@ -257,6 +286,7 @@ def generate_launch_description():
                 "service_hz": 5.0,
                 "follow_path_replan_min_interval_sec": 0.80,
                 "follow_path_replan_path_delta": 0.35,
+                "tf_timeout_sec": 0.10,
                 "obstacle_sample_step": 16,
                 "scan_filter_enabled": True,
                 "scan_obstacle_max_range": 3.0,
@@ -267,6 +297,9 @@ def generate_launch_description():
                 "scan_persistence_decay_scans": 4,
                 "scan_persistence_resolution": 0.12,
                 "scan_obstacle_limit": 60,
+                "use_map_static_obstacles": True,
+                "map_static_sample_step_m": 0.20,
+                "map_static_obstacle_limit": 300,
                 "planner_half_width": 5.8,
                 "planner_half_height": 9.8,
                 "auto_relax_constraints": False,
@@ -299,10 +332,10 @@ def generate_launch_description():
                 "visualize_actions": visualize_actions,
                 "visualize_planner_scene": True,
                 "visualize_local_costmap": visualize_local_costmap,
-                "visualize_scan_obstacles": False,
-                "visualize_joint_state_geometry": False,
+                "visualize_scan_obstacles": True,
+                "visualize_joint_state_geometry": True,
                 "visualize_astar_path": True,
-                "visualize_astar_local_map": False,
+                "visualize_astar_local_map": True,
                 "action_marker_topic": action_marker_topic,
                 "action_marker_frame": action_marker_frame,
                 "planner_scene_marker_topic": planner_scene_marker_topic,
@@ -319,6 +352,7 @@ def generate_launch_description():
                 "astar_local_map_sample_step": 4,
                 "astar_local_map_max_cells": 2500,
                 "astar_local_map_min_cost": 10,
+                "debug_marker_lifetime_sec": 0.25,
             }
         ],
         respawn=respawn,
@@ -367,6 +401,9 @@ def generate_launch_description():
         astar_local_map_topic_arg,
         
         nav2_buffered_logging,
+        custom_mppi_ament_prefix,
+        custom_mppi_cmake_prefix,
+        custom_mppi_library_path,
         controller_server,
         smoother_server,
         planner_server,

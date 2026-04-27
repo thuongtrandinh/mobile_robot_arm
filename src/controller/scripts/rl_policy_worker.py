@@ -126,7 +126,7 @@ def load_model(args):
     from algorithms.graph_ppo import joint_state_as_graph
     from algorithms.mpc_ppo import MpcPPO
     from crowd_sim.envs.utils.robot import Robot
-    from crowd_sim.envs.utils.state import FullState, JointState, ObstacleState, WallState
+    from crowd_sim.envs.utils.state import FullState, JointState, ObstacleState, WallState, ObservableState
     from modules.policies import ExternalPolicy
 
     config_path = resolve_config_path(args.halo_drl_dir, args.config)
@@ -192,6 +192,7 @@ def load_model(args):
         "JointState": JointState,
         "ObstacleState": ObstacleState,
         "WallState": WallState,
+        "ObservableState": ObservableState,
     }
 
 
@@ -206,9 +207,15 @@ def infer_sub_goal(payload, deps, v_pref, robot_radius):
 
     obstacle_tuples = payload.get("obstacles", [])
     wall_tuples = payload.get("walls", [])
+    human_tuples = payload.get("humans", [])
 
     obstacles = [deps["ObstacleState"](float(x), float(y), float(r)) for x, y, r in obstacle_tuples]
     walls = [deps["WallState"](float(sx), float(sy), float(ex), float(ey)) for sx, sy, ex, ey in wall_tuples]
+
+    humans = [
+        deps["ObservableState"](float(hx), float(hy), float(hvx), float(hvy), float(hr))
+        for hx, hy, hvx, hvy, hr in human_tuples
+    ]
 
     full_state = deps["FullState"](
         px,
@@ -222,7 +229,8 @@ def infer_sub_goal(payload, deps, v_pref, robot_radius):
         yaw,
     )
 
-    observed_state = ([], obstacles, walls, [])
+    observed_state = (humans, obstacles, walls, [])
+
     joint_state = deps["JointState"](full_state, observed_state)
     graph = deps["joint_state_as_graph"](joint_state, device=deps["device"])
 

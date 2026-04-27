@@ -58,6 +58,8 @@ protected:
   float collision_cost_{0.0f};
   float safe_margin_{0.0f};
   float robot_radius_{0.0f};
+  float human_min_radius_{0.0f};
+  float human_max_radius_{0.0f};
   float data_timeout_{0.0f};
   std::string human_topic_;
   std::string debug_topic_;

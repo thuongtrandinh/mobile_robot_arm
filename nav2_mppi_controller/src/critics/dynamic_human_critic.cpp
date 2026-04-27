@@ -41,6 +41,8 @@ void DynamicHumanCritic::initialize()
   getParam(collision_cost_, "collision_cost", 100000.0f);
   getParam(safe_margin_, "safe_margin", 0.20f);
   getParam(data_timeout_, "data_timeout", 0.5f);
+  getParam(human_min_radius_, "human_min_radius", 0.01f);
+  getParam(human_max_radius_, "human_max_radius", 1.50f);
   getParam(human_topic_, "human_topic", std::string("/tracking/humans"));
   getParam(publish_debug_, "publish_debug", true);
   getParam(debug_topic_, "debug_topic", std::string("/debug/dynamic_human_critic"));
@@ -61,9 +63,9 @@ void DynamicHumanCritic::initialize()
   RCLCPP_INFO(
     logger_,
     "DynamicHumanCritic subscribed to %s with weight=%f collision_cost=%f "
-    "safe_margin=%f robot_radius=%f data_timeout=%f debug_topic=%s.",
-    human_topic_.c_str(), weight_, collision_cost_, safe_margin_, robot_radius_, data_timeout_,
-    debug_topic_.c_str());
+    "safe_margin=%f robot_radius=%f human_radius=[%f,%f] data_timeout=%f debug_topic=%s.",
+    human_topic_.c_str(), weight_, collision_cost_, safe_margin_, robot_radius_,
+    human_min_radius_, human_max_radius_, data_timeout_, debug_topic_.c_str());
 }
 
 void DynamicHumanCritic::humansCallback(const interfaces::msg::HumanArray::SharedPtr msg)
@@ -91,8 +93,8 @@ std::vector<DynamicHumanCritic::Human> DynamicHumanCritic::getHumansInFrame(
   }
 
   if (data_timeout_ > 0.0f && humans_msg.header.stamp.sec != 0) {
-    const auto age = node->now() - rclcpp::Time(humans_msg.header.stamp);
-    if (age.seconds() > data_timeout_) {
+    const double age = (node->now() - rclcpp::Time(humans_msg.header.stamp)).seconds();
+    if (age > data_timeout_ && age < 60.0) {
       return {};
     }
   }
@@ -121,7 +123,10 @@ std::vector<DynamicHumanCritic::Human> DynamicHumanCritic::getHumansInFrame(
 
   for (const auto & src : humans_msg.humans) {
     Human human;
-    human.radius = static_cast<float>(std::max(0.0, src.radius));
+    const float radius = static_cast<float>(src.radius);
+    const float min_radius = std::max(0.01f, human_min_radius_);
+    const float max_radius = std::max(min_radius, human_max_radius_);
+    human.radius = std::clamp(radius, min_radius, max_radius);
 
     if (needs_transform) {
       geometry_msgs::msg::PointStamped point_in;
