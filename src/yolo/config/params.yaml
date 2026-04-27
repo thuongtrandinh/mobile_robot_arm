@@ -36,6 +36,7 @@ multi_object_tracking_node:
       tracking_timeout: 0.5          # Reduced from 2.0s to 0.5s: aggressive EKF cleanup
       track_buffer: 30               # Reduced from 90: remove stale obstacles faster
       max_age_before_predict: 30     # Keep at 30 for motion prediction during brief occlusion
+      global_frame: 'odom'           # Estimate human velocity in fixed frame to compensate robot ego-motion
       
       # BoT-SORT matching thresholds - RELAXED for continuous tracking
       track_thresh: 0.30             # Relaxed from 0.45 to 0.30 for better weak detection capture

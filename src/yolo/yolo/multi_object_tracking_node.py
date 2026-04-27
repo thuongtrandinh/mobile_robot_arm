@@ -18,12 +18,14 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 import torch
 from ultralytics import YOLO
 import message_filters
+import tf2_ros
+import tf2_geometry_msgs  # Registers geometry_msgs stamped types with tf2.
 from builtin_interfaces.msg import Time as RosTime
 
 from visualization_msgs.msg import Marker, MarkerArray
 
 from sensor_msgs.msg import Image, CameraInfo, CompressedImage
-from geometry_msgs.msg import PoseStamped, Point
+from geometry_msgs.msg import Point, PointStamped
 from interfaces.msg import HumanState, HumanArray
 from ament_index_python.packages import get_package_share_directory
 
@@ -82,6 +84,7 @@ class MultiObjectTrackingNode(Node):
         self.depth_topic = get_param('topics.depth', '/camera/aligned_depth_to_color/image_raw')
         self.camera_info_topic = get_param('topics.camera_info', '/camera/color/camera_info')
         self.camera_frame = get_param('camera.frame_id', 'camera_link')
+        self.global_frame = get_param('tracking.global_frame', get_param('global_frame', 'odom'))
         self.marker_lifetime_sec = float(get_param('visualization.marker_lifetime_sec', 0.5))
         self.use_cuda = as_bool(get_param('use_cuda', True))
         self.use_fp16 = as_bool(get_param('use_fp16', True))
@@ -162,6 +165,12 @@ class MultiObjectTrackingNode(Node):
         self.get_logger().info(
             f'📷 Camera topics: rgb={self.rgb_topic}, depth={self.depth_topic}, info={self.camera_info_topic}'
         )
+        self.get_logger().info(
+            f'🌐 Tracking frame: camera={self.camera_frame} -> global={self.global_frame}'
+        )
+
+        self.tf_buffer = tf2_ros.Buffer()
+        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
 
         self._frame_intervals = deque(maxlen=30)
         self._last_cb_time = None
@@ -237,12 +246,12 @@ class MultiObjectTrackingNode(Node):
             if depth_map is not None and depth_map.size > 0:
                 self._current_depth_map = depth_map
 
-            self._process_frame(frame, ts_now)
+            self._process_frame(frame, img_msg.header.stamp)
         except Exception as e:
             self.get_logger().error(f'Sync error: {e}', throttle_duration_sec=2.0)
 
-    def _process_frame(self, frame, ts_recv):
-        ts_now = self.get_clock().now().nanoseconds * 1e-9
+    def _process_frame(self, frame, frame_stamp):
+        ts_now = self._stamp_to_sec(frame_stamp)
 
         # 1. Dự đoán YOLO với ngưỡng thấp để BYTE Association bắt được các phần cơ thể mờ
         results = self._yolo.predict(
@@ -273,8 +282,8 @@ class MultiObjectTrackingNode(Node):
 
         # 4. KHỞI TẠO TIN NHẮN VÀ MARKER
         msg = HumanArray()
-        msg.header.stamp = self.get_clock().now().to_msg()
-        msg.header.frame_id = self.camera_frame
+        msg.header.stamp = frame_stamp
+        msg.header.frame_id = self.global_frame
         marker_array = MarkerArray()
 
         h, w = frame.shape[:2]
@@ -297,18 +306,26 @@ class MultiObjectTrackingNode(Node):
             pz = float(-(v_center - cy_cam) * depth / self.fy)
             human_height = float(abs(y2 - y1) * depth / self.fy)
 
-            vx, vy = self._update_ekf_velocity(tid, px, py, ts_now)
+            global_point = self._transform_camera_point_to_global(px, py, pz, frame_stamp)
+            if global_point is None:
+                continue
+
+            gx = float(global_point.point.x)
+            gy = float(global_point.point.y)
+            gz = float(global_point.point.z)
+
+            vx, vy = self._update_ekf_velocity(tid, gx, gy, ts_now)
 
             human_msg = HumanState()
             human_msg.id = tid
-            human_msg.px = px
-            human_msg.py = py
+            human_msg.px = gx
+            human_msg.py = gy
             human_msg.vx = vx
             human_msg.vy = vy
             human_msg.radius = float(abs(x2 - x1) * depth / self.fx / 2.0)
 
             msg.humans.append(human_msg)
-            h_markers = self.create_human_marker(human_msg, tid, pz, human_height)
+            h_markers = self.create_human_marker(human_msg, tid, gz, human_height)
             marker_array.markers.extend(h_markers)
 
         # 5. PUBLISH DỮ LIỆU ĐIỀU KHIỂN
@@ -343,6 +360,47 @@ class MultiObjectTrackingNode(Node):
 
         return float(np.median(valid_fallback)) if valid_fallback.size > 0 else None
 
+    def _transform_camera_point_to_global(self, px, py, pz, frame_stamp):
+        point = PointStamped()
+        point.header.stamp = frame_stamp
+        point.header.frame_id = self.camera_frame
+        point.point.x = px
+        point.point.y = py
+        point.point.z = pz
+
+        if self.global_frame == self.camera_frame:
+            return point
+
+        try:
+            return self.tf_buffer.transform(
+                point,
+                self.global_frame,
+                timeout=rclpy.duration.Duration(seconds=0.03)
+            )
+        except Exception as stamp_error:
+            # Fall back to the latest TF for short camera/TF timing skews, but do
+            # not publish camera-frame positions as global positions.
+            try:
+                point.header.stamp = RosTime()
+                return self.tf_buffer.transform(
+                    point,
+                    self.global_frame,
+                    timeout=rclpy.duration.Duration(seconds=0.03)
+                )
+            except Exception as latest_error:
+                self.get_logger().warn(
+                    f'Cannot transform human point {self.camera_frame}->{self.global_frame}: '
+                    f'{latest_error} (stamp attempt: {stamp_error})',
+                    throttle_duration_sec=2.0
+                )
+                return None
+
+    def _stamp_to_sec(self, stamp):
+        stamp_sec = float(stamp.sec) + float(stamp.nanosec) * 1e-9
+        if stamp_sec > 0.0:
+            return stamp_sec
+        return self.get_clock().now().nanoseconds * 1e-9
+
     def create_human_marker(self, human, human_id, pz, human_height):
         markers = []
         # Stamp 0 tells RViz to use the latest available TF. This avoids marker
@@ -352,7 +410,7 @@ class MultiObjectTrackingNode(Node):
 
         # 1. Khối trụ đỏ (Vùng vật cản)
         obs = Marker()
-        obs.header.frame_id = self.camera_frame
+        obs.header.frame_id = self.global_frame
         obs.header.stamp = marker_stamp
         obs.ns = "danger_zones"
         obs.id = human_id
