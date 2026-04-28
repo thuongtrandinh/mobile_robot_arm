@@ -15,7 +15,7 @@ multi_object_tracking_node:
     # ===== YOLO DETECTION PARAMETERS =====
     yolo:
       # Object detection confidence threshold (reduced to prevent losing targets during pose changes)
-      object_conf_thresh: 0.40       # Reduced to 0.40 for better arm/extended pose detection
+      object_conf_thresh: 0.35       # Reduced to 0.35 for better arm/extended pose detection
       
       # Non-Maximum Suppression - STRENGTHENED to eliminate ghosting
       # When arms extend, body+arms may create 2 overlapping BBoxes

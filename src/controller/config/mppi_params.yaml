@@ -60,34 +60,34 @@ controller_server:
         - PreferForwardCritic
 
       ConstraintCritic:
-        cost_weight: 4.0
+        cost_weight: 1.0
       ObstaclesCritic:
         repulsion_weight: 5.0
-        cost_weight: 20.0
+        cost_weight: 60.0
         collision_cost: 100000.0
       DynamicHumanCritic:
         enabled: true
         human_topic: /tracking/humans
         publish_debug: true
         debug_topic: /debug/dynamic_human_critic
-        cost_weight: 100.0
+        cost_weight: 60.0
         collision_cost: 100000.0
-        safe_margin: 0.00
+        safe_margin: 0.2
         human_min_radius: 0.01
         human_max_radius: 1.50
         data_timeout: 0.5
       PathAlignCritic:
-        cost_weight: 2.0
+        cost_weight: 5.0
         max_heuristic_path_distance: 3.0
       GoalCritic:
-        cost_weight: 45.0
+        cost_weight: 15.0
         threshold_to_consider: 2.0
       GoalAngleCritic:
-        cost_weight: 22.0
+        cost_weight: 10.0
         threshold_to_consider: 1.0
       PreferForwardCritic:
-        cost_weight: 100.0
-        threshold_to_consider: 0.5
+        cost_weight: 20.0
+        threshold_to_consider: 1.0
 
 planner_server:
   ros__parameters:
@@ -130,8 +130,8 @@ local_costmap:
           obstacle_min_range: 0.0
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 10.0
-        inflation_radius: 0.25
+        cost_scaling_factor: 5.0
+        inflation_radius: 0.75
       always_send_full_costmap: True
 
 bt_navigator:

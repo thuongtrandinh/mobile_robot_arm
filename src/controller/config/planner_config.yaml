@@ -39,18 +39,19 @@ rl_ocp_policy_bridge:
     policy_period: 0.1
     goal_tolerance: 0.18
     robot_radius: 0.25
-    obstacle_radius: 0.05
+    obstacle_radius: 0.10
     action_mask_clearance: 0.00
-    obstacle_sample_step: 16
-    scan_filter_enabled: true
+    obstacle_sample_step: 8
+    scan_filter_enabled: false
     scan_obstacle_max_range: 3.0
+    scan_self_filter_min_range: 0.05
     scan_neighbor_window: 2
     scan_min_neighbor_count: 1
     scan_neighbor_max_delta: 0.25
     scan_persistence_hits: 1
     scan_persistence_decay_scans: 4
     scan_persistence_resolution: 0.12
-    scan_obstacle_limit: 60
+    scan_obstacle_limit: 300
     auto_relax_constraints: false
     use_map_static_obstacles: true
     map_static_obstacle_radius: 0.05

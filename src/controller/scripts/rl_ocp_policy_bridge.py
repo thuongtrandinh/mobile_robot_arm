@@ -45,17 +45,18 @@ class RlOcpPolicyBridge(Node):
         self.declare_parameter("robot_radius", 0.35)
         self.declare_parameter("axle_half_width", 0.23)
         self.declare_parameter("v_pref", 0.8)
-        self.declare_parameter("obstacle_radius", 0.05)
-        self.declare_parameter("obstacle_sample_step", 16)
-        self.declare_parameter("scan_filter_enabled", True)
+        self.declare_parameter("obstacle_radius", 0.1)
+        self.declare_parameter("obstacle_sample_step", 1)
+        self.declare_parameter("scan_filter_enabled", False)
         self.declare_parameter("scan_obstacle_max_range", 3.0)
-        self.declare_parameter("scan_neighbor_window", 2)
-        self.declare_parameter("scan_min_neighbor_count", 2)
+        self.declare_parameter("scan_self_filter_min_range", 0.05)
+        self.declare_parameter("scan_neighbor_window", 1)
+        self.declare_parameter("scan_min_neighbor_count", 1)
         self.declare_parameter("scan_neighbor_max_delta", 0.18)
-        self.declare_parameter("scan_persistence_hits", 2)
+        self.declare_parameter("scan_persistence_hits", 1)
         self.declare_parameter("scan_persistence_decay_scans", 4)
         self.declare_parameter("scan_persistence_resolution", 0.12)
-        self.declare_parameter("scan_obstacle_limit", 60)
+        self.declare_parameter("scan_obstacle_limit", 300)
         self.declare_parameter("use_map_static_obstacles", True)
         self.declare_parameter("map_static_obstacle_radius", 0.05)
         self.declare_parameter("map_static_sample_step_m", 0.3)
@@ -64,7 +65,7 @@ class RlOcpPolicyBridge(Node):
         self.declare_parameter("human_max_age_sec", 0.6)
         self.declare_parameter("human_min_radius", 0.01)
         self.declare_parameter("human_max_radius", 1.50)
-        self.declare_parameter("human_safety_margin", 0.00)
+        self.declare_parameter("human_safety_margin", 0.2)
         self.declare_parameter("human_limit", 12)
         self.declare_parameter("auto_relax_constraints", False)
         self.declare_parameter("timer_period", 0.1)
@@ -92,7 +93,7 @@ class RlOcpPolicyBridge(Node):
         self.declare_parameter("visualize_actions", True)
         self.declare_parameter("action_marker_topic", "/policy/action_markers")
         self.declare_parameter("action_marker_frame", "odom")
-        self.declare_parameter("action_mask_clearance", 0.00)
+        self.declare_parameter("action_mask_clearance", 0.1)
         self.declare_parameter("publish_debug_joint_state", True)
         self.declare_parameter("debug_joint_state_topic", "/debug/joint_state_req")
         self.declare_parameter("publish_policy_debug_status", True)
@@ -138,6 +139,7 @@ class RlOcpPolicyBridge(Node):
         self.obstacle_sample_step = self.get_parameter("obstacle_sample_step").get_parameter_value().integer_value
         self.scan_filter_enabled = self.get_parameter("scan_filter_enabled").get_parameter_value().bool_value
         self.scan_obstacle_max_range = self.get_parameter("scan_obstacle_max_range").get_parameter_value().double_value
+        self.scan_self_filter_min_range = self.get_parameter("scan_self_filter_min_range").get_parameter_value().double_value
         self.scan_neighbor_window = self.get_parameter("scan_neighbor_window").get_parameter_value().integer_value
         self.scan_min_neighbor_count = self.get_parameter("scan_min_neighbor_count").get_parameter_value().integer_value
         self.scan_neighbor_max_delta = self.get_parameter("scan_neighbor_max_delta").get_parameter_value().double_value
@@ -265,6 +267,8 @@ class RlOcpPolicyBridge(Node):
         self.scan_frame: str = ""
         self.scan_seq = 0
         self.scan_persistence: Dict[Tuple[int, int], Tuple[int, int]] = {}
+        self._cached_scan_seq: int = -1
+        self._cached_scan_obstacles: List[Tuple[float, float, float]] = []
         self.latest_humans: Optional[HumanArray] = None
         self.map_bounds: Optional[Tuple[float, float, float, float]] = None
         self.map_resolution: Optional[float] = None
@@ -279,6 +283,9 @@ class RlOcpPolicyBridge(Node):
         self.map_geometry_polygons: List[List[Tuple[float, float]]] = []
         self.map_geometry_walls: List[Tuple[float, float, float, float]] = []
         self.map_static_circles: List[Tuple[float, float, float]] = []
+        self._cached_map_pose: Optional[Tuple[float, float]] = None
+        self._cached_map_obs: List[Tuple[float, float, float]] = []
+        self._cached_map_signature: Optional[Tuple[int, int, float, float, float]] = None
         self.last_sent_map_polygons_count = 0
         self.last_sent_map_walls_count = 0
         self._last_map_geometry_log_ns = 0
@@ -401,12 +408,16 @@ class RlOcpPolicyBridge(Node):
                 self.visualize_planner_scene = bool(p.value)
             elif p.name == "use_map_static_obstacles":
                 self.use_map_static_obstacles = bool(p.value)
+                self._clear_map_obstacle_cache()
             elif p.name == "map_static_obstacle_radius":
                 self.map_static_obstacle_radius = float(p.value)
+                self._clear_map_obstacle_cache()
             elif p.name == "map_static_sample_step_m":
                 self.map_static_sample_step_m = float(p.value)
+                self._clear_map_obstacle_cache()
             elif p.name == "map_static_obstacle_limit":
                 self.map_static_obstacle_limit = int(p.value)
+                self._clear_map_obstacle_cache()
             elif p.name == "enforce_scene_entities":
                 self.enforce_scene_entities = bool(p.value)
             elif p.name == "human_max_age_sec":
@@ -427,25 +438,38 @@ class RlOcpPolicyBridge(Node):
                 self.action_range = float(p.value)
             elif p.name == "obstacle_sample_step":
                 self.obstacle_sample_step = max(1, int(p.value))
+                self._clear_scan_obstacle_cache()
             elif p.name == "scan_filter_enabled":
                 self.scan_filter_enabled = bool(p.value)
+                self._clear_scan_obstacle_cache()
             elif p.name == "scan_obstacle_max_range":
                 self.scan_obstacle_max_range = max(0.0, float(p.value))
+                self._clear_scan_obstacle_cache()
+            elif p.name == "scan_self_filter_min_range":
+                self.scan_self_filter_min_range = max(0.0, float(p.value))
+                self._clear_scan_obstacle_cache()
             elif p.name == "scan_neighbor_window":
                 self.scan_neighbor_window = max(0, int(p.value))
+                self._clear_scan_obstacle_cache()
             elif p.name == "scan_min_neighbor_count":
                 self.scan_min_neighbor_count = max(0, int(p.value))
+                self._clear_scan_obstacle_cache()
             elif p.name == "scan_neighbor_max_delta":
                 self.scan_neighbor_max_delta = max(0.0, float(p.value))
+                self._clear_scan_obstacle_cache()
             elif p.name == "scan_persistence_hits":
                 self.scan_persistence_hits = max(1, int(p.value))
+                self.scan_persistence.clear()
+                self._clear_scan_obstacle_cache()
             elif p.name == "scan_persistence_decay_scans":
                 self.scan_persistence_decay_scans = max(1, int(p.value))
             elif p.name == "scan_persistence_resolution":
                 self.scan_persistence_resolution = max(0.01, float(p.value))
                 self.scan_persistence.clear()
+                self._clear_scan_obstacle_cache()
             elif p.name == "scan_obstacle_limit":
                 self.scan_obstacle_limit = max(1, int(p.value))
+                self._clear_scan_obstacle_cache()
             elif p.name == "planner_half_width":
                 self.planner_half_width = float(p.value)
                 update_effective_bounds = True
@@ -495,6 +519,8 @@ class RlOcpPolicyBridge(Node):
         if update_effective_bounds:
             self.effective_half_width = min(self.planner_half_width, self.planner_hard_half_width)
             self.effective_half_height = min(self.planner_half_height, self.planner_hard_half_height)
+            self._clear_scan_obstacle_cache()
+            self._clear_map_obstacle_cache()
 
         if update_loop_hz:
             self.policy_period = 1.0 / self.policy_hz
@@ -835,6 +861,15 @@ class RlOcpPolicyBridge(Node):
     def _clamp(value: float, low: float, high: float) -> float:
         return max(low, min(high, value))
 
+    def _clear_scan_obstacle_cache(self) -> None:
+        self._cached_scan_seq = -1
+        self._cached_scan_obstacles = []
+
+    def _clear_map_obstacle_cache(self) -> None:
+        self._cached_map_pose = None
+        self._cached_map_obs = []
+        self._cached_map_signature = None
+
     def _odom_callback(self, msg: Odometry) -> None:
         px = msg.pose.pose.position.x
         py = msg.pose.pose.position.y
@@ -851,6 +886,7 @@ class RlOcpPolicyBridge(Node):
         self.latest_scan = msg
         self.scan_frame = msg.header.frame_id if msg.header.frame_id else self.scan_frame
         self.scan_seq += 1
+        self._clear_scan_obstacle_cache()
 
     def _goal_callback(self, msg: PoseStamped) -> None:
         q = msg.pose.orientation
@@ -880,6 +916,7 @@ class RlOcpPolicyBridge(Node):
         self.map_origin_x = float(origin_x)
         self.map_origin_y = float(origin_y)
         self.map_data = list(msg.data)
+        self._clear_map_obstacle_cache()
 
         if not self._has_received_map:
             self._has_received_map = True
@@ -1437,11 +1474,16 @@ class RlOcpPolicyBridge(Node):
         return count >= required_hits
 
     def _scan_only_obstacle_tuples(self) -> List[Tuple[float, float, float]]:
+        if self._cached_scan_seq == self.scan_seq:
+            return list(self._cached_scan_obstacles)
+
         obstacles = []
         if self.latest_scan is None or self.current_pose is None:
             return obstacles
 
         px, py, yaw = self.current_pose
+        cos_yaw = math.cos(yaw)
+        sin_yaw = math.sin(yaw)
 
         pose_map = self._current_pose_in_map_frame()
         if pose_map is None:
@@ -1469,13 +1511,13 @@ class RlOcpPolicyBridge(Node):
 
         x_lim = min(self.effective_half_width, self.planner_x_limit)
         y_lim = min(self.effective_half_height, self.planner_y_limit)
-        min_safe_range = self.robot_radius + 0.12
+        self_filter_min_range = max(0.0, float(self.scan_self_filter_min_range))
         ranges = self.latest_scan.ranges
         angle_min = self.latest_scan.angle_min
         angle_inc = self.latest_scan.angle_increment
         r_min = self.latest_scan.range_min
         r_max = self.latest_scan.range_max
-        if self.scan_filter_enabled and self.scan_obstacle_max_range > 0.0:
+        if self.scan_obstacle_max_range > 0.0:
             r_max = min(r_max, float(self.scan_obstacle_max_range))
 
         for i in range(0, len(ranges), max(1, self.obstacle_sample_step)):
@@ -1484,7 +1526,7 @@ class RlOcpPolicyBridge(Node):
                 continue
             if r < r_min or r > r_max:
                 continue
-            if r < min_safe_range:
+            if r < self_filter_min_range:
                 continue
             if not self._scan_has_neighbor_support(i, float(r)):
                 continue
@@ -1497,8 +1539,8 @@ class RlOcpPolicyBridge(Node):
                 map_xy = self._transform_point_with_tf(lx, ly, scan_tf)
             else:
                 map_xy = self._point_to_map_frame(
-                    px + lx * math.cos(yaw) - ly * math.sin(yaw),
-                    py + lx * math.sin(yaw) + ly * math.cos(yaw),
+                    px + lx * cos_yaw - ly * sin_yaw,
+                    py + lx * sin_yaw + ly * cos_yaw,
                 )
 
             if map_xy is None:
@@ -1516,6 +1558,8 @@ class RlOcpPolicyBridge(Node):
             obstacles.sort(key=lambda p: math.hypot(float(p[0]) - px_map, float(p[1]) - py_map))
             obstacles = obstacles[: max(1, int(self.scan_obstacle_limit))]
 
+        self._cached_scan_seq = self.scan_seq
+        self._cached_scan_obstacles = list(obstacles)
         return obstacles
 
     def _scan_to_obstacle_tuples(self) -> List[Tuple[float, float, float]]:
@@ -1545,6 +1589,19 @@ class RlOcpPolicyBridge(Node):
             self.map_static_circles = []
             return []
         px, py = pose_map
+        map_signature = (
+            int(self.map_width),
+            int(self.map_height),
+            float(self.map_resolution),
+            float(self.map_origin_x),
+            float(self.map_origin_y),
+        )
+        if self._cached_map_signature == map_signature and self._cached_map_pose is not None:
+            cpx, cpy = self._cached_map_pose
+            if math.hypot(px - cpx, py - cpy) < 0.10:
+                self.map_static_circles = list(self._cached_map_obs)
+                return list(self._cached_map_obs)
+
         x_lim = min(self.effective_half_width, self.planner_x_limit)
         y_lim = min(self.effective_half_height, self.planner_y_limit)
         cell_step = max(1, int(round(max(0.05, self.map_static_sample_step_m) / self.map_resolution)))
@@ -1578,6 +1635,9 @@ class RlOcpPolicyBridge(Node):
             static_obs = static_obs[: max(1, self.map_static_obstacle_limit)]
 
         self.map_static_circles = list(static_obs)
+        self._cached_map_pose = (float(px), float(py))
+        self._cached_map_obs = list(static_obs)
+        self._cached_map_signature = map_signature
 
         return static_obs
 
@@ -1625,12 +1685,55 @@ class RlOcpPolicyBridge(Node):
                 return True
 
         inflate = self.robot_radius + self.action_mask_clearance
+        
+        # 1. Kiểm tra điểm đích có đè lên bản đồ tĩnh
         if self._is_occupied_from_map(map_x, map_y, inflate):
             return True
 
+        # 2. Kiểm tra điểm đích có đè lên vật cản (LiDAR/Người)
         for ox, oy, radius in obstacles:
+            # TỐI ƯU 1: Lọc hộp giới hạn (Bounding Box) trước khi tính toán hypot nặng nề
+            if abs(map_x - ox) > inflate + radius or abs(map_y - oy) > inflate + radius:
+                continue
             if math.hypot(map_x - ox, map_y - oy) < (inflate + radius):
                 return True
+
+        # 3. Kiểm tra Raycast (Line-of-Sight) - TỐI ƯU HÓA TOÁN HỌC KHÔNG DÙNG VÒNG LẶP CHO LIDAR
+        robot_pose = self._current_pose_in_map_frame()
+        if robot_pose is not None and self.map_resolution is not None:
+            rx, ry = robot_pose
+            dist = math.hypot(map_x - rx, map_y - ry)
+            
+            if dist > 0.01:
+                # 3A. Quét tia với Bản đồ tĩnh (Vẫn phải chia bước nhưng dùng bước nhảy lớn hơn)
+                step_size = max(0.05, self.map_resolution)
+                num_steps = int(dist / step_size)
+                for i in range(1, num_steps):
+                    t = float(i) / float(num_steps)
+                    cx = rx + t * (map_x - rx)
+                    cy = ry + t * (map_y - ry)
+                    if self._is_occupied_from_map(cx, cy, inflate):
+                        return True
+                
+                # 3B. Quét tia với LiDAR / Dynamic Obstacles
+                # TỐI ƯU 2: Tính khoảng cách từ điểm Lidar chiếu lên đoạn thẳng tia nhìn (O(1) thay vì O(n))
+                l2 = dist * dist
+                for ox, oy, radius in obstacles:
+                    # Lọc nhanh những điểm LiDAR nằm tít ở xa khỏi quỹ đạo tia nhìn
+                    if ox < min(rx, map_x) - inflate - radius or \
+                       ox > max(rx, map_x) + inflate + radius or \
+                       oy < min(ry, map_y) - inflate - radius or \
+                       oy > max(ry, map_y) + inflate + radius:
+                        continue
+                    
+                    # Tính hệ số hình chiếu của vật cản lên đoạn thẳng (tia nhìn)
+                    t = max(0.0, min(1.0, ((ox - rx) * (map_x - rx) + (oy - ry) * (map_y - ry)) / l2))
+                    proj_x = rx + t * (map_x - rx)
+                    proj_y = ry + t * (map_y - ry)
+                    
+                    # Nếu khoảng cách từ vật cản đến hình chiếu < vùng an toàn -> Tia bị chặn
+                    if math.hypot(ox - proj_x, oy - proj_y) < (inflate + radius):
+                        return True
 
         return False
 
@@ -1645,7 +1748,8 @@ class RlOcpPolicyBridge(Node):
 
         static_obstacles = self._map_to_obstacle_tuples()
         human_obstacles = self._human_obstacle_tuples()
-        obstacles = static_obstacles + human_obstacles
+        scan_obstacles = self._scan_only_obstacle_tuples()
+        obstacles = static_obstacles + human_obstacles + scan_obstacles
 
         best_valid: Optional[Tuple[float, float]] = None
         best_dist = float("inf")
@@ -1677,7 +1781,8 @@ class RlOcpPolicyBridge(Node):
         static_obstacles = self._map_to_obstacle_tuples()
         humans_map = self._process_human_msgs()
         human_obstacles = self._human_obstacle_tuples(humans_map)
-        obstacles = static_obstacles + human_obstacles
+        scan_obstacles = self._scan_only_obstacle_tuples()
+        obstacles = static_obstacles + human_obstacles + scan_obstacles
 
         valid_points: List[Tuple[float, float]] = []
         masked_points: List[Tuple[float, float]] = []
@@ -1704,6 +1809,7 @@ class RlOcpPolicyBridge(Node):
                 "valid_count": len(valid_points),
                 "masked_count": len(masked_points),
                 "static_count": len(static_obstacles),
+                "scan_obstacle_count": len(scan_obstacles),
                 "human_obstacle_count": len(human_obstacles),
                 "human_count": len(humans_map),
                 "raw_human_count": len(self.latest_humans.humans) if self.latest_humans is not None else 0,
@@ -1740,7 +1846,7 @@ class RlOcpPolicyBridge(Node):
             "selected_point": [float(closest_selected[0]), float(closest_selected[1])] if closest_selected is not None else None,
             "obstacles": [
                 [float(obs[0]), float(obs[1]), float(obs[2])]
-                for obs in static_obstacles
+                for obs in static_obstacles + scan_obstacles
                 if len(obs) >= 3
             ],
             "human_obstacles": [
@@ -1760,15 +1866,21 @@ class RlOcpPolicyBridge(Node):
         self.action_debug_pub.publish(msg)
 
     def _scan_to_obstacle_msgs(self) -> List[ObstacleState]:
-        obs_tuples = self._scan_to_obstacle_tuples()
+        scan_tuples = self._scan_only_obstacle_tuples()
+        map_tuples = self._map_to_obstacle_tuples()
         pose_map = self._current_pose_in_map_frame()
         if pose_map is not None:
             px, py = pose_map
-            obs_tuples.sort(key=lambda o: math.hypot(float(o[0]) - px, float(o[1]) - py))
+            sort_key = lambda o: math.hypot(float(o[0]) - px, float(o[1]) - py)
+            scan_tuples.sort(key=sort_key)
+            map_tuples.sort(key=sort_key)
 
-        max_supported = 40
-        keep_n = min(max_supported, max(1, int(self.map_static_obstacle_limit)))
-        obs_tuples = obs_tuples[:keep_n]
+        max_supported = 300
+        scan_keep_n = min(max_supported, max(1, int(self.scan_obstacle_limit)))
+        obs_tuples = scan_tuples[:scan_keep_n]
+        remaining = max_supported - len(obs_tuples)
+        if remaining > 0:
+            obs_tuples.extend(map_tuples[: min(remaining, max(1, int(self.map_static_obstacle_limit)))])
 
         obstacles = []
         for obs_x, obs_y, radius in obs_tuples:

@@ -392,7 +392,17 @@ void Planner::UpdateCostMap(const JointState &state) {
   for (auto &iter: state.obst) {
     try {
       cv::circle(cost_map_, MapCoord2ImgIdx({iter.px, iter.py}), 
-                 (int)round(iter.radius / kMapResol), cv::Scalar(0), 1);
+                 (int)round(iter.radius / kMapResol), cv::Scalar(0), -1);
+    } catch (const std::string &) {
+      skipped_invalid_points++;
+    }
+  }
+
+  // 2. BỔ SUNG: Vẽ nhận diện người từ Camera vào Costmap của thuật toán A*
+  for (auto &hum_iter: state.hum) {
+    try {
+      cv::circle(cost_map_, MapCoord2ImgIdx({hum_iter.px, hum_iter.py}), 
+                 (int)round(hum_iter.radius / kMapResol), cv::Scalar(0), -1);
     } catch (const std::string &) {
       skipped_invalid_points++;
     }

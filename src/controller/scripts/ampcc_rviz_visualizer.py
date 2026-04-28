@@ -643,14 +643,16 @@ class AmpccRvizVisualizer(Node):
         robot_radius = float(robot.get("radius", 0.25))
 
         robot_marker = Marker()
-        robot_marker.header.frame_id = frame_id
+        # Gắn thẳng vào hệ quy chiếu của xe (base_footprint)
+        robot_marker.header.frame_id = "base_footprint" 
         robot_marker.header.stamp = now
         robot_marker.ns = "planner_scene"
         robot_marker.id = 100
         robot_marker.type = Marker.CYLINDER
         robot_marker.action = Marker.ADD
-        robot_marker.pose.position.x = float(robot.get("x", 0.0))
-        robot_marker.pose.position.y = float(robot.get("y", 0.0))
+        # Tâm của base_link luôn là (0, 0)
+        robot_marker.pose.position.x = 0.0
+        robot_marker.pose.position.y = 0.0
         robot_marker.pose.position.z = 0.05
         robot_marker.pose.orientation.w = 1.0
         robot_marker.scale.x = 2.0 * robot_radius
@@ -662,8 +664,11 @@ class AmpccRvizVisualizer(Node):
         robot_marker.color.a = 0.85
         markers.markers.append(robot_marker)
 
+        # =========================================================
+        # 2. VẼ MŨI TÊN HƯỚNG ĐI (BÁM THEO BASE_LINK)
+        # =========================================================
         heading = Marker()
-        heading.header.frame_id = frame_id
+        heading.header.frame_id = "base_link" # Gắn vào xe
         heading.header.stamp = now
         heading.ns = "planner_scene"
         heading.id = 103
@@ -676,10 +681,8 @@ class AmpccRvizVisualizer(Node):
         heading.color.g = 0.8
         heading.color.b = 0.2
         heading.color.a = 0.95
-        x = float(robot.get("x", 0.0))
-        y = float(robot.get("y", 0.0))
-        theta = float(robot.get("theta", 0.0))
-        heading.points = [self._point(x, y, 0.1), self._point(x + 0.5 * math.cos(theta), y + 0.5 * math.sin(theta), 0.1)]
+        # Mũi tên chỉ thẳng về phía trước theo trục X của xe
+        heading.points = [self._point(0.0, 0.0, 0.1), self._point(0.5, 0.0, 0.1)]
         markers.markers.append(heading)
 
         goal_marker = Marker()
