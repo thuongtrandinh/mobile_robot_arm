@@ -249,22 +249,6 @@ def generate_launch_description():
         ],
     )
 
-    # 2. GỌI PLANNER NODE (Chỉ giữ A* smooth & local path service)
-    ampcc_node = Node(
-        package="controller",
-        executable="ampcc_node",
-        name="opt_planner",
-        output="screen",
-        respawn=respawn,
-        respawn_delay=2.0,
-        parameters=[nav2_params],
-        arguments=["--ros-args", "--log-level", log_level],
-        remappings=nav2_remappings
-        + [
-            ("cmd_vel", "cmd_vel_nav"),
-            ("cmd_vel_smoothed", "/diff_cont/cmd_vel_unstamped"),
-        ],
-    )
 
     lifecycle_manager_navigation = Node(
         package="nav2_lifecycle_manager",
@@ -444,7 +428,6 @@ def generate_launch_description():
         waypoint_follower,
         velocity_smoother,
         lifecycle_manager_navigation,
-        ampcc_node,
         rl_bridge_node,
         rviz_visualizer_node,
         rviz_node,

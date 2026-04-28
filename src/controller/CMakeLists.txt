@@ -28,6 +28,10 @@ set(CONTROLLER_SCRIPT_FILES
   scripts/eval_ppo.py
   scripts/rl_ocp_policy_bridge.py
   scripts/rl_policy_worker.py
+  scripts/dwa_local_planner.py
+  scripts/teb_local_planner.py
+  scripts/planner_comparison.py
+  scripts/planner_analysis.py
 )
 
 set(CONTROLLER_EXISTING_SCRIPT_FILES "")

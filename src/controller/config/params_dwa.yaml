@@ -129,37 +129,37 @@ controller_server:
       yaw_goal_tolerance: 0.25
     FollowPath:
       plugin: "dwb_core::DWBLocalPlanner"
-      debug_trajectory_details: True
-      min_vel_x: 0.0
-      min_vel_y: 0.0
-      max_vel_x: 0.26
+      max_vel_x: 0.3
+      min_vel_x: -0.3
       max_vel_y: 0.0
-      max_vel_theta: 0.5
+      min_vel_y: 0.0
+      max_vel_theta: 0.3
+      min_vel_theta: -0.3
       min_speed_xy: 0.0
-      max_speed_xy: 0.26
+      max_speed_xy: 0.3
       min_speed_theta: 0.0
-      acc_lim_x: 2.5
+      acc_lim_x: 0.15
       acc_lim_y: 0.0
-      acc_lim_theta: 1.6
-      decel_lim_x: -2.5
+      acc_lim_theta: 0.1
+      decel_lim_x: -0.15
       decel_lim_y: 0.0
-      decel_lim_theta: -1.6
+      decel_lim_theta: -0.1
       vx_samples: 20
       vy_samples: 5
       vtheta_samples: 20
-      sim_time: 1.7
+      sim_time: 4.0
       linear_granularity: 0.05
       angular_granularity: 0.025
       transform_tolerance: 0.2
       xy_goal_tolerance: 0.25
       trans_stopped_velocity: 0.25
-      short_circuit_trajectory_evaluation: True
+      short_circuit_trajectory_evaluation: False
       stateful: True
       critics: ["RotateToGoal", "Oscillation", "BaseObstacle", "GoalAlign", "PathAlign", "PathDist", "GoalDist"]
       BaseObstacle.scale: 0.02
-      PathAlign.scale: 32.0
+      PathAlign.scale: 64.0
       PathAlign.forward_point_distance: 0.1
-      GoalAlign.scale: 24.0
+      GoalAlign.scale: 48.0
       GoalAlign.forward_point_distance: 0.1
       PathDist.scale: 32.0
       GoalDist.scale: 24.0
@@ -319,15 +319,21 @@ waypoint_follower:
       enabled: True
       waypoint_pause_duration: 200
 
+# ============ SYNCHRONIZED KINEMATIC CONSTRAINTS FOR FAIR BENCHMARK ============
+# All three planners (DWA, TEB, AMPCC) use the same limits:
+# - max_linear_vel: 0.3 m/s
+# - max_angular_vel: 0.3 rad/s
+# - max_linear_acc: 1.0 m/s²
+# - max_angular_acc: 1.0 rad/s²
 velocity_smoother:
   ros__parameters:
     use_sim_time: True
     smoothing_frequency: 20.0
     scale_velocities: False
     feedback: "OPEN_LOOP"
-    max_velocity: [0.3, 0.0, 0.3]     
-    min_velocity: [-0.3, 0.0, -0.3]   
-    max_accel: [0.15, 0.0, 0.1]       
+    max_velocity: [0.3, 0.0, 0.3]
+    min_velocity: [-0.3, 0.0, -0.3]
+    max_accel: [0.15, 0.0, 0.1]
     max_decel: [-0.15, 0.0, -0.1]
     odom_topic: /odometry/filtered
     odom_duration: 0.1

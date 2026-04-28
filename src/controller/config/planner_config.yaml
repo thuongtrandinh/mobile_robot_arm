@@ -7,8 +7,8 @@ opt_planner:
 
     constraints.max_linear_vel: 0.3
     constraints.max_angular_vel: 0.3
-    constraints.max_linear_acc: 1.0
-    constraints.max_angular_acc: 1.0
+    constraints.max_linear_acc: 0.15
+    constraints.max_angular_acc: 0.1
 
     planner.local_obstacle_count: 8
     planner.polygon_clearance_margin: 0.03
