@@ -484,10 +484,11 @@ class AmpccRvizVisualizer(Node):
 
         return linearity >= self.linearity_reject_ratio and span >= self.linearity_reject_span
 
-    def _delete_all(self, frame_id: str) -> Marker:
+    def _delete_all(self, frame_id: str, ns: str = "planner_scene") -> Marker:
         m = Marker()
         m.header.frame_id = frame_id
         m.header.stamp = rclpy.time.Time().to_msg()
+        m.ns = ns  # Prevent deleting markers from other namespaces
         m.action = Marker.DELETEALL
         return m
 
@@ -521,11 +522,17 @@ class AmpccRvizVisualizer(Node):
         goal_reached = bool(payload.get("goal_reached", False))
 
         markers = MarkerArray()
-        markers.markers.append(self._delete_all(frame_id))
+        # Don't use DELETEALL for action markers - let RViz update them naturally
+        # Only delete action markers if goal is reached
 
         if goal_reached or not self.visualize_actions:
             self.action_pub.publish(markers)
             return
+        
+        # Debug logging
+        valid_count = len(payload.get("valid_points", []))
+        masked_count = len(payload.get("masked_points", []))
+        self.get_logger().debug(f"Action markers: valid={valid_count}, masked={masked_count}")
 
         now = rclpy.time.Time().to_msg()
         valid_points = [self._point(p[0], p[1]) for p in payload.get("valid_points", [])]
@@ -547,6 +554,7 @@ class AmpccRvizVisualizer(Node):
         valid_marker.color.g = 1.0
         valid_marker.color.b = 0.25
         valid_marker.color.a = 0.85
+        valid_marker.lifetime = rclpy.duration.Duration(seconds=0.5).to_msg()
         valid_marker.points = valid_points
         markers.markers.append(valid_marker)
 
@@ -564,6 +572,7 @@ class AmpccRvizVisualizer(Node):
         masked_marker.color.g = 0.1
         masked_marker.color.b = 0.1
         masked_marker.color.a = 0.65
+        masked_marker.lifetime = rclpy.duration.Duration(seconds=0.5).to_msg()
         masked_marker.points = masked_points
         markers.markers.append(masked_marker)
 
@@ -581,6 +590,7 @@ class AmpccRvizVisualizer(Node):
         selected_marker.color.g = 0.4
         selected_marker.color.b = 1.0
         selected_marker.color.a = 1.0
+        selected_marker.lifetime = rclpy.duration.Duration(seconds=0.5).to_msg()
         if selected_point is not None and len(selected_point) == 2:
             selected_marker.pose.position.x = float(selected_point[0])
             selected_marker.pose.position.y = float(selected_point[1])
@@ -601,6 +611,7 @@ class AmpccRvizVisualizer(Node):
         info_marker.color.g = 1.0
         info_marker.color.b = 1.0
         info_marker.color.a = 0.95
+        info_marker.lifetime = rclpy.duration.Duration(seconds=0.5).to_msg()
         info_marker.pose.position.x = float(current_pose[0])
         info_marker.pose.position.y = float(current_pose[1])
         info_marker.pose.position.z = 0.6
@@ -854,8 +865,8 @@ class AmpccRvizVisualizer(Node):
         obst_marker.id = 130
         obst_marker.type = Marker.SPHERE_LIST
         obst_marker.action = Marker.ADD
-        obst_marker.scale.x = 0.20
-        obst_marker.scale.y = 0.20
+        obst_marker.scale.x = 0.15
+        obst_marker.scale.y = 0.15
         obst_marker.scale.z = 0.10
         obst_marker.color.r = 1.0
         obst_marker.color.g = 0.10
@@ -864,9 +875,7 @@ class AmpccRvizVisualizer(Node):
         for obs in obstacles:
             if len(obs) < 3:
                 continue
-            radius = max(0.05, float(obs[2]))
-            obst_marker.scale.x = 2.0 * radius
-            obst_marker.scale.y = 2.0 * radius
+            # Use fixed scale for SPHERE_LIST - do NOT update scale in loop
             obst_marker.points.append(self._point(obs[0], obs[1]))
         markers.markers.append(obst_marker)
 
@@ -1000,7 +1009,10 @@ class AmpccRvizVisualizer(Node):
         margin_marker.color.a = 0.9
         for obs in margin_obstacles:
             if len(obs) >= 3:
-                radius = max(0.05, float(obs[2])) + mask_margin
+                # Don't add mask_margin for static map obstacles - they're already in collision space
+                # Only add margin for dynamic obstacles
+                obs_radius = max(0.05, float(obs[2]))
+                radius = obs_radius  # Use original radius without adding mask_margin
                 self._append_circle_segments(margin_marker.points, float(obs[0]), float(obs[1]), radius)
         for hum in humans:
             radius = max(0.05, float(hum.get("radius", 0.25)))
@@ -1011,7 +1023,8 @@ class AmpccRvizVisualizer(Node):
                 radius,
                 z=0.10,
             )
-        markers.markers.append(margin_marker)
+        # Margin circles visualization disabled - RL already has map data
+        # markers.markers.append(margin_marker)
 
         wall_margin_marker = Marker()
         wall_margin_marker.header.frame_id = frame_id
@@ -1020,7 +1033,7 @@ class AmpccRvizVisualizer(Node):
         wall_margin_marker.id = 164
         wall_margin_marker.type = Marker.LINE_LIST
         wall_margin_marker.action = Marker.ADD
-        wall_margin_marker.scale.x = max(0.03, 2.0 * map_margin)
+        wall_margin_marker.scale.x = 0.04  # Fixed scale for visibility
         wall_margin_marker.color.r = 1.0
         wall_margin_marker.color.g = 0.1
         wall_margin_marker.color.b = 0.0
@@ -1033,7 +1046,8 @@ class AmpccRvizVisualizer(Node):
             for w in self.scene_walls:
                 wall_margin_marker.points.append(self._point(w[0], w[1], 0.04))
                 wall_margin_marker.points.append(self._point(w[2], w[3], 0.04))
-        markers.markers.append(wall_margin_marker)
+        # Wall margin visualization disabled - RL already has map data
+        # markers.markers.append(wall_margin_marker)
 
         map_margin_marker = Marker()
         map_margin_marker.header.frame_id = self.map_frame
@@ -1042,7 +1056,7 @@ class AmpccRvizVisualizer(Node):
         map_margin_marker.id = 165
         map_margin_marker.type = Marker.LINE_LIST
         map_margin_marker.action = Marker.ADD
-        map_margin_marker.scale.x = max(0.03, 2.0 * map_margin)
+        map_margin_marker.scale.x = 0.04  # Fixed scale for visibility
         map_margin_marker.color.r = 1.0
         map_margin_marker.color.g = 0.18
         map_margin_marker.color.b = 0.0
@@ -1055,7 +1069,8 @@ class AmpccRvizVisualizer(Node):
                 p2 = poly[(i + 1) % len(poly)]
                 map_margin_marker.points.append(self._point(p1[0], p1[1], 0.035))
                 map_margin_marker.points.append(self._point(p2[0], p2[1], 0.035))
-        markers.markers.append(map_margin_marker)
+        # Map margin visualization disabled - RL already has map data
+        # markers.markers.append(map_margin_marker)
 
         costmap_marker = Marker()
         costmap_marker.header.frame_id = frame_id
