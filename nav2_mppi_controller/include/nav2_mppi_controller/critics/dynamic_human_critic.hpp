@@ -45,7 +45,9 @@ protected:
   };
 
   void humansCallback(const interfaces::msg::HumanArray::SharedPtr msg);
-  std::vector<Human> getHumansInFrame(const std::string & target_frame);
+  std::vector<Human> getHumansInFrame(
+    const std::string & target_frame, std::string * debug_reason = nullptr);
+  void publishDebugStatus(const std::string & status) const;
 
   rclcpp::Subscription<interfaces::msg::HumanArray>::SharedPtr humans_sub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr debug_pub_;
@@ -58,6 +60,8 @@ protected:
   float collision_cost_{0.0f};
   float safe_margin_{0.0f};
   float robot_radius_{0.0f};
+  float human_min_radius_{0.0f};
+  float human_max_radius_{0.0f};
   float data_timeout_{0.0f};
   std::string human_topic_;
   std::string debug_topic_;

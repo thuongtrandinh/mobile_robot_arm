@@ -13,6 +13,7 @@ def generate_launch_description():
     use_sim_time = LaunchConfiguration("use_sim_time")
     respawn = LaunchConfiguration("respawn")
     log_level = LaunchConfiguration("log_level")
+    controller_log_level = LaunchConfiguration("controller_log_level")
     use_rviz = LaunchConfiguration("use_rviz")
     tuning_config = LaunchConfiguration("tuning_config")
     halo_drl_dir = LaunchConfiguration("halo_drl_dir")
@@ -43,6 +44,9 @@ def generate_launch_description():
     )
     log_level_arg = DeclareLaunchArgument(
         "log_level", default_value="info", description="Logging level"
+    )
+    controller_log_level_arg = DeclareLaunchArgument(
+        "controller_log_level", default_value="warn", description="Controller log level"
     )
     use_rviz_arg = DeclareLaunchArgument(
         "use_rviz",
@@ -116,7 +120,7 @@ def generate_launch_description():
         respawn=respawn,
         respawn_delay=2.0,
         parameters=[nav2_params],
-        arguments=["--ros-args", "--log-level", log_level],
+        arguments=["--ros-args", "--log-level", controller_log_level],
         remappings=nav2_remappings + [("cmd_vel", "cmd_vel_nav")],
     )
 
@@ -336,6 +340,7 @@ def generate_launch_description():
         use_sim_time_arg,
         respawn_arg,
         log_level_arg,
+        controller_log_level_arg,
         use_rviz_arg,
         tuning_config_arg,
         mppi_params_file_arg,
