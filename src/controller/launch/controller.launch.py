@@ -82,7 +82,7 @@ def generate_launch_description():
     planner_scene_marker_topic_arg = DeclareLaunchArgument("planner_scene_marker_topic", default_value="/planner/debug_markers")
     planner_scene_frame_arg = DeclareLaunchArgument("planner_scene_frame", default_value="map")
     visualize_local_costmap_arg = DeclareLaunchArgument("visualize_local_costmap", default_value="true")
-    local_costmap_topic_arg = DeclareLaunchArgument("local_costmap_topic", default_value="/a_star/local_costmap")
+    local_costmap_topic_arg = DeclareLaunchArgument("local_costmap_topic", default_value="/local_costmap/costmap")
     astar_local_map_topic_arg = DeclareLaunchArgument("astar_local_map_topic", default_value="/map")
 
     # 1. GỌI NAV2 NODES (CHẠY MPPI)
@@ -219,18 +219,7 @@ def generate_launch_description():
         ],
     )
 
-    # 2. GỌI PLANNER NODE (Chỉ giữ A* smooth & local path service)
-    ampcc_node = Node(
-        package="controller",
-        executable="ampcc_node",
-        name="opt_planner",
-        output="screen",
-        parameters=[tuning_config, {"use_sim_time": use_sim_time}],
-        respawn=respawn,
-        arguments=["--ros-args", "--log-level", log_level],
-    )
-
-    # 3. GỌI RL BRIDGE (RL local goal -> A* service -> FollowPath/MPPI)
+    # 2. GỌI RL BRIDGE (RL local goal -> Nav2 A* -> FollowPath/MPPI)
     rl_bridge_node = Node(
         package="controller",
         executable="rl_ocp_policy_bridge.py",
@@ -249,7 +238,8 @@ def generate_launch_description():
                 "goal_topic": "/goal_pose",
                 "map_topic": "/map",
                 "cmd_topic": "/diff_cont/cmd_vel",
-                "planner_service": "/ocp_plann",
+                "planner_action": "/compute_path_to_pose",
+                "planner_id": "GridBased",
                 "follow_path_action": "/follow_path",
                 "controller_id": "FollowPath",
                 "goal_checker_id": "general_goal_checker",
@@ -310,7 +300,7 @@ def generate_launch_description():
                 "map_topic": "/map",
                 "scan_topic": "/scan",
                 "joint_state_topic": debug_joint_state_topic,
-                "astar_path_topic": "/a_star_path",
+                "astar_path_topic": "/rl/local_path",
                 "astar_local_map_topic": astar_local_map_topic,
                 "local_costmap_topic": local_costmap_topic,
                 "local_costmap_sample_step": 4,
@@ -375,7 +365,6 @@ def generate_launch_description():
         waypoint_follower,
         velocity_smoother,
         lifecycle_manager_navigation,
-        ampcc_node,
         rl_bridge_node,
         rviz_visualizer_node,
         rviz_node,
