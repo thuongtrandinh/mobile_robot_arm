@@ -42,7 +42,7 @@ class RlOcpPolicyBridge(Node):
         self.declare_parameter("action_range", 2.25)
 
         self.declare_parameter("goal_tolerance", 0.25)
-        self.declare_parameter("robot_radius", 0.25)
+        self.declare_parameter("robot_radius", 0.35)
         self.declare_parameter("axle_half_width", 0.23)
         self.declare_parameter("v_pref", 0.8)
         self.declare_parameter("obstacle_radius", 0.05)
@@ -64,7 +64,7 @@ class RlOcpPolicyBridge(Node):
         self.declare_parameter("human_max_age_sec", 0.6)
         self.declare_parameter("human_min_radius", 0.01)
         self.declare_parameter("human_max_radius", 1.50)
-        self.declare_parameter("human_safety_margin", 0.40)
+        self.declare_parameter("human_safety_margin", 0.00)
         self.declare_parameter("human_limit", 12)
         self.declare_parameter("auto_relax_constraints", False)
         self.declare_parameter("timer_period", 0.1)
@@ -92,7 +92,7 @@ class RlOcpPolicyBridge(Node):
         self.declare_parameter("visualize_actions", True)
         self.declare_parameter("action_marker_topic", "/policy/action_markers")
         self.declare_parameter("action_marker_frame", "odom")
-        self.declare_parameter("action_mask_clearance", 0.01)
+        self.declare_parameter("action_mask_clearance", 0.00)
         self.declare_parameter("publish_debug_joint_state", True)
         self.declare_parameter("debug_joint_state_topic", "/debug/joint_state_req")
         self.declare_parameter("publish_policy_debug_status", True)
@@ -1231,9 +1231,8 @@ class RlOcpPolicyBridge(Node):
 
     def _human_obstacle_tuples(self, humans: Optional[List[HumanState]] = None) -> List[Tuple[float, float, float]]:
         human_msgs = humans if humans is not None else self._process_human_msgs()
-        margin = max(0.0, float(self.human_safety_margin))
         return [
-            (float(h.px), float(h.py), float(h.radius) + margin)
+            (float(h.px), float(h.py), float(h.radius))
             for h in human_msgs
         ]
 
@@ -1814,7 +1813,7 @@ class RlOcpPolicyBridge(Node):
                 float(h.py),
                 float(h.vx),
                 float(h.vy),
-                float(h.radius) + max(0.0, float(self.human_safety_margin)),
+                float(h.radius),
             )
             for h in human_msgs
         ]

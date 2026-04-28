@@ -1000,7 +1000,7 @@ class AmpccRvizVisualizer(Node):
                 radius = max(0.05, float(obs[2])) + mask_margin
                 self._append_circle_segments(margin_marker.points, float(obs[0]), float(obs[1]), radius)
         for hum in humans:
-            radius = max(0.05, float(hum.get("radius", 0.25))) + mask_margin + human_safety_margin
+            radius = max(0.05, float(hum.get("radius", 0.25)))
             self._append_circle_segments(
                 margin_marker.points,
                 float(hum.get("px", 0.0)),

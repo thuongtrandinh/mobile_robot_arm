@@ -40,7 +40,7 @@ rl_ocp_policy_bridge:
     goal_tolerance: 0.18
     robot_radius: 0.25
     obstacle_radius: 0.05
-    action_mask_clearance: 0.02
+    action_mask_clearance: 0.00
     obstacle_sample_step: 16
     scan_filter_enabled: true
     scan_obstacle_max_range: 3.0
@@ -60,7 +60,7 @@ rl_ocp_policy_bridge:
     human_max_age_sec: 0.6
     human_min_radius: 0.01
     human_max_radius: 1.50
-    human_safety_margin: 0.40
+    human_safety_margin: 0.00
     human_limit: 12
     map_geometry_boundary_area_ratio: 1.0
     map_geometry_wall_linearity_ratio: 100.0
