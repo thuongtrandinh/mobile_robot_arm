@@ -11,7 +11,6 @@
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
-  <depend>rclcpp</depend>
   <depend>rclpy</depend>
   <depend>std_msgs</depend>
   <depend>geometry_msgs</depend>
@@ -19,15 +18,10 @@
   <depend>nav2_msgs</depend>
   <depend>sensor_msgs</depend>
   <depend>visualization_msgs</depend>
-  <depend>tf2</depend>
+  <depend>tf2_ros</depend>
   <depend>interfaces</depend>
-  <depend>eigen3_cmake_module</depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
-
-  <build_depend>eigen</build_depend>
-  <build_export_depend>eigen</build_export_depend>
-  <exec_depend>eigen</exec_depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>

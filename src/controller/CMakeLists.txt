@@ -77,11 +77,6 @@ ament_target_dependencies(ampcc_node
 
 # ---------- Install ----------
 install(
-  DIRECTORY include/
-  DESTINATION include
-)
-
-install(
   DIRECTORY launch
   DESTINATION share/${PROJECT_NAME}
 )
@@ -121,27 +116,6 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/config")
     DESTINATION share/${PROJECT_NAME}
   )
 endif()
-
-install(
-  TARGETS controller_core
-  EXPORT controller_coreTargets
-  LIBRARY DESTINATION lib
-  ARCHIVE DESTINATION lib
-  RUNTIME DESTINATION bin
-  INCLUDES DESTINATION include
-)
-
-install(
-  TARGETS ampcc_node
-  DESTINATION lib/${PROJECT_NAME}
-)
-
-# ---------- Export ----------
-ament_export_targets(controller_coreTargets HAS_LIBRARY_TARGET)
-ament_export_include_directories(include)
-ament_export_libraries(controller_core)
-ament_export_dependencies(rclcpp std_msgs geometry_msgs nav_msgs Eigen3)
-ament_export_dependencies(interfaces)
 
 # ---------- Testing ----------
 if(BUILD_TESTING)

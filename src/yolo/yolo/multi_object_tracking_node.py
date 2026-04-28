@@ -49,7 +49,6 @@ class MultiObjectTrackingNode(Node):
             if isinstance(value, str):
                 return value.lower() in ('true', '1', 'yes', 'on')
             return bool(value)
-
         self.obj_conf = float(get_param('yolo.object_conf_thresh', 0.65))
         self.iou_thresh = float(get_param('yolo.iou_thresh', 0.50))
         self.depth_nms_threshold = float(get_param('yolo.depth_nms_threshold', 0.5))
@@ -210,7 +209,6 @@ class MultiObjectTrackingNode(Node):
             device=self.inference_device,
             half=self.use_fp16 and self.use_cuda,
         )[0]
-
         raw_dets = []
         for box in results.boxes.data:
             x1, y1, x2, y2, conf, cls = box.cpu().numpy()

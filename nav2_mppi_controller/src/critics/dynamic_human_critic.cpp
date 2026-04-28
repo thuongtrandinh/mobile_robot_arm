@@ -40,12 +40,16 @@ void DynamicHumanCritic::initialize()
   getParam(weight_, "cost_weight", 1.0f);
   getParam(collision_cost_, "collision_cost", 100000.0f);
   getParam(safe_margin_, "safe_margin", 0.20f);
+  getParam(human_min_radius_, "human_min_radius", 0.20f);
+  getParam(human_max_radius_, "human_max_radius", 0.60f);
   getParam(data_timeout_, "data_timeout", 0.5f);
-  getParam(human_min_radius_, "human_min_radius", 0.01f);
-  getParam(human_max_radius_, "human_max_radius", 1.50f);
   getParam(human_topic_, "human_topic", std::string("/tracking/humans"));
   getParam(publish_debug_, "publish_debug", true);
   getParam(debug_topic_, "debug_topic", std::string("/debug/dynamic_human_critic"));
+
+  if (human_max_radius_ > 0.0f && human_min_radius_ > human_max_radius_) {
+    std::swap(human_min_radius_, human_max_radius_);
+  }
 
   robot_radius_ = static_cast<float>(costmap_ros_->getRobotRadius());
   getParam(robot_radius_, "robot_radius", robot_radius_);
@@ -63,9 +67,9 @@ void DynamicHumanCritic::initialize()
   RCLCPP_INFO(
     logger_,
     "DynamicHumanCritic subscribed to %s with weight=%f collision_cost=%f "
-    "safe_margin=%f robot_radius=%f human_radius=[%f,%f] data_timeout=%f debug_topic=%s.",
-    human_topic_.c_str(), weight_, collision_cost_, safe_margin_, robot_radius_,
-    human_min_radius_, human_max_radius_, data_timeout_, debug_topic_.c_str());
+    "safe_margin=%f robot_radius=%f data_timeout=%f debug_topic=%s.",
+    human_topic_.c_str(), weight_, collision_cost_, safe_margin_, robot_radius_, data_timeout_,
+    debug_topic_.c_str());
 }
 
 void DynamicHumanCritic::humansCallback(const interfaces::msg::HumanArray::SharedPtr msg)
@@ -76,12 +80,15 @@ void DynamicHumanCritic::humansCallback(const interfaces::msg::HumanArray::Share
 }
 
 std::vector<DynamicHumanCritic::Human> DynamicHumanCritic::getHumansInFrame(
-  const std::string & target_frame)
+  const std::string & target_frame, std::string * debug_reason)
 {
   interfaces::msg::HumanArray humans_msg;
   {
     std::lock_guard<std::mutex> lock(humans_mutex_);
     if (!has_humans_) {
+      if (debug_reason) {
+        *debug_reason = "reason=no_humans_received";
+      }
       return {};
     }
     humans_msg = latest_humans_;
@@ -89,13 +96,31 @@ std::vector<DynamicHumanCritic::Human> DynamicHumanCritic::getHumansInFrame(
 
   auto node = parent_.lock();
   if (!node) {
+    if (debug_reason) {
+      *debug_reason = "reason=node_expired";
+    }
     return {};
   }
 
-  if (data_timeout_ > 0.0f && humans_msg.header.stamp.sec != 0) {
-    const double age = (node->now() - rclcpp::Time(humans_msg.header.stamp)).seconds();
-    if (age > data_timeout_ && age < 60.0) {
-      return {};
+  if (data_timeout_ > 0.0f) {
+    if (humans_msg.header.stamp.sec != 0 || humans_msg.header.stamp.nanosec != 0) {
+      const auto now = node->now();
+      const auto msg_stamp = rclcpp::Time(humans_msg.header.stamp);
+      const auto age = now - msg_stamp;
+      if (age.seconds() > data_timeout_) {
+        if (debug_reason) {
+          std::ostringstream out;
+          out << "reason=humans_stale age_sec=" << age.seconds()
+              << " msg_stamp=" << msg_stamp.seconds()
+              << " now=" << now.seconds()
+              << " use_sim_time="
+              << (node->get_clock()->get_clock_type() == RCL_ROS_TIME ? "true" : "false");
+          *debug_reason = out.str();
+        }
+        return {};
+      }
+    } else if (debug_reason) {
+      *debug_reason = "reason=stamp_zero";
     }
   }
 
@@ -114,6 +139,11 @@ std::vector<DynamicHumanCritic::Human> DynamicHumanCritic::getHumansInFrame(
         logger_, *node->get_clock(), 2000,
         "DynamicHumanCritic waiting for transform %s -> %s: %s",
         source_frame.c_str(), target_frame.c_str(), ex.what());
+      if (debug_reason) {
+        std::ostringstream out;
+        out << "reason=missing_transform from=" << source_frame << " to=" << target_frame;
+        *debug_reason = out.str();
+      }
       return {};
     }
   }
@@ -123,10 +153,14 @@ std::vector<DynamicHumanCritic::Human> DynamicHumanCritic::getHumansInFrame(
 
   for (const auto & src : humans_msg.humans) {
     Human human;
-    const float radius = static_cast<float>(src.radius);
-    const float min_radius = std::max(0.01f, human_min_radius_);
-    const float max_radius = std::max(min_radius, human_max_radius_);
-    human.radius = std::clamp(radius, min_radius, max_radius);
+    const float source_radius = static_cast<float>(std::max(0.0, src.radius));
+    if (human_max_radius_ > 0.0f) {
+      human.radius = std::clamp(source_radius, human_min_radius_, human_max_radius_);
+    } else if (human_min_radius_ > 0.0f) {
+      human.radius = std::max(source_radius, human_min_radius_);
+    } else {
+      human.radius = source_radius;
+    }
 
     if (needs_transform) {
       geometry_msgs::msg::PointStamped point_in;
@@ -163,6 +197,17 @@ std::vector<DynamicHumanCritic::Human> DynamicHumanCritic::getHumansInFrame(
   return humans;
 }
 
+void DynamicHumanCritic::publishDebugStatus(const std::string & status) const
+{
+  if (!publish_debug_ || !debug_pub_ || debug_pub_->get_subscription_count() == 0) {
+    return;
+  }
+
+  std_msgs::msg::String msg;
+  msg.data = status;
+  debug_pub_->publish(msg);
+}
+
 void DynamicHumanCritic::score(CriticData & data)
 {
   if (!enabled_) {
@@ -171,8 +216,10 @@ void DynamicHumanCritic::score(CriticData & data)
 
   const std::string target_frame = data.state.pose.header.frame_id.empty() ?
     costmap_ros_->getGlobalFrameID() : data.state.pose.header.frame_id;
-  const auto humans = getHumansInFrame(target_frame);
+  std::string debug_reason;
+  const auto humans = getHumansInFrame(target_frame, &debug_reason);
   if (humans.empty()) {
+    publishDebugStatus("enabled=true humans=0 " + debug_reason);
     return;
   }
 
@@ -207,6 +254,7 @@ void DynamicHumanCritic::score(CriticData & data)
   if (publish_debug_ && debug_pub_->get_subscription_count() > 0) {
     const auto colliding_flags = total_human_cost > 0.0f;
     colliding_trajectory_count = static_cast<size_t>(xt::sum(xt::cast<size_t>(colliding_flags))());
+    const float total_added_cost = weight_ * xt::sum(total_human_cost)();
     const float max_added_cost = xt::amax(total_human_cost)() * weight_;
     const float mean_added_cost = xt::mean(total_human_cost)() * weight_;
 
@@ -219,6 +267,7 @@ void DynamicHumanCritic::score(CriticData & data)
         << " colliding_trajectories=" << colliding_trajectory_count
         << " min_predicted_distance=" << min_distance
         << " safe_collision_radius_min=" << robot_radius_ + safe_margin_
+        << " total_added_cost=" << total_added_cost
         << " max_added_cost=" << max_added_cost
         << " mean_added_cost=" << mean_added_cost;
     msg.data = out.str();

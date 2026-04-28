@@ -110,7 +110,8 @@ class RlOcpPolicyBridge(Node):
         self.declare_parameter("map_topic", "/map")
         self.declare_parameter("human_topic", "/tracking/humans")
         self.declare_parameter("map_frame", "map")
-        self.declare_parameter("planner_service", "/ocp_plann")
+        self.declare_parameter("planner_action", "/compute_path_to_pose")
+        self.declare_parameter("planner_id", "GridBased")
         self.declare_parameter("follow_path_action", "/follow_path")
         self.declare_parameter("controller_id", "FollowPath")
         self.declare_parameter("goal_checker_id", "general_goal_checker")
@@ -227,7 +228,8 @@ class RlOcpPolicyBridge(Node):
         self.map_topic = self.get_parameter("map_topic").get_parameter_value().string_value
         self.human_topic = self.get_parameter("human_topic").get_parameter_value().string_value
         self.map_frame = self.get_parameter("map_frame").get_parameter_value().string_value
-        self.planner_service = self.get_parameter("planner_service").get_parameter_value().string_value
+        self.planner_action = self.get_parameter("planner_action").get_parameter_value().string_value
+        self.planner_id = self.get_parameter("planner_id").get_parameter_value().string_value
         self.follow_path_action = self.get_parameter("follow_path_action").get_parameter_value().string_value
         self.controller_id = self.get_parameter("controller_id").get_parameter_value().string_value
         self.goal_checker_id = self.get_parameter("goal_checker_id").get_parameter_value().string_value
@@ -321,11 +323,11 @@ class RlOcpPolicyBridge(Node):
         self.policy_worker_busy = False
         self.policy_worker_ready = False
         self.policy_worker_last_error = ""
-        self.last_request_for_viz: Optional[OcpLocalPlann.Request] = None
+        self.last_planner_sub_goal: Optional[Tuple[float, float]] = None
         self.consecutive_planner_failures = 0
         self.success_streak = 0
         self.goal_reached = False
-        self.last_astar_path_for_viz: List[Tuple[float, float]] = []
+        self.last_planner_path_for_viz: List[Tuple[float, float]] = []
         self.last_mask_applied = False
         self.last_mask_snap_distance = 0.0
         self.tf_buffer = Buffer()
@@ -367,13 +369,13 @@ class RlOcpPolicyBridge(Node):
 
         self.get_logger().info("RL OCP policy bridge started")
         self.get_logger().info(f"Model: {self.model_path}")
-        self.get_logger().info(f"Service: {self.planner_service}")
+        self.get_logger().info(f"Planner action: {self.planner_action} (planner_id={self.planner_id})")
         self.get_logger().info(f"FollowPath action: {self.follow_path_action}")
         self.get_logger().info(
             f"Loop rates: RL={1.0 / self.policy_period:.2f} Hz, service={1.0 / self.service_period:.2f} Hz"
         )
         self.get_logger().info(f"Goal source mode: {self.goal_source_mode}")
-        self.get_logger().info("Pipeline mode: RL/RViz local goal -> A* service -> MPPI FollowPath")
+        self.get_logger().info("Pipeline mode: RL/RViz local goal -> Nav2 ComputePathToPose -> MPPI FollowPath")
         self.get_logger().info(f"Auto relax constraints: {self.auto_relax_constraints}")
         self.get_logger().info(f"Action visualization: {self.visualize_actions} ({self.action_marker_topic})")
         self.get_logger().info(
@@ -848,8 +850,11 @@ class RlOcpPolicyBridge(Node):
             return
 
     @staticmethod
-    def _path_points_from_response(res) -> List[Tuple[float, float]]:
-        return [(float(pt.x), float(pt.y)) for pt in res.astar_path]
+    def _path_points_from_path_msg(path_msg: Path) -> List[Tuple[float, float]]:
+        return [
+            (float(pose.pose.position.x), float(pose.pose.position.y))
+            for pose in path_msg.poses
+        ]
 
     @staticmethod
     def _yaw_from_quaternion(x: float, y: float, z: float, w: float) -> float:
@@ -1376,7 +1381,7 @@ class RlOcpPolicyBridge(Node):
     def _hold_final_goal_stop(self) -> None:
         self.goal_reached = True
         self.latest_sub_goal = None
-        self.last_astar_path_for_viz = []
+        self.last_planner_path_for_viz = []
         self.last_sent_follow_path = None
         self.pending_follow_path_msg = None
         self._cancel_follow_path_goal()
@@ -1517,7 +1522,7 @@ class RlOcpPolicyBridge(Node):
         angle_inc = self.latest_scan.angle_increment
         r_min = self.latest_scan.range_min
         r_max = self.latest_scan.range_max
-        if self.scan_obstacle_max_range > 0.0:
+        if self.scan_filter_enabled and self.scan_obstacle_max_range > 0.0:
             r_max = min(r_max, float(self.scan_obstacle_max_range))
 
         for i in range(0, len(ranges), max(1, self.obstacle_sample_step)):
@@ -1527,6 +1532,8 @@ class RlOcpPolicyBridge(Node):
             if r < r_min or r > r_max:
                 continue
             if r < self_filter_min_range:
+                continue
+            if not self._scan_has_neighbor_support(i, float(r)):
                 continue
             if not self._scan_has_neighbor_support(i, float(r)):
                 continue
@@ -1558,8 +1565,6 @@ class RlOcpPolicyBridge(Node):
             obstacles.sort(key=lambda p: math.hypot(float(p[0]) - px_map, float(p[1]) - py_map))
             obstacles = obstacles[: max(1, int(self.scan_obstacle_limit))]
 
-        self._cached_scan_seq = self.scan_seq
-        self._cached_scan_obstacles = list(obstacles)
         return obstacles
 
     def _scan_to_obstacle_tuples(self) -> List[Tuple[float, float, float]]:
@@ -1819,7 +1824,7 @@ class RlOcpPolicyBridge(Node):
                 "map_local_polygons_count": int(self.last_sent_map_polygons_count),
                 "planner_fail_streak": int(self.consecutive_planner_failures),
                 "policy_hz": float(1.0 / self.policy_period),
-                "planner_service_hz": float(1.0 / self.service_period),
+                "planner_hz": float(1.0 / self.service_period),
                 "goal_source_mode": str(self.goal_source_mode),
                 "selected_sub_goal": list(selected_sub_goal) if selected_sub_goal is not None else None,
                 "cached_sub_goal": list(self.latest_sub_goal) if self.latest_sub_goal is not None else None,
@@ -1866,8 +1871,8 @@ class RlOcpPolicyBridge(Node):
         self.action_debug_pub.publish(msg)
 
     def _scan_to_obstacle_msgs(self) -> List[ObstacleState]:
-        scan_tuples = self._scan_only_obstacle_tuples()
-        map_tuples = self._map_to_obstacle_tuples()
+        # Use both lidar and map-grid circles, then keep only nearest obstacles.
+        obs_tuples = self._scan_to_obstacle_tuples()
         pose_map = self._current_pose_in_map_frame()
         if pose_map is not None:
             px, py = pose_map
@@ -1947,8 +1952,8 @@ class RlOcpPolicyBridge(Node):
         if self.current_pose is None or self.current_twist is None or self.current_goal is None:
             return
 
-        if not self.ocp_client.wait_for_service(timeout_sec=0.01):
-            self.get_logger().warn(f"Service {self.planner_service} not available")
+        if not self.nav2_planner_client.wait_for_server(timeout_sec=0.01):
+            self.get_logger().warn(f"Planner action {self.planner_action} not available")
             return
 
         pose_map = self._current_pose_with_yaw_in_map_frame()
@@ -1963,50 +1968,55 @@ class RlOcpPolicyBridge(Node):
             return
 
         px, py, yaw = pose_map
-        gx, gy = goal_map
         wheel_speeds = self._wheel_speeds_from_twist()
         if wheel_speeds is None:
             return
         v_left, v_right = wheel_speeds
 
-        req = OcpLocalPlann.Request()
-        req.ob.robot_state.pose.x = float(px)
-        req.ob.robot_state.pose.y = float(py)
-        req.ob.robot_state.pose.theta = float(yaw)
-        req.ob.robot_state.vl = float(v_left)
-        req.ob.robot_state.vr = float(v_right)
-        req.ob.robot_state.gx = float(gx)
-        req.ob.robot_state.gy = float(gy)
-        req.ob.robot_state.v_pref = float(self.v_pref)
-        req.ob.robot_state.radius = float(self.axle_half_width)
+        now = self.get_clock().now().to_msg()
+        start = PoseStamped()
+        start.header.stamp = now
+        start.header.frame_id = self.map_frame
+        start.pose.position.x = float(px)
+        start.pose.position.y = float(py)
+        qz, qw = self._quaternion_from_yaw(float(yaw))
+        start.pose.orientation.z = qz
+        start.pose.orientation.w = qw
 
-        req.ob.obstacle_states = self._scan_to_obstacle_msgs()
-        poly_states, walls = self._get_map_geometry_msgs()
-        req.ob.walls = walls
-        req.ob.poly_states = poly_states
-        req.ob.human_states = self._process_human_msgs() if self.enforce_scene_entities else []
-        req.ob.header.stamp = self.get_clock().now().to_msg()
-        req.ob.header.frame_id = "map"
+        goal = PoseStamped()
+        goal.header.stamp = now
+        goal.header.frame_id = self.map_frame
+        goal.pose.position.x = float(sub_goal[0])
+        goal.pose.position.y = float(sub_goal[1])
+        goal.pose.orientation.w = 1.0
 
-        if self.publish_debug_joint_state:
-            self.debug_joint_state_pub.publish(req.ob)
-
-        req.sub_goal.x = float(sub_goal[0])
-        req.sub_goal.y = float(sub_goal[1])
+        nav2_goal = ComputePathToPose.Goal()
+        nav2_goal.start = start
+        nav2_goal.goal = goal
+        nav2_goal.planner_id = self.planner_id
+        nav2_goal.use_start = True
 
         self._publish_local_goal(sub_goal)
         self.last_wheel_speed = (v_left, v_right)
-        self.last_request_for_viz = req
+        self.last_planner_sub_goal = (float(sub_goal[0]), float(sub_goal[1]))
 
-        future = self.ocp_client.call_async(req)
-        future.add_done_callback(self._on_planner_response)
+        future = self.nav2_planner_client.send_goal_async(nav2_goal)
+        future.add_done_callback(self._on_planner_goal_response)
         self.pending_future = future
 
     def _publish_planner_scene_debug(
         self,
-        req: OcpLocalPlann.Request,
-        astar_path: List[Tuple[float, float]],
+        sub_goal: Tuple[float, float],
+        path_points: List[Tuple[float, float]],
     ) -> None:
+        pose_map = self._current_pose_with_yaw_in_map_frame()
+        goal_map = self._current_goal_in_map_frame()
+        if pose_map is None or goal_map is None:
+            return
+
+        obstacle_states = self._scan_to_obstacle_msgs()
+        poly_states, walls = self._get_map_geometry_msgs()
+        human_states = self._process_human_msgs() if self.enforce_scene_entities else []
         x_lim = min(self.effective_half_width, self.planner_x_limit)
         y_lim = min(self.effective_half_height, self.planner_y_limit)
         payload = {
@@ -2019,27 +2029,27 @@ class RlOcpPolicyBridge(Node):
                 "ymax": float(y_lim),
             },
             "robot": {
-                "x": float(req.ob.robot_state.pose.x),
-                "y": float(req.ob.robot_state.pose.y),
-                "theta": float(req.ob.robot_state.pose.theta),
+                "x": float(pose_map[0]),
+                "y": float(pose_map[1]),
+                "theta": float(pose_map[2]),
                 "radius": float(self.robot_radius),
             },
             "goal": {
-                "x": float(req.ob.robot_state.gx),
-                "y": float(req.ob.robot_state.gy),
+                "x": float(goal_map[0]),
+                "y": float(goal_map[1]),
             },
             "sub_goal": {
-                "x": float(req.sub_goal.x),
-                "y": float(req.sub_goal.y),
+                "x": float(sub_goal[0]),
+                "y": float(sub_goal[1]),
             },
             "walls": [
-                [float(w.sx), float(w.sy), float(w.ex), float(w.ey)] for w in req.ob.walls
+                [float(w.sx), float(w.sy), float(w.ex), float(w.ey)] for w in walls
             ],
             "obstacles": [
-                [float(o.px), float(o.py), float(o.radius)] for o in req.ob.obstacle_states
+                [float(o.px), float(o.py), float(o.radius)] for o in obstacle_states
             ],
             "polygons": [
-                [[float(v.x), float(v.y)] for v in poly.vertices] for poly in req.ob.poly_states
+                [[float(v.x), float(v.y)] for v in poly.vertices] for poly in poly_states
             ],
             "humans": [
                 {
@@ -2049,12 +2059,13 @@ class RlOcpPolicyBridge(Node):
                     "vy": float(h.vy),
                     "radius": float(h.radius),
                 }
-                for h in req.ob.human_states
+                for h in human_states
             ],
-            "trajectory": [[float(px), float(py)] for px, py in astar_path],
+            "trajectory": [[float(px), float(py)] for px, py in path_points],
             "path_debug": {
-                "astar_points": int(len(astar_path)),
+                "path_points": int(len(path_points)),
                 "goal_source_mode": str(self.goal_source_mode),
+                "global_planner": "nav2_navfn_planner/NavfnPlanner",
                 "tracking_controller": "nav2_mppi_controller::MPPIController",
             },
         }
@@ -2062,29 +2073,53 @@ class RlOcpPolicyBridge(Node):
         msg.data = json.dumps(payload)
         self.planner_scene_debug_pub.publish(msg)
 
-    def _on_planner_response(self, future) -> None:
-        self.pending_future = None
+    def _on_planner_goal_response(self, future) -> None:
         try:
-            res = future.result()
+            goal_handle = future.result()
         except Exception as exc:
-            self.get_logger().error(f"Planner service call failed: {exc}")
+            self.pending_future = None
+            self.get_logger().error(f"Planner action goal send failed: {exc}")
             return
 
-        if res.success:
-            self.consecutive_planner_failures = 0
-            self.success_streak += 1
-        else:
+        if goal_handle is None or not goal_handle.accepted:
+            self.pending_future = None
+            self.success_streak = 0
+            self.consecutive_planner_failures += 1
+            self.get_logger().warn(
+                "Nav2 planner rejected goal (count=%d)" % int(self.consecutive_planner_failures)
+            )
+            return
+
+        result_future = goal_handle.get_result_async()
+        result_future.add_done_callback(self._on_planner_result)
+        self.pending_future = result_future
+
+    def _on_planner_result(self, future) -> None:
+        self.pending_future = None
+        try:
+            wrapped_result = future.result()
+        except Exception as exc:
+            self.success_streak = 0
+            self.consecutive_planner_failures += 1
+            self.get_logger().error(f"Planner action result failed: {exc}")
+            return
+
+        result = wrapped_result.result if wrapped_result is not None else None
+        path_msg = result.path if result is not None else Path()
+        path_points = self._path_points_from_path_msg(path_msg)
+        self.last_planner_path_for_viz = list(path_points)
+        if self.last_planner_sub_goal is not None:
+            self._publish_planner_scene_debug(self.last_planner_sub_goal, path_points)
+
+        if len(path_msg.poses) < 2:
             self.success_streak = 0
             self.consecutive_planner_failures += 1
             if self.consecutive_planner_failures % 5 == 1:
                 self.get_logger().warn(
-                    "Planner reported failure (count=%d, map_walls=%d, map_polygons=%d)"
-                    % (
-                        int(self.consecutive_planner_failures),
-                        int(len(self.map_geometry_walls)),
-                        int(len(self.map_geometry_polygons)),
+                    "Nav2 planner returned empty/short path (count=%d)"
+                    % int(self.consecutive_planner_failures)
                 )
-                )
+            return
 
         astar_path = self._path_points_from_response(res)
         self.last_astar_path_for_viz = list(astar_path)

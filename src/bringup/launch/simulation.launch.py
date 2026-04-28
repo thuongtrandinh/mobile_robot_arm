@@ -191,6 +191,20 @@ def generate_launch_description():
         condition=IfCondition(launch_yolo),
     )
 
+    yolo_tracking = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(
+                get_package_share_directory("yolo"),
+                "launch",
+                "multi_object_tracking.launch.py",
+            )
+        ),
+        launch_arguments={
+            "use_sim_time": use_sim_time,
+        }.items(),
+        condition=IfCondition(launch_yolo),
+    )
+
     return LaunchDescription([
         use_sim_time_arg,
         launch_rviz_arg,

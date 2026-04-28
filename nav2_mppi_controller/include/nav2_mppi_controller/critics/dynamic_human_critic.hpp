@@ -45,7 +45,9 @@ protected:
   };
 
   void humansCallback(const interfaces::msg::HumanArray::SharedPtr msg);
-  std::vector<Human> getHumansInFrame(const std::string & target_frame);
+  std::vector<Human> getHumansInFrame(
+    const std::string & target_frame, std::string * debug_reason = nullptr);
+  void publishDebugStatus(const std::string & status) const;
 
   rclcpp::Subscription<interfaces::msg::HumanArray>::SharedPtr humans_sub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr debug_pub_;
