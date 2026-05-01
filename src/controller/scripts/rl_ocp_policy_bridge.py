@@ -15,14 +15,12 @@ from interfaces.msg import ObstacleState, WallState, PolyState, HumanState, Huma
 from interfaces.msg import JointState as InterfaceJointState
 from interfaces.srv import OcpLocalPlann
 from geometry_msgs.msg import PoseStamped, Twist
-from nav2_msgs.action import FollowPath
-from nav_msgs.msg import OccupancyGrid, Odometry, Path
-from nav2_msgs.action import FollowPath
+from nav2_msgs.action import FollowPath, ComputePathToPose
 from nav_msgs.msg import OccupancyGrid, Odometry, Path
 from rcl_interfaces.msg import SetParametersResult
 from rclpy.duration import Duration
 from rclpy.node import Node
-from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
+from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
 from rclpy.time import Time
 from sensor_msgs.msg import LaserScan
 from std_msgs.msg import String
@@ -44,34 +42,38 @@ class RlOcpPolicyBridge(Node):
         self.declare_parameter("action_range", 2.25)
 
         self.declare_parameter("goal_tolerance", 0.25)
-        self.declare_parameter("robot_radius", 0.25)
+        self.declare_parameter("robot_radius", 0.35)
         self.declare_parameter("axle_half_width", 0.23)
         self.declare_parameter("v_pref", 0.8)
-        self.declare_parameter("obstacle_radius", 0.2)
-        self.declare_parameter("obstacle_sample_step", 16)
-        self.declare_parameter("scan_filter_enabled", True)
+        self.declare_parameter("obstacle_radius", 0.1)
+        self.declare_parameter("obstacle_sample_step", 1)
+        self.declare_parameter("scan_filter_enabled", False)
         self.declare_parameter("scan_obstacle_max_range", 3.0)
-        self.declare_parameter("scan_neighbor_window", 2)
-        self.declare_parameter("scan_min_neighbor_count", 2)
+        self.declare_parameter("scan_self_filter_min_range", 0.05)
+        self.declare_parameter("scan_neighbor_window", 1)
+        self.declare_parameter("scan_min_neighbor_count", 1)
         self.declare_parameter("scan_neighbor_max_delta", 0.18)
-        self.declare_parameter("scan_persistence_hits", 2)
+        self.declare_parameter("scan_persistence_hits", 1)
         self.declare_parameter("scan_persistence_decay_scans", 4)
         self.declare_parameter("scan_persistence_resolution", 0.12)
-        self.declare_parameter("scan_obstacle_limit", 60)
+        self.declare_parameter("scan_obstacle_limit", 300)
         self.declare_parameter("use_map_static_obstacles", True)
-        self.declare_parameter("map_static_obstacle_radius", 0.2)
+        self.declare_parameter("map_static_obstacle_radius", 0.05)
         self.declare_parameter("map_static_sample_step_m", 0.3)
         self.declare_parameter("map_static_obstacle_limit", 40)
         self.declare_parameter("enforce_scene_entities", True)
-        self.declare_parameter("human_fallback_enabled", True)
-        self.declare_parameter("human_fallback_limit", 20)
-        self.declare_parameter("human_fallback_radius", 0.25)
+        self.declare_parameter("human_max_age_sec", 2.0)  # Increased from 0.6s to avoid dropping delayed YOLO data
+        self.declare_parameter("human_min_radius", 0.01)
+        self.declare_parameter("human_max_radius", 1.50)
+        self.declare_parameter("human_safety_margin", 0.2)
+        self.declare_parameter("human_limit", 12)
         self.declare_parameter("auto_relax_constraints", False)
         self.declare_parameter("timer_period", 0.1)
         self.declare_parameter("policy_hz", 10.0)
         self.declare_parameter("service_hz", 10.0)
         self.declare_parameter("goal_source_mode", self._GOAL_SOURCE_RL)
         self.declare_parameter("policy_period", 0.2)
+        self.declare_parameter("tf_timeout_sec", 0.1)
 
         self.declare_parameter("planner_half_width", 5.8)
         self.declare_parameter("planner_half_height", 9.8)
@@ -91,7 +93,7 @@ class RlOcpPolicyBridge(Node):
         self.declare_parameter("visualize_actions", True)
         self.declare_parameter("action_marker_topic", "/policy/action_markers")
         self.declare_parameter("action_marker_frame", "odom")
-        self.declare_parameter("action_mask_clearance", 0.05)
+        self.declare_parameter("action_mask_clearance", 0.1)
         self.declare_parameter("publish_debug_joint_state", True)
         self.declare_parameter("debug_joint_state_topic", "/debug/joint_state_req")
         self.declare_parameter("publish_policy_debug_status", True)
@@ -108,10 +110,12 @@ class RlOcpPolicyBridge(Node):
         self.declare_parameter("map_topic", "/map")
         self.declare_parameter("human_topic", "/tracking/humans")
         self.declare_parameter("map_frame", "map")
-        self.declare_parameter("planner_service", "/ocp_plann")
+        self.declare_parameter("planner_action", "/compute_path_to_pose")
+        self.declare_parameter("planner_id", "GridBased")
         self.declare_parameter("follow_path_action", "/follow_path")
         self.declare_parameter("controller_id", "FollowPath")
         self.declare_parameter("goal_checker_id", "general_goal_checker")
+        self.declare_parameter("planner_service", "/ocp_local_plan")
         self.declare_parameter("local_goal_topic", "/rl/local_goal")
         self.declare_parameter("local_path_topic", "/rl/local_path")
         self.declare_parameter("follow_path_replan_min_interval_sec", 0.80)
@@ -137,6 +141,7 @@ class RlOcpPolicyBridge(Node):
         self.obstacle_sample_step = self.get_parameter("obstacle_sample_step").get_parameter_value().integer_value
         self.scan_filter_enabled = self.get_parameter("scan_filter_enabled").get_parameter_value().bool_value
         self.scan_obstacle_max_range = self.get_parameter("scan_obstacle_max_range").get_parameter_value().double_value
+        self.scan_self_filter_min_range = self.get_parameter("scan_self_filter_min_range").get_parameter_value().double_value
         self.scan_neighbor_window = self.get_parameter("scan_neighbor_window").get_parameter_value().integer_value
         self.scan_min_neighbor_count = self.get_parameter("scan_min_neighbor_count").get_parameter_value().integer_value
         self.scan_neighbor_max_delta = self.get_parameter("scan_neighbor_max_delta").get_parameter_value().double_value
@@ -149,9 +154,11 @@ class RlOcpPolicyBridge(Node):
         self.map_static_sample_step_m = self.get_parameter("map_static_sample_step_m").get_parameter_value().double_value
         self.map_static_obstacle_limit = self.get_parameter("map_static_obstacle_limit").get_parameter_value().integer_value
         self.enforce_scene_entities = self.get_parameter("enforce_scene_entities").get_parameter_value().bool_value
-        self.human_fallback_enabled = self.get_parameter("human_fallback_enabled").get_parameter_value().bool_value
-        self.human_fallback_limit = self.get_parameter("human_fallback_limit").get_parameter_value().integer_value
-        self.human_fallback_radius = self.get_parameter("human_fallback_radius").get_parameter_value().double_value
+        self.human_max_age_sec = self.get_parameter("human_max_age_sec").get_parameter_value().double_value
+        self.human_min_radius = self.get_parameter("human_min_radius").get_parameter_value().double_value
+        self.human_max_radius = self.get_parameter("human_max_radius").get_parameter_value().double_value
+        self.human_safety_margin = self.get_parameter("human_safety_margin").get_parameter_value().double_value
+        self.human_limit = self.get_parameter("human_limit").get_parameter_value().integer_value
         self.auto_relax_constraints = self.get_parameter("auto_relax_constraints").get_parameter_value().bool_value
         self.policy_hz = max(0.001, self.get_parameter("policy_hz").get_parameter_value().double_value)
         self.service_hz = max(0.001, self.get_parameter("service_hz").get_parameter_value().double_value)
@@ -160,6 +167,9 @@ class RlOcpPolicyBridge(Node):
         )
         self.policy_period = 1.0 / self.policy_hz
         self.service_period = 1.0 / self.service_hz
+        # FIX: Set tf_timeout_sec to 0.0 to prevent deadlock in SingleThreadedExecutor
+        # Any timeout > 0 inside a Timer callback blocks entire ROS2 thread from receiving TF updates
+        self.tf_timeout_sec = 0.0
         self.planner_half_width = self.get_parameter("planner_half_width").get_parameter_value().double_value
         self.planner_half_height = self.get_parameter("planner_half_height").get_parameter_value().double_value
         self.planner_hard_half_width = self.get_parameter("planner_hard_half_width").get_parameter_value().double_value
@@ -218,10 +228,12 @@ class RlOcpPolicyBridge(Node):
         self.map_topic = self.get_parameter("map_topic").get_parameter_value().string_value
         self.human_topic = self.get_parameter("human_topic").get_parameter_value().string_value
         self.map_frame = self.get_parameter("map_frame").get_parameter_value().string_value
-        self.planner_service = self.get_parameter("planner_service").get_parameter_value().string_value
+        self.planner_action = self.get_parameter("planner_action").get_parameter_value().string_value
+        self.planner_id = self.get_parameter("planner_id").get_parameter_value().string_value
         self.follow_path_action = self.get_parameter("follow_path_action").get_parameter_value().string_value
         self.controller_id = self.get_parameter("controller_id").get_parameter_value().string_value
         self.goal_checker_id = self.get_parameter("goal_checker_id").get_parameter_value().string_value
+        self.planner_service = self.get_parameter("planner_service").get_parameter_value().string_value
         self.local_goal_topic = self.get_parameter("local_goal_topic").get_parameter_value().string_value
         self.local_path_topic = self.get_parameter("local_path_topic").get_parameter_value().string_value
         self.follow_path_replan_min_interval_sec = max(
@@ -255,8 +267,11 @@ class RlOcpPolicyBridge(Node):
         self.current_goal: Optional[Tuple[float, float, float]] = None
         self.current_goal_frame: str = ""
         self.latest_scan: Optional[LaserScan] = None
+        self.scan_frame: str = ""
         self.scan_seq = 0
         self.scan_persistence: Dict[Tuple[int, int], Tuple[int, int]] = {}
+        self._cached_scan_seq: int = -1
+        self._cached_scan_obstacles: List[Tuple[float, float, float]] = []
         self.latest_humans: Optional[HumanArray] = None
         self.map_bounds: Optional[Tuple[float, float, float, float]] = None
         self.map_resolution: Optional[float] = None
@@ -271,12 +286,14 @@ class RlOcpPolicyBridge(Node):
         self.map_geometry_polygons: List[List[Tuple[float, float]]] = []
         self.map_geometry_walls: List[Tuple[float, float, float, float]] = []
         self.map_static_circles: List[Tuple[float, float, float]] = []
+        self._cached_map_pose: Optional[Tuple[float, float]] = None
+        self._cached_map_obs: List[Tuple[float, float, float]] = []
+        self._cached_map_signature: Optional[Tuple[int, int, float, float, float]] = None
         self.last_sent_map_polygons_count = 0
         self.last_sent_map_walls_count = 0
         self._last_map_geometry_log_ns = 0
         self._last_sent_geometry_log_ns = 0
 
-        # Keep Python-side request geometry aligned with hard-coded C++ planner map limits.
         self.planner_x_limit = 5.5
         self.planner_y_limit = 9.8
 
@@ -307,11 +324,11 @@ class RlOcpPolicyBridge(Node):
         self.policy_worker_busy = False
         self.policy_worker_ready = False
         self.policy_worker_last_error = ""
-        self.last_request_for_viz: Optional[OcpLocalPlann.Request] = None
+        self.last_planner_sub_goal: Optional[Tuple[float, float]] = None
         self.consecutive_planner_failures = 0
         self.success_streak = 0
         self.goal_reached = False
-        self.last_astar_path_for_viz: List[Tuple[float, float]] = []
+        self.last_planner_path_for_viz: List[Tuple[float, float]] = []
         self.last_mask_applied = False
         self.last_mask_snap_distance = 0.0
         self.tf_buffer = Buffer()
@@ -319,16 +336,23 @@ class RlOcpPolicyBridge(Node):
         self._start_policy_worker()
 
         self.create_subscription(Odometry, self.odom_topic, self._odom_callback, 10)
-        self.create_subscription(LaserScan, self.scan_topic, self._scan_callback, 10)
+        self.create_subscription(LaserScan, self.scan_topic, self._scan_callback, qos_profile_sensor_data)
         self.create_subscription(PoseStamped, self.goal_topic, self._goal_callback, 10)
-        self.create_subscription(HumanArray, self.human_topic, self._human_callback, 10)
-        map_qos = QoSProfile(
+        self.create_subscription(HumanArray, self.human_topic, self._human_callback, qos_profile_sensor_data)  # Fix QoS mismatch with YOLO publisher
+        map_qos_volatile = QoSProfile(
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.VOLATILE,
+        )
+        map_qos_transient = QoSProfile(
             history=HistoryPolicy.KEEP_LAST,
             depth=1,
             reliability=ReliabilityPolicy.RELIABLE,
             durability=DurabilityPolicy.TRANSIENT_LOCAL,
         )
-        self.create_subscription(OccupancyGrid, self.map_topic, self._map_callback, map_qos)
+        self.create_subscription(OccupancyGrid, self.map_topic, self._map_callback, map_qos_volatile)
+        self.create_subscription(OccupancyGrid, self.map_topic, self._map_callback, map_qos_transient)
 
         self.debug_joint_state_pub = self.create_publisher(InterfaceJointState, self.debug_joint_state_topic, 10)
         self.policy_debug_status_pub = self.create_publisher(String, self.policy_debug_status_topic, 10)
@@ -338,23 +362,22 @@ class RlOcpPolicyBridge(Node):
         self.local_path_pub = self.create_publisher(Path, self.local_path_topic, 10)
         self.stop_cmd_pub = self.create_publisher(Twist, self.stop_cmd_topic, 10)
         self.ocp_client = self.create_client(OcpLocalPlann, self.planner_service)
+        self.nav2_planner_client = ActionClient(self, ComputePathToPose, self.planner_action)
         self.follow_path_client = ActionClient(self, FollowPath, self.follow_path_action)
         self.add_on_set_parameters_callback(self._on_parameters_changed)
 
-        # Keep legacy timer_period declared for backward compatibility,
-        # but run policy and planner/service loops on dedicated timers.
         self.create_timer(self.policy_period, self._policy_loop)
         self.create_timer(self.service_period, self._planner_loop)
 
         self.get_logger().info("RL OCP policy bridge started")
         self.get_logger().info(f"Model: {self.model_path}")
-        self.get_logger().info(f"Service: {self.planner_service}")
+        self.get_logger().info(f"Planner action: {self.planner_action} (planner_id={self.planner_id})")
         self.get_logger().info(f"FollowPath action: {self.follow_path_action}")
         self.get_logger().info(
             f"Loop rates: RL={1.0 / self.policy_period:.2f} Hz, service={1.0 / self.service_period:.2f} Hz"
         )
         self.get_logger().info(f"Goal source mode: {self.goal_source_mode}")
-        self.get_logger().info("Pipeline mode: RL/RViz local goal -> A* service -> MPPI FollowPath")
+        self.get_logger().info("Pipeline mode: RL/RViz local goal -> Nav2 ComputePathToPose -> MPPI FollowPath")
         self.get_logger().info(f"Auto relax constraints: {self.auto_relax_constraints}")
         self.get_logger().info(f"Action visualization: {self.visualize_actions} ({self.action_marker_topic})")
         self.get_logger().info(
@@ -377,6 +400,9 @@ class RlOcpPolicyBridge(Node):
             elif p.name == "goal_source_mode":
                 self.goal_source_mode = self._normalize_goal_source_mode(str(p.value))
                 self.get_logger().info(f"Updated goal_source_mode: {self.goal_source_mode}")
+            elif p.name == "tf_timeout_sec":
+                # FIX: Keep tf_timeout_sec at 0.0 to prevent deadlock (ignore parameter updates)
+                self.tf_timeout_sec = 0.0
             if p.name == "visualize_actions":
                 self.visualize_actions = bool(p.value)
             elif p.name == "publish_debug_joint_state":
@@ -387,20 +413,28 @@ class RlOcpPolicyBridge(Node):
                 self.visualize_planner_scene = bool(p.value)
             elif p.name == "use_map_static_obstacles":
                 self.use_map_static_obstacles = bool(p.value)
+                self._clear_map_obstacle_cache()
             elif p.name == "map_static_obstacle_radius":
                 self.map_static_obstacle_radius = float(p.value)
+                self._clear_map_obstacle_cache()
             elif p.name == "map_static_sample_step_m":
                 self.map_static_sample_step_m = float(p.value)
+                self._clear_map_obstacle_cache()
             elif p.name == "map_static_obstacle_limit":
                 self.map_static_obstacle_limit = int(p.value)
+                self._clear_map_obstacle_cache()
             elif p.name == "enforce_scene_entities":
                 self.enforce_scene_entities = bool(p.value)
-            elif p.name == "human_fallback_enabled":
-                self.human_fallback_enabled = bool(p.value)
-            elif p.name == "human_fallback_limit":
-                self.human_fallback_limit = int(p.value)
-            elif p.name == "human_fallback_radius":
-                self.human_fallback_radius = float(p.value)
+            elif p.name == "human_max_age_sec":
+                self.human_max_age_sec = max(0.0, float(p.value))
+            elif p.name == "human_min_radius":
+                self.human_min_radius = max(0.01, float(p.value))
+            elif p.name == "human_max_radius":
+                self.human_max_radius = max(self.human_min_radius, float(p.value))
+            elif p.name == "human_safety_margin":
+                self.human_safety_margin = max(0.0, float(p.value))
+            elif p.name == "human_limit":
+                self.human_limit = max(0, int(p.value))
             elif p.name == "auto_relax_constraints":
                 self.auto_relax_constraints = bool(p.value)
             elif p.name == "action_dim":
@@ -409,25 +443,38 @@ class RlOcpPolicyBridge(Node):
                 self.action_range = float(p.value)
             elif p.name == "obstacle_sample_step":
                 self.obstacle_sample_step = max(1, int(p.value))
+                self._clear_scan_obstacle_cache()
             elif p.name == "scan_filter_enabled":
                 self.scan_filter_enabled = bool(p.value)
+                self._clear_scan_obstacle_cache()
             elif p.name == "scan_obstacle_max_range":
                 self.scan_obstacle_max_range = max(0.0, float(p.value))
+                self._clear_scan_obstacle_cache()
+            elif p.name == "scan_self_filter_min_range":
+                self.scan_self_filter_min_range = max(0.0, float(p.value))
+                self._clear_scan_obstacle_cache()
             elif p.name == "scan_neighbor_window":
                 self.scan_neighbor_window = max(0, int(p.value))
+                self._clear_scan_obstacle_cache()
             elif p.name == "scan_min_neighbor_count":
                 self.scan_min_neighbor_count = max(0, int(p.value))
+                self._clear_scan_obstacle_cache()
             elif p.name == "scan_neighbor_max_delta":
                 self.scan_neighbor_max_delta = max(0.0, float(p.value))
+                self._clear_scan_obstacle_cache()
             elif p.name == "scan_persistence_hits":
                 self.scan_persistence_hits = max(1, int(p.value))
+                self.scan_persistence.clear()
+                self._clear_scan_obstacle_cache()
             elif p.name == "scan_persistence_decay_scans":
                 self.scan_persistence_decay_scans = max(1, int(p.value))
             elif p.name == "scan_persistence_resolution":
                 self.scan_persistence_resolution = max(0.01, float(p.value))
                 self.scan_persistence.clear()
+                self._clear_scan_obstacle_cache()
             elif p.name == "scan_obstacle_limit":
                 self.scan_obstacle_limit = max(1, int(p.value))
+                self._clear_scan_obstacle_cache()
             elif p.name == "planner_half_width":
                 self.planner_half_width = float(p.value)
                 update_effective_bounds = True
@@ -477,6 +524,8 @@ class RlOcpPolicyBridge(Node):
         if update_effective_bounds:
             self.effective_half_width = min(self.planner_half_width, self.planner_hard_half_width)
             self.effective_half_height = min(self.planner_half_height, self.planner_hard_half_height)
+            self._clear_scan_obstacle_cache()
+            self._clear_map_obstacle_cache()
 
         if update_loop_hz:
             self.policy_period = 1.0 / self.policy_hz
@@ -652,13 +701,19 @@ class RlOcpPolicyBridge(Node):
         for i, pt in enumerate(point_list):
             pose = PoseStamped()
             pose.header = path_msg.header
-            pose.pose.position.x = float(pt.x)
-            pose.pose.position.y = float(pt.y)
+            
+            # FIX: Use pt[0] and pt[1] for tuple access instead of pt.x and pt.y
+            pose.pose.position.x = float(pt[0])
+            pose.pose.position.y = float(pt[1])
+            
             yaw = final_yaw if final_yaw is not None else 0.0
             if i + 1 < len(point_list):
                 next_pt = point_list[i + 1]
-                dx = float(next_pt.x) - float(pt.x)
-                dy = float(next_pt.y) - float(pt.y)
+                
+                # FIX: Use tuple index access for next_pt as well
+                dx = float(next_pt[0]) - float(pt[0])
+                dy = float(next_pt[1]) - float(pt[1])
+                
                 if math.hypot(dx, dy) > 1e-6:
                     yaw = math.atan2(dy, dx)
             elif final_yaw is None and len(path_msg.poses) > 0:
@@ -804,8 +859,11 @@ class RlOcpPolicyBridge(Node):
             return
 
     @staticmethod
-    def _path_points_from_response(res) -> List[Tuple[float, float]]:
-        return [(float(pt.x), float(pt.y)) for pt in res.astar_path]
+    def _path_points_from_path_msg(path_msg: Path) -> List[Tuple[float, float]]:
+        return [
+            (float(pose.pose.position.x), float(pose.pose.position.y))
+            for pose in path_msg.poses
+        ]
 
     @staticmethod
     def _yaw_from_quaternion(x: float, y: float, z: float, w: float) -> float:
@@ -816,6 +874,15 @@ class RlOcpPolicyBridge(Node):
     @staticmethod
     def _clamp(value: float, low: float, high: float) -> float:
         return max(low, min(high, value))
+
+    def _clear_scan_obstacle_cache(self) -> None:
+        self._cached_scan_seq = -1
+        self._cached_scan_obstacles = []
+
+    def _clear_map_obstacle_cache(self) -> None:
+        self._cached_map_pose = None
+        self._cached_map_obs = []
+        self._cached_map_signature = None
 
     def _odom_callback(self, msg: Odometry) -> None:
         px = msg.pose.pose.position.x
@@ -831,7 +898,9 @@ class RlOcpPolicyBridge(Node):
 
     def _scan_callback(self, msg: LaserScan) -> None:
         self.latest_scan = msg
+        self.scan_frame = msg.header.frame_id if msg.header.frame_id else self.scan_frame
         self.scan_seq += 1
+        self._clear_scan_obstacle_cache()
 
     def _goal_callback(self, msg: PoseStamped) -> None:
         q = msg.pose.orientation
@@ -861,6 +930,7 @@ class RlOcpPolicyBridge(Node):
         self.map_origin_x = float(origin_x)
         self.map_origin_y = float(origin_y)
         self.map_data = list(msg.data)
+        self._clear_map_obstacle_cache()
 
         if not self._has_received_map:
             self._has_received_map = True
@@ -882,7 +952,6 @@ class RlOcpPolicyBridge(Node):
             self.map_static_circles = []
             return
 
-        # Grid-based circle sampling mode: disable contour/polygon/wall extraction entirely.
         self.map_geometry_polygons = []
         self.map_geometry_walls = []
         self.map_static_circles = []
@@ -1041,7 +1110,6 @@ class RlOcpPolicyBridge(Node):
                 dot = max(-1.0, min(1.0, dot))
                 turn = math.acos(dot)
 
-                # Remove middle points on nearly straight runs to prevent over-segmentation.
                 if turn <= angle_thr and dot > 0.0:
                     changed = True
                     continue
@@ -1097,11 +1165,22 @@ class RlOcpPolicyBridge(Node):
                 target_frame,
                 source_frame,
                 Time(),
-                timeout=Duration(seconds=0.05),
+                timeout=Duration(seconds=getattr(self, "tf_timeout_sec", 0.1)),
             )
         except TransformException:
             return None
 
+        return self._transform_point_with_tf(x, y, tf_msg)
+
+    def _lookup_transform(self, target_frame: str, source_frame: str):
+        return self.tf_buffer.lookup_transform(
+            target_frame,
+            source_frame,
+            Time(),
+            timeout=Duration(seconds=getattr(self, "tf_timeout_sec", 0.1)),
+        )
+
+    def _transform_point_with_tf(self, x: float, y: float, tf_msg) -> Tuple[float, float]:
         t = tf_msg.transform.translation
         r = tf_msg.transform.rotation
         yaw = self._yaw_from_quaternion(r.x, r.y, r.z, r.w)
@@ -1114,12 +1193,19 @@ class RlOcpPolicyBridge(Node):
         y_out = ty + (sx * float(x)) + (cx * float(y))
         return x_out, y_out
 
-    def _point_to_map_frame(self, x: float, y: float) -> Optional[Tuple[float, float]]:
-        source_frame = self.pose_frame if self.pose_frame else self.map_frame
+    def _point_to_map_frame(
+        self,
+        x: float,
+        y: float,
+        source_frame: Optional[str] = None,
+    ) -> Optional[Tuple[float, float]]:
+        source_frame = source_frame or (self.pose_frame if self.pose_frame else self.map_frame)
         return self._transform_point_2d(x, y, source_frame, self.map_frame)
 
     def _process_human_msgs(self) -> List[HumanState]:
         if self.latest_humans is None or not self.latest_humans.humans:
+            return []
+        if self._human_msg_age_sec(self.latest_humans) > self.human_max_age_sec:
             return []
 
         source_frame = self.latest_humans.header.frame_id if self.latest_humans.header.frame_id else self.map_frame
@@ -1132,7 +1218,7 @@ class RlOcpPolicyBridge(Node):
                     self.map_frame,
                     source_frame,
                     Time(),
-                    timeout=Duration(seconds=0.05),
+                    timeout=Duration(seconds=getattr(self, "tf_timeout_sec", 0.1)),
                 )
             except TransformException as exc:
                 self._throttled_log(
@@ -1162,12 +1248,45 @@ class RlOcpPolicyBridge(Node):
             human_state.py = float(map_xy[1])
             human_state.vx = float(vx_map)
             human_state.vy = float(vy_map)
-            human_state.radius = float(src_human.radius)
+            human_state.radius = self._clamp_human_radius(float(src_human.radius))
             if hasattr(src_human, "trajectory"):
                 human_state.trajectory = src_human.trajectory
             humans_map.append(human_state)
 
+        pose_map = self._current_pose_in_map_frame()
+        if pose_map is not None:
+            px, py = pose_map
+            humans_map.sort(key=lambda h: math.hypot(float(h.px) - px, float(h.py) - py))
+
+        limit = max(0, int(self.human_limit))
+        if limit > 0:
+            humans_map = humans_map[:limit]
+
         return humans_map
+
+    def _human_msg_age_sec(self, msg: HumanArray) -> float:
+        stamp = msg.header.stamp
+        stamp_ns = int(stamp.sec) * 1000000000 + int(stamp.nanosec)
+        if stamp_ns <= 0:
+            return 0.0
+        now_ns = int(self.get_clock().now().nanoseconds)
+        age = float(now_ns - stamp_ns) / 1e9
+        if age < 0.0 or age > 60.0:
+            return 0.0
+        return age
+
+    def _clamp_human_radius(self, radius: float) -> float:
+        lo = max(0.01, float(self.human_min_radius))
+        hi = max(lo, float(self.human_max_radius))
+        return float(self._clamp(float(radius), lo, hi))
+
+    def _human_obstacle_tuples(self, humans: Optional[List[HumanState]] = None) -> List[Tuple[float, float, float]]:
+        human_msgs = humans if humans is not None else self._process_human_msgs()
+        return [
+            # FIX 5: Add human_safety_margin to radius so YOLO masking works on RL grid
+            (float(h.px), float(h.py), float(h.radius) + float(self.human_safety_margin))
+            for h in human_msgs
+        ]
 
     def _current_pose_in_map_frame(self) -> Optional[Tuple[float, float]]:
         if self.current_pose is None:
@@ -1193,7 +1312,7 @@ class RlOcpPolicyBridge(Node):
                 self.map_frame,
                 source_frame,
                 Time(),
-                timeout=Duration(seconds=0.05),
+                timeout=Duration(seconds=getattr(self, "tf_timeout_sec", 0.1)),
             )
         except TransformException:
             return None
@@ -1227,11 +1346,12 @@ class RlOcpPolicyBridge(Node):
             return float(map_xy[0]), float(map_xy[1]), float(goal_yaw)
 
         try:
+            # FIX: Set timeout=0.0 to prevent deadlock when retrieving goal TF
             tf_msg = self.tf_buffer.lookup_transform(
                 self.map_frame,
                 source_frame,
                 Time(),
-                timeout=Duration(seconds=0.05),
+                timeout=Duration(seconds=0.0),
             )
         except TransformException:
             return None
@@ -1272,7 +1392,7 @@ class RlOcpPolicyBridge(Node):
     def _hold_final_goal_stop(self) -> None:
         self.goal_reached = True
         self.latest_sub_goal = None
-        self.last_astar_path_for_viz = []
+        self.last_planner_path_for_viz = []
         self.last_sent_follow_path = None
         self.pending_follow_path_msg = None
         self._cancel_follow_path_goal()
@@ -1370,18 +1490,48 @@ class RlOcpPolicyBridge(Node):
         return count >= required_hits
 
     def _scan_only_obstacle_tuples(self) -> List[Tuple[float, float, float]]:
+        # FIX 1: Return cache if no new frame to avoid expensive TF lookup
+        if self._cached_scan_seq == self.scan_seq:
+            return list(self._cached_scan_obstacles)
+
         obstacles = []
         if self.latest_scan is None or self.current_pose is None:
             return obstacles
 
         px, py, yaw = self.current_pose
+        cos_yaw = math.cos(yaw)
+        sin_yaw = math.sin(yaw)
+
         pose_map = self._current_pose_in_map_frame()
         if pose_map is None:
             return obstacles
         px_map, py_map = pose_map
+        scan_frame = (
+            self.scan_frame
+            or (self.latest_scan.header.frame_id if self.latest_scan.header.frame_id else "")
+            or self.pose_frame
+        )
+        scan_tf = None
+        if not scan_frame:
+            return obstacles
+        if scan_frame != self.map_frame:
+            try:
+                # FIX 2: Set timeout=0.0 to prevent SingleThreadedExecutor deadlock
+                # When timeout > 0 inside a callback, it blocks entire ROS2 thread → TF cannot update → Always timeout
+                scan_tf = self.tf_buffer.lookup_transform(
+                    self.map_frame,
+                    scan_frame,
+                    self.latest_scan.header.stamp,
+                    timeout=Duration(seconds=0.0)
+                )
+            except TransformException as exc:
+                # FIX 3: If TF fails, return cached LiDAR instead of empty list
+                # This prevents ghost obstacles from disappearing when TF lags momentarily
+                return list(self._cached_scan_obstacles)
+
         x_lim = min(self.effective_half_width, self.planner_x_limit)
         y_lim = min(self.effective_half_height, self.planner_y_limit)
-        min_safe_range = self.robot_radius + 0.12
+        self_filter_min_range = max(0.0, float(self.scan_self_filter_min_range))
         ranges = self.latest_scan.ranges
         angle_min = self.latest_scan.angle_min
         angle_inc = self.latest_scan.angle_increment
@@ -1396,18 +1546,28 @@ class RlOcpPolicyBridge(Node):
                 continue
             if r < r_min or r > r_max:
                 continue
-            if r < min_safe_range:
+            if r < self_filter_min_range:
+                continue
+            if not self._scan_has_neighbor_support(i, float(r)):
                 continue
             if not self._scan_has_neighbor_support(i, float(r)):
                 continue
 
-            ang = yaw + angle_min + i * angle_inc
-            ox = px + r * math.cos(ang)
-            oy = py + r * math.sin(ang)
+            ang = angle_min + i * angle_inc
+            lx = r * math.cos(ang)
+            ly = r * math.sin(ang)
 
-            map_xy = self._point_to_map_frame(ox, oy)
+            if scan_tf is not None:
+                map_xy = self._transform_point_with_tf(lx, ly, scan_tf)
+            else:
+                map_xy = self._point_to_map_frame(
+                    px + lx * cos_yaw - ly * sin_yaw,
+                    py + lx * sin_yaw + ly * cos_yaw,
+                )
+
             if map_xy is None:
                 continue
+
             ox, oy = map_xy
 
             if abs(ox - px_map) >= x_lim or abs(oy - py_map) >= y_lim:
@@ -1419,6 +1579,10 @@ class RlOcpPolicyBridge(Node):
         if len(obstacles) > max(1, int(self.scan_obstacle_limit)):
             obstacles.sort(key=lambda p: math.hypot(float(p[0]) - px_map, float(p[1]) - py_map))
             obstacles = obstacles[: max(1, int(self.scan_obstacle_limit))]
+
+        # FIX 4: Cache this scan result for next frame if TF fails
+        self._cached_scan_seq = self.scan_seq
+        self._cached_scan_obstacles = list(obstacles)
 
         return obstacles
 
@@ -1449,6 +1613,19 @@ class RlOcpPolicyBridge(Node):
             self.map_static_circles = []
             return []
         px, py = pose_map
+        map_signature = (
+            int(self.map_width),
+            int(self.map_height),
+            float(self.map_resolution),
+            float(self.map_origin_x),
+            float(self.map_origin_y),
+        )
+        if self._cached_map_signature == map_signature and self._cached_map_pose is not None:
+            cpx, cpy = self._cached_map_pose
+            if math.hypot(px - cpx, py - cpy) < 0.10:
+                self.map_static_circles = list(self._cached_map_obs)
+                return list(self._cached_map_obs)
+
         x_lim = min(self.effective_half_width, self.planner_x_limit)
         y_lim = min(self.effective_half_height, self.planner_y_limit)
         cell_step = max(1, int(round(max(0.05, self.map_static_sample_step_m) / self.map_resolution)))
@@ -1473,7 +1650,6 @@ class RlOcpPolicyBridge(Node):
                 oy = self.map_origin_y + (my + 0.5) * self.map_resolution
                 if abs(ox - px) >= x_lim or abs(oy - py) >= y_lim:
                     continue
-                # avoid flooding with cells under robot footprint
                 if math.hypot(ox - px, oy - py) < (self.robot_radius + 0.05):
                     continue
                 static_obs.append((ox, oy, max(0.05, self.map_static_obstacle_radius)))
@@ -1483,6 +1659,9 @@ class RlOcpPolicyBridge(Node):
             static_obs = static_obs[: max(1, self.map_static_obstacle_limit)]
 
         self.map_static_circles = list(static_obs)
+        self._cached_map_pose = (float(px), float(py))
+        self._cached_map_obs = list(static_obs)
+        self._cached_map_signature = map_signature
 
         return static_obs
 
@@ -1493,11 +1672,12 @@ class RlOcpPolicyBridge(Node):
         return wx, wy
 
     def _generate_action_candidates(self) -> List[Tuple[float, float, float, float]]:
-        """Returns candidates as (local_x, local_y, world_x, world_y)."""
-        if self.current_pose is None:
+        """Returns candidates as (local_x, local_y, map_x, map_y)."""
+        pose_map = self._current_pose_with_yaw_in_map_frame()
+        if pose_map is None:
             return []
 
-        px, py, yaw = self.current_pose
+        px, py, yaw = pose_map
         dim = max(2, int(self.action_dim))
         step = (2.0 * self.action_range) / float(dim - 1)
 
@@ -1506,8 +1686,8 @@ class RlOcpPolicyBridge(Node):
             ly = -self.action_range + step * iy
             for ix in range(dim):
                 lx = -self.action_range + step * ix
-                wx, wy = self._rotate_to_world(px, py, yaw, lx, ly)
-                candidates.append((lx, ly, wx, wy))
+                mx, my = self._rotate_to_world(px, py, yaw, lx, ly)
+                candidates.append((lx, ly, mx, my))
         return candidates
 
     def _is_action_masked(
@@ -1521,10 +1701,7 @@ class RlOcpPolicyBridge(Node):
         if abs(local_x) > self.planner_half_width or abs(local_y) > self.planner_half_height:
             return True
 
-        map_xy = self._point_to_map_frame(world_x, world_y)
-        if map_xy is None:
-            return False
-        map_x, map_y = map_xy
+        map_x, map_y = float(world_x), float(world_y)
 
         if self.map_bounds is not None:
             xmin, xmax, ymin, ymax = self.map_bounds
@@ -1532,13 +1709,57 @@ class RlOcpPolicyBridge(Node):
                 return True
 
         inflate = self.robot_radius + self.action_mask_clearance
+        
+        # 1. Kiểm tra điểm đích có đè lên bản đồ tĩnh
         if self._is_occupied_from_map(map_x, map_y, inflate):
             return True
 
+        # 2. Kiểm tra điểm đích có đè lên vật cản (LiDAR/Người)
         for ox, oy, radius in obstacles:
-            # Obstacles are represented in map frame; compare in map frame.
+            # TỐI ƯU 1: Lọc hộp giới hạn (Bounding Box) trước khi tính toán hypot nặng nề
+            if abs(map_x - ox) > inflate + radius or abs(map_y - oy) > inflate + radius:
+                continue
             if math.hypot(map_x - ox, map_y - oy) < (inflate + radius):
                 return True
+
+        # 3. Kiểm tra Raycast (Line-of-Sight) - TỐI ƯU HÓA TOÁN HỌC KHÔNG DÙNG VÒNG LẶP CHO LIDAR
+        robot_pose = self._current_pose_in_map_frame()
+        if robot_pose is not None and self.map_resolution is not None:
+            rx, ry = robot_pose
+            dist = math.hypot(map_x - rx, map_y - ry)
+            
+            if dist > 0.01:
+                # 3A. Quét tia với Bản đồ tĩnh (Vẫn phải chia bước nhưng dùng bước nhảy lớn hơn)
+                step_size = max(0.05, self.map_resolution)
+                num_steps = int(dist / step_size)
+                for i in range(1, num_steps):
+                    t = float(i) / float(num_steps)
+                    cx = rx + t * (map_x - rx)
+                    cy = ry + t * (map_y - ry)
+                    if self._is_occupied_from_map(cx, cy, inflate):
+                        return True
+                
+                # 3B. Quét tia với LiDAR / Dynamic Obstacles
+                # TỐI ƯU 2: Tính khoảng cách từ điểm Lidar chiếu lên đoạn thẳng tia nhìn (O(1) thay vì O(n))
+                l2 = dist * dist
+                for ox, oy, radius in obstacles:
+                    # Lọc nhanh những điểm LiDAR nằm tít ở xa khỏi quỹ đạo tia nhìn
+                    if ox < min(rx, map_x) - inflate - radius or \
+                       ox > max(rx, map_x) + inflate + radius or \
+                       oy < min(ry, map_y) - inflate - radius or \
+                       oy > max(ry, map_y) + inflate + radius:
+                        continue
+                    
+                    # Tính hệ số hình chiếu của vật cản lên đoạn thẳng (tia nhìn)
+                    t = max(0.0, min(1.0, ((ox - rx) * (map_x - rx) + (oy - ry) * (map_y - ry)) / l2))
+                    # FIX: Only check collision if moving toward obstacle (not backing away)
+                    if t > 0.05:
+                        proj_x = rx + t * (map_x - rx)
+                        proj_y = ry + t * (map_y - ry)
+                        
+                        # Nếu khoảng cách từ vật cản đến hình chiếu < vùng an toàn -> Tia bị chặn
+                        if math.hypot(ox - proj_x, oy - proj_y) < (inflate + radius):
+                            return True
 
         return False
 
@@ -1551,9 +1772,10 @@ class RlOcpPolicyBridge(Node):
         if not candidates:
             return sub_goal_map, False, 0.0
 
-        dynamic_obstacles = self._scan_only_obstacle_tuples()
         static_obstacles = self._map_to_obstacle_tuples()
-        obstacles = dynamic_obstacles + static_obstacles
+        human_obstacles = self._human_obstacle_tuples()
+        scan_obstacles = self._scan_only_obstacle_tuples()
+        obstacles = static_obstacles + human_obstacles + scan_obstacles
 
         best_valid: Optional[Tuple[float, float]] = None
         best_dist = float("inf")
@@ -1561,14 +1783,10 @@ class RlOcpPolicyBridge(Node):
         for lx, ly, wx, wy in candidates:
             if self._is_action_masked(lx, ly, wx, wy, obstacles):
                 continue
-            map_xy = self._point_to_map_frame(wx, wy)
-            if map_xy is None:
-                continue
-            cx, cy = map_xy
-            dist = math.hypot(float(sub_goal_map[0]) - cx, float(sub_goal_map[1]) - cy)
+            dist = math.hypot(float(sub_goal_map[0]) - float(wx), float(sub_goal_map[1]) - float(wy))
             if dist < best_dist:
                 best_dist = dist
-                best_valid = (float(cx), float(cy))
+                best_valid = (float(wx), float(wy))
 
         if best_valid is None:
             robot_map = self._current_pose_in_map_frame()
@@ -1585,10 +1803,14 @@ class RlOcpPolicyBridge(Node):
     def _publish_action_visualization(self, selected_sub_goal: Optional[Tuple[float, float]]) -> None:
         if self.current_pose is None:
             return
+        if not self.visualize_actions:
+            return
         candidates = self._generate_action_candidates()
-        dynamic_obstacles = self._scan_only_obstacle_tuples()
         static_obstacles = self._map_to_obstacle_tuples()
-        obstacles = dynamic_obstacles + static_obstacles
+        humans_map = self._process_human_msgs()
+        human_obstacles = self._human_obstacle_tuples(humans_map)
+        scan_obstacles = self._scan_only_obstacle_tuples()
+        obstacles = static_obstacles + human_obstacles + scan_obstacles
 
         valid_points: List[Tuple[float, float]] = []
         masked_points: List[Tuple[float, float]] = []
@@ -1602,10 +1824,7 @@ class RlOcpPolicyBridge(Node):
                 valid_points.append((float(wx), float(wy)))
 
             if selected_sub_goal is not None:
-                cand_map = self._point_to_map_frame(wx, wy)
-                if cand_map is None:
-                    continue
-                dist = math.hypot(selected_sub_goal[0] - cand_map[0], selected_sub_goal[1] - cand_map[1])
+                dist = math.hypot(selected_sub_goal[0] - float(wx), selected_sub_goal[1] - float(wy))
                 if dist < best_dist:
                     best_dist = dist
                     closest_selected = (wx, wy)
@@ -1617,15 +1836,18 @@ class RlOcpPolicyBridge(Node):
                 "expected_count": int(self.action_dim) * int(self.action_dim),
                 "valid_count": len(valid_points),
                 "masked_count": len(masked_points),
-                "dynamic_count": len(dynamic_obstacles),
                 "static_count": len(static_obstacles),
+                "scan_obstacle_count": len(scan_obstacles),
+                "human_obstacle_count": len(human_obstacles),
+                "human_count": len(humans_map),
+                "raw_human_count": len(self.latest_humans.humans) if self.latest_humans is not None else 0,
                 "map_walls_count": len(self.map_geometry_walls),
                 "map_polygons_count": len(self.map_geometry_polygons),
                 "map_local_walls_count": int(self.last_sent_map_walls_count),
                 "map_local_polygons_count": int(self.last_sent_map_polygons_count),
                 "planner_fail_streak": int(self.consecutive_planner_failures),
                 "policy_hz": float(1.0 / self.policy_period),
-                "planner_service_hz": float(1.0 / self.service_period),
+                "planner_hz": float(1.0 / self.service_period),
                 "goal_source_mode": str(self.goal_source_mode),
                 "selected_sub_goal": list(selected_sub_goal) if selected_sub_goal is not None else None,
                 "cached_sub_goal": list(self.latest_sub_goal) if self.latest_sub_goal is not None else None,
@@ -1639,19 +1861,38 @@ class RlOcpPolicyBridge(Node):
             self.policy_debug_status_pub.publish(msg)
 
         action_payload = {
-            "frame_id": self.action_marker_frame,
+            "humans": [
+                [float(h.px), float(h.py), float(h.vx), float(h.vy), float(h.radius)]
+                for h in humans_map
+            ],
+            "frame_id": self.map_frame,
+            "obstacle_frame": self.map_frame,
             "goal_reached": bool(self.goal_reached),
             "current_pose": [float(self.current_pose[0]), float(self.current_pose[1]), float(self.current_pose[2])],
             "valid_points": valid_points,
             "masked_points": masked_points,
             "selected_point": [float(closest_selected[0]), float(closest_selected[1])] if closest_selected is not None else None,
+            "obstacles": [
+                [float(obs[0]), float(obs[1]), float(obs[2])]
+                for obs in static_obstacles + scan_obstacles
+                if len(obs) >= 3
+            ],
+            "human_obstacles": [
+                [float(obs[0]), float(obs[1]), float(obs[2])]
+                for obs in human_obstacles
+            ],
             "candidate_count": len(candidates),
             "valid_count": len(valid_points),
             "masked_count": len(masked_points),
+            "robot_radius": float(self.robot_radius),
+            "action_mask_clearance": float(self.action_mask_clearance),
+            "mask_margin": float(self.robot_radius + self.action_mask_clearance),
+            "human_safety_margin": float(self.human_safety_margin),
         }
         msg = String()
         msg.data = json.dumps(action_payload)
         self.action_debug_pub.publish(msg)
+        self.get_logger().debug(f"RL action grid: {len(valid_points)} valid, {len(masked_points)} masked, pose={self.current_pose}")
 
     def _scan_to_obstacle_msgs(self) -> List[ObstacleState]:
         # Use both lidar and map-grid circles, then keep only nearest obstacles.
@@ -1661,10 +1902,10 @@ class RlOcpPolicyBridge(Node):
             px, py = pose_map
             obs_tuples.sort(key=lambda o: math.hypot(float(o[0]) - px, float(o[1]) - py))
 
-        # Keep the nearest obstacles to keep planner requests bounded.
-        max_supported = 40
-        keep_n = min(max_supported, max(1, int(self.map_static_obstacle_limit)))
-        obs_tuples = obs_tuples[:keep_n]
+        max_supported = 300
+        scan_keep_n = min(max_supported, max(1, int(self.scan_obstacle_limit)))
+        result_tuples = obs_tuples[:scan_keep_n]
+        remaining = max_supported - len(result_tuples)
 
         obstacles = []
         for obs_x, obs_y, radius in obs_tuples:
@@ -1674,32 +1915,6 @@ class RlOcpPolicyBridge(Node):
             obstacle.radius = float(radius)
             obstacles.append(obstacle)
         return obstacles
-
-    def _build_human_fallback_msgs(self, obstacle_msgs: List[ObstacleState]) -> List[HumanState]:
-        if not self.human_fallback_enabled:
-            return []
-        if self.current_pose is None:
-            return []
-
-        px, py, _ = self.current_pose
-        limit = max(0, int(self.human_fallback_limit))
-        if limit == 0:
-            return []
-
-        obs_sorted = sorted(
-            obstacle_msgs,
-            key=lambda o: math.hypot(float(o.px) - px, float(o.py) - py),
-        )
-        humans: List[HumanState] = []
-        for o in obs_sorted[:limit]:
-            h = HumanState()
-            h.px = float(o.px)
-            h.py = float(o.py)
-            h.vx = 0.0
-            h.vy = 0.0
-            h.radius = float(max(0.05, self.human_fallback_radius))
-            humans.append(h)
-        return humans
 
     def _wheel_speeds_from_twist(self) -> Optional[Tuple[float, float]]:
         if self.current_twist is None:
@@ -1726,6 +1941,19 @@ class RlOcpPolicyBridge(Node):
         if wheel_speeds is None:
             return None
         v_left, v_right = wheel_speeds
+        human_msgs = self._process_human_msgs()
+        scan_obstacles = self._scan_only_obstacle_tuples()
+        static_obstacles = self._map_to_obstacle_tuples()
+        humans_data = [
+            (
+                float(h.px),
+                float(h.py),
+                float(h.vx),
+                float(h.vy),
+                float(h.radius),
+            )
+            for h in human_msgs
+        ]
 
         return {
             "px": px,
@@ -1735,7 +1963,8 @@ class RlOcpPolicyBridge(Node):
             "v_right": v_right,
             "gx": gx,
             "gy": gy,
-            "obstacles": self._scan_to_obstacle_tuples(),
+            "obstacles": scan_obstacles + static_obstacles,
+            "humans": humans_data,
             "walls": [],
         }
 
@@ -1743,8 +1972,8 @@ class RlOcpPolicyBridge(Node):
         if self.current_pose is None or self.current_twist is None or self.current_goal is None:
             return
 
-        if not self.ocp_client.wait_for_service(timeout_sec=0.01):
-            self.get_logger().warn(f"Service {self.planner_service} not available")
+        if not self.nav2_planner_client.wait_for_server(timeout_sec=0.01):
+            self.get_logger().warn(f"Planner action {self.planner_action} not available")
             return
 
         pose_map = self._current_pose_with_yaw_in_map_frame()
@@ -1759,50 +1988,55 @@ class RlOcpPolicyBridge(Node):
             return
 
         px, py, yaw = pose_map
-        gx, gy = goal_map
         wheel_speeds = self._wheel_speeds_from_twist()
         if wheel_speeds is None:
             return
         v_left, v_right = wheel_speeds
 
-        req = OcpLocalPlann.Request()
-        req.ob.robot_state.pose.x = float(px)
-        req.ob.robot_state.pose.y = float(py)
-        req.ob.robot_state.pose.theta = float(yaw)
-        req.ob.robot_state.vl = float(v_left)
-        req.ob.robot_state.vr = float(v_right)
-        req.ob.robot_state.gx = float(gx)
-        req.ob.robot_state.gy = float(gy)
-        req.ob.robot_state.v_pref = float(self.v_pref)
-        req.ob.robot_state.radius = float(self.axle_half_width)
+        now = self.get_clock().now().to_msg()
+        start = PoseStamped()
+        start.header.stamp = now
+        start.header.frame_id = self.map_frame
+        start.pose.position.x = float(px)
+        start.pose.position.y = float(py)
+        qz, qw = self._quaternion_from_yaw(float(yaw))
+        start.pose.orientation.z = qz
+        start.pose.orientation.w = qw
 
-        req.ob.obstacle_states = self._scan_to_obstacle_msgs()
-        poly_states, walls = self._get_map_geometry_msgs()
-        req.ob.walls = walls
-        req.ob.poly_states = poly_states
-        req.ob.human_states = self._process_human_msgs() if self.enforce_scene_entities else []
-        req.ob.header.stamp = self.get_clock().now().to_msg()
-        req.ob.header.frame_id = "map"
+        goal = PoseStamped()
+        goal.header.stamp = now
+        goal.header.frame_id = self.map_frame
+        goal.pose.position.x = float(sub_goal[0])
+        goal.pose.position.y = float(sub_goal[1])
+        goal.pose.orientation.w = 1.0
 
-        if self.publish_debug_joint_state:
-            self.debug_joint_state_pub.publish(req.ob)
-
-        req.sub_goal.x = float(sub_goal[0])
-        req.sub_goal.y = float(sub_goal[1])
+        nav2_goal = ComputePathToPose.Goal()
+        nav2_goal.start = start
+        nav2_goal.goal = goal
+        nav2_goal.planner_id = self.planner_id
+        nav2_goal.use_start = True
 
         self._publish_local_goal(sub_goal)
         self.last_wheel_speed = (v_left, v_right)
-        self.last_request_for_viz = req
+        self.last_planner_sub_goal = (float(sub_goal[0]), float(sub_goal[1]))
 
-        future = self.ocp_client.call_async(req)
-        future.add_done_callback(self._on_planner_response)
+        future = self.nav2_planner_client.send_goal_async(nav2_goal)
+        future.add_done_callback(self._on_planner_goal_response)
         self.pending_future = future
 
     def _publish_planner_scene_debug(
         self,
-        req: OcpLocalPlann.Request,
-        astar_path: List[Tuple[float, float]],
+        sub_goal: Tuple[float, float],
+        path_points: List[Tuple[float, float]],
     ) -> None:
+        pose_map = self._current_pose_with_yaw_in_map_frame()
+        goal_map = self._current_goal_in_map_frame()
+        if pose_map is None or goal_map is None:
+            return
+
+        obstacle_states = self._scan_to_obstacle_msgs()
+        poly_states, walls = self._get_map_geometry_msgs()
+        human_states = self._process_human_msgs() if self.enforce_scene_entities else []
         x_lim = min(self.effective_half_width, self.planner_x_limit)
         y_lim = min(self.effective_half_height, self.planner_y_limit)
         payload = {
@@ -1815,27 +2049,27 @@ class RlOcpPolicyBridge(Node):
                 "ymax": float(y_lim),
             },
             "robot": {
-                "x": float(req.ob.robot_state.pose.x),
-                "y": float(req.ob.robot_state.pose.y),
-                "theta": float(req.ob.robot_state.pose.theta),
+                "x": float(pose_map[0]),
+                "y": float(pose_map[1]),
+                "theta": float(pose_map[2]),
                 "radius": float(self.robot_radius),
             },
             "goal": {
-                "x": float(req.ob.robot_state.gx),
-                "y": float(req.ob.robot_state.gy),
+                "x": float(goal_map[0]),
+                "y": float(goal_map[1]),
             },
             "sub_goal": {
-                "x": float(req.sub_goal.x),
-                "y": float(req.sub_goal.y),
+                "x": float(sub_goal[0]),
+                "y": float(sub_goal[1]),
             },
             "walls": [
-                [float(w.sx), float(w.sy), float(w.ex), float(w.ey)] for w in req.ob.walls
+                [float(w.sx), float(w.sy), float(w.ex), float(w.ey)] for w in walls
             ],
             "obstacles": [
-                [float(o.px), float(o.py), float(o.radius)] for o in req.ob.obstacle_states
+                [float(o.px), float(o.py), float(o.radius)] for o in obstacle_states
             ],
             "polygons": [
-                [[float(v.x), float(v.y)] for v in poly.vertices] for poly in req.ob.poly_states
+                [[float(v.x), float(v.y)] for v in poly.vertices] for poly in poly_states
             ],
             "humans": [
                 {
@@ -1845,12 +2079,13 @@ class RlOcpPolicyBridge(Node):
                     "vy": float(h.vy),
                     "radius": float(h.radius),
                 }
-                for h in req.ob.human_states
+                for h in human_states
             ],
-            "trajectory": [[float(px), float(py)] for px, py in astar_path],
+            "trajectory": [[float(px), float(py)] for px, py in path_points],
             "path_debug": {
-                "astar_points": int(len(astar_path)),
+                "path_points": int(len(path_points)),
                 "goal_source_mode": str(self.goal_source_mode),
+                "global_planner": "nav2_navfn_planner/NavfnPlanner",
                 "tracking_controller": "nav2_mppi_controller::MPPIController",
             },
         }
@@ -1858,41 +2093,64 @@ class RlOcpPolicyBridge(Node):
         msg.data = json.dumps(payload)
         self.planner_scene_debug_pub.publish(msg)
 
-    def _on_planner_response(self, future) -> None:
-        self.pending_future = None
+    def _on_planner_goal_response(self, future) -> None:
         try:
-            res = future.result()
+            goal_handle = future.result()
         except Exception as exc:
-            self.get_logger().error(f"Planner service call failed: {exc}")
+            self.pending_future = None
+            self.get_logger().error(f"Planner action goal send failed: {exc}")
             return
 
-        if res.success:
-            self.consecutive_planner_failures = 0
-            self.success_streak += 1
-        else:
+        if goal_handle is None or not goal_handle.accepted:
+            self.pending_future = None
+            self.success_streak = 0
+            self.consecutive_planner_failures += 1
+            self.get_logger().warn(
+                "Nav2 planner rejected goal (count=%d)" % int(self.consecutive_planner_failures)
+            )
+            return
+
+        result_future = goal_handle.get_result_async()
+        result_future.add_done_callback(self._on_planner_result)
+        self.pending_future = result_future
+
+    def _on_planner_result(self, future) -> None:
+        self.pending_future = None
+        try:
+            wrapped_result = future.result()
+        except Exception as exc:
+            self.success_streak = 0
+            self.consecutive_planner_failures += 1
+            self.get_logger().error(f"Planner action result failed: {exc}")
+            return
+
+        result = wrapped_result.result if wrapped_result is not None else None
+        path_msg = result.path if result is not None else Path()
+        path_points = self._path_points_from_path_msg(path_msg)
+        self.last_planner_path_for_viz = list(path_points)
+        if self.last_planner_sub_goal is not None:
+            self._publish_planner_scene_debug(self.last_planner_sub_goal, path_points)
+
+        if len(path_msg.poses) < 2:
             self.success_streak = 0
             self.consecutive_planner_failures += 1
             if self.consecutive_planner_failures % 5 == 1:
                 self.get_logger().warn(
-                    "Planner reported failure (count=%d, map_walls=%d, map_polygons=%d)"
-                    % (
-                        int(self.consecutive_planner_failures),
-                        int(len(self.map_geometry_walls)),
-                        int(len(self.map_geometry_polygons)),
+                    "Nav2 planner returned empty/short path (count=%d)"
+                    % int(self.consecutive_planner_failures)
                 )
-                )
+            return
 
-        astar_path = self._path_points_from_response(res)
-        self.last_astar_path_for_viz = list(astar_path)
-        if self.last_request_for_viz is not None:
-            self._publish_planner_scene_debug(self.last_request_for_viz, astar_path)
-
-        if res.success:
-            goal_pose = self._current_goal_pose_in_map_frame()
-            final_yaw = goal_pose[2] if goal_pose is not None else None
-            path_msg = self._build_path_msg(res.astar_path, self.map_frame, final_yaw=final_yaw)
-            self.local_path_pub.publish(path_msg)
-            self._send_follow_path_goal(path_msg)
+        # Path from Nav2 planner already extracted, use it directly
+        self.success_streak += 1
+        self.consecutive_planner_failures = 0
+        
+        # Publish local path and send follow-path goal
+        goal_pose = self._current_goal_pose_in_map_frame()
+        final_yaw = goal_pose[2] if goal_pose is not None else None
+        final_path_msg = self._build_path_msg(path_points, self.map_frame, final_yaw=final_yaw)
+        self.local_path_pub.publish(final_path_msg)
+        self._send_follow_path_goal(final_path_msg)
 
     def _policy_loop(self) -> None:
         if self.goal_source_mode == self._GOAL_SOURCE_RL and self.worker is None:
@@ -1960,8 +2218,7 @@ class RlOcpPolicyBridge(Node):
             self._submit_policy_request(worker_req)
             latest_policy_result = self._take_latest_policy_result()
             if latest_policy_result is None:
-                if self.latest_sub_goal is not None:
-                    self._publish_action_visualization(self.latest_sub_goal)
+                self._publish_action_visualization(self.latest_sub_goal)
                 self._throttled_log(
                     "_last_policy_worker_wait_result_log_ns",
                     2.0,

@@ -1,5 +1,5 @@
 import os
-from ament_index_python.packages import get_package_share_directory
+from ament_index_python.packages import get_package_prefix, get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, SetEnvironmentVariable
 from launch.conditions import IfCondition
@@ -10,9 +10,15 @@ from launch_ros.substitutions import FindPackageShare
 from nav2_common.launch import RewrittenYaml
 
 def generate_launch_description():
+    controller_prefix = get_package_prefix("controller")
+    workspace_root = os.path.dirname(os.path.dirname(controller_prefix))
+    custom_mppi_prefix = os.path.join(workspace_root, "install", "nav2_mppi_controller")
+    custom_mppi_lib = os.path.join(custom_mppi_prefix, "lib")
+
     use_sim_time = LaunchConfiguration("use_sim_time")
     respawn = LaunchConfiguration("respawn")
     log_level = LaunchConfiguration("log_level")
+    controller_log_level = LaunchConfiguration("controller_log_level")
     use_rviz = LaunchConfiguration("use_rviz")
     tuning_config = LaunchConfiguration("tuning_config")
     halo_drl_dir = LaunchConfiguration("halo_drl_dir")
@@ -36,7 +42,7 @@ def generate_launch_description():
     mppi_params_file = LaunchConfiguration("mppi_params_file")
 
     use_sim_time_arg = DeclareLaunchArgument(
-        "use_sim_time", default_value="true", description="Use simulation time if true"
+        "use_sim_time", default_value="false", description="Use simulation time if true"
     )
     respawn_arg = DeclareLaunchArgument(
         "respawn", default_value="false", description="Respawn node when it crashes"
@@ -74,7 +80,7 @@ def generate_launch_description():
 
     visualize_actions_arg = DeclareLaunchArgument("visualize_actions", default_value="true")
     action_marker_topic_arg = DeclareLaunchArgument("action_marker_topic", default_value="/policy/action_markers")
-    action_marker_frame_arg = DeclareLaunchArgument("action_marker_frame", default_value="odom")
+    action_marker_frame_arg = DeclareLaunchArgument("action_marker_frame", default_value="map")
     publish_debug_joint_state_arg = DeclareLaunchArgument("publish_debug_joint_state", default_value="true")
     debug_joint_state_topic_arg = DeclareLaunchArgument("debug_joint_state_topic", default_value="/debug/joint_state_req")
     publish_policy_debug_status_arg = DeclareLaunchArgument("publish_policy_debug_status", default_value="true")
@@ -82,7 +88,7 @@ def generate_launch_description():
     planner_scene_marker_topic_arg = DeclareLaunchArgument("planner_scene_marker_topic", default_value="/planner/debug_markers")
     planner_scene_frame_arg = DeclareLaunchArgument("planner_scene_frame", default_value="map")
     visualize_local_costmap_arg = DeclareLaunchArgument("visualize_local_costmap", default_value="true")
-    local_costmap_topic_arg = DeclareLaunchArgument("local_costmap_topic", default_value="/a_star/local_costmap")
+    local_costmap_topic_arg = DeclareLaunchArgument("local_costmap_topic", default_value="/local_costmap/costmap")
     astar_local_map_topic_arg = DeclareLaunchArgument("astar_local_map_topic", default_value="/map")
 
     # 1. GỌI NAV2 NODES (CHẠY MPPI)
@@ -107,6 +113,30 @@ def generate_launch_description():
 
     nav2_buffered_logging = SetEnvironmentVariable(
         "RCUTILS_LOGGING_BUFFERED_STREAM", "1"
+    )
+    custom_mppi_ament_prefix = SetEnvironmentVariable(
+        "AMENT_PREFIX_PATH",
+        os.pathsep.join(
+            path
+            for path in [custom_mppi_prefix, os.environ.get("AMENT_PREFIX_PATH", "")]
+            if path
+        ),
+    )
+    custom_mppi_cmake_prefix = SetEnvironmentVariable(
+        "CMAKE_PREFIX_PATH",
+        os.pathsep.join(
+            path
+            for path in [custom_mppi_prefix, os.environ.get("CMAKE_PREFIX_PATH", "")]
+            if path
+        ),
+    )
+    custom_mppi_library_path = SetEnvironmentVariable(
+        "LD_LIBRARY_PATH",
+        os.pathsep.join(
+            path
+            for path in [custom_mppi_lib, os.environ.get("LD_LIBRARY_PATH", "")]
+            if path
+        ),
     )
 
     controller_server = Node(
@@ -219,18 +249,31 @@ def generate_launch_description():
         ],
     )
 
-    # 2. GỌI PLANNER NODE (Chỉ giữ A* smooth & local path service)
-    ampcc_node = Node(
-        package="controller",
-        executable="ampcc_node",
-        name="opt_planner",
+
+    lifecycle_manager_navigation = Node(
+        package="nav2_lifecycle_manager",
+        executable="lifecycle_manager",
+        name="lifecycle_manager_navigation",
         output="screen",
-        parameters=[tuning_config, {"use_sim_time": use_sim_time}],
-        respawn=respawn,
         arguments=["--ros-args", "--log-level", log_level],
+        parameters=[
+            {"use_sim_time": use_sim_time},
+            {"autostart": True},
+            {
+                "node_names": [
+                    "controller_server",
+                    "smoother_server",
+                    "planner_server",
+                    "behavior_server",
+                    "bt_navigator",
+                    "waypoint_follower",
+                    "velocity_smoother",
+                ]
+            },
+        ],
     )
 
-    # 3. GỌI RL BRIDGE (RL local goal -> A* service -> FollowPath/MPPI)
+    # 2. GỌI RL BRIDGE (RL local goal -> Nav2 A* -> FollowPath/MPPI)
     rl_bridge_node = Node(
         package="controller",
         executable="rl_ocp_policy_bridge.py",
@@ -249,7 +292,8 @@ def generate_launch_description():
                 "goal_topic": "/goal_pose",
                 "map_topic": "/map",
                 "cmd_topic": "/diff_cont/cmd_vel",
-                "planner_service": "/ocp_plann",
+                "planner_action": "/compute_path_to_pose",
+                "planner_id": "GridBased",
                 "follow_path_action": "/follow_path",
                 "controller_id": "FollowPath",
                 "goal_checker_id": "general_goal_checker",
@@ -257,16 +301,21 @@ def generate_launch_description():
                 "service_hz": 5.0,
                 "follow_path_replan_min_interval_sec": 0.80,
                 "follow_path_replan_path_delta": 0.35,
-                "obstacle_sample_step": 16,
-                "scan_filter_enabled": True,
+                "tf_timeout_sec": 0.10,
+                "obstacle_sample_step": 2,
+                "scan_filter_enabled": False,
                 "scan_obstacle_max_range": 3.0,
+                "scan_self_filter_min_range": 0.05,
                 "scan_neighbor_window": 2,
-                "scan_min_neighbor_count": 2,
+                "scan_min_neighbor_count": 1,
                 "scan_neighbor_max_delta": 0.18,
-                "scan_persistence_hits": 2,
+                "scan_persistence_hits": 1,
                 "scan_persistence_decay_scans": 4,
                 "scan_persistence_resolution": 0.12,
-                "scan_obstacle_limit": 60,
+                "scan_obstacle_limit": 300,
+                "use_map_static_obstacles": True,
+                "map_static_sample_step_m": 0.20,
+                "map_static_obstacle_limit": 300,
                 "planner_half_width": 5.8,
                 "planner_half_height": 9.8,
                 "auto_relax_constraints": False,
@@ -299,10 +348,10 @@ def generate_launch_description():
                 "visualize_actions": visualize_actions,
                 "visualize_planner_scene": True,
                 "visualize_local_costmap": visualize_local_costmap,
-                "visualize_scan_obstacles": False,
-                "visualize_joint_state_geometry": False,
+                "visualize_scan_obstacles": True,
+                "visualize_joint_state_geometry": True,
                 "visualize_astar_path": True,
-                "visualize_astar_local_map": False,
+                "visualize_astar_local_map": True,
                 "action_marker_topic": action_marker_topic,
                 "action_marker_frame": action_marker_frame,
                 "planner_scene_marker_topic": planner_scene_marker_topic,
@@ -310,7 +359,7 @@ def generate_launch_description():
                 "map_topic": "/map",
                 "scan_topic": "/scan",
                 "joint_state_topic": debug_joint_state_topic,
-                "astar_path_topic": "/a_star_path",
+                "astar_path_topic": "/rl/local_path",
                 "astar_local_map_topic": astar_local_map_topic,
                 "local_costmap_topic": local_costmap_topic,
                 "local_costmap_sample_step": 4,
@@ -319,6 +368,7 @@ def generate_launch_description():
                 "astar_local_map_sample_step": 4,
                 "astar_local_map_max_cells": 2500,
                 "astar_local_map_min_cost": 10,
+                "debug_marker_lifetime_sec": 0.25,
             }
         ],
         respawn=respawn,
@@ -367,6 +417,9 @@ def generate_launch_description():
         astar_local_map_topic_arg,
         
         nav2_buffered_logging,
+        custom_mppi_ament_prefix,
+        custom_mppi_cmake_prefix,
+        custom_mppi_library_path,
         controller_server,
         smoother_server,
         planner_server,
@@ -375,7 +428,6 @@ def generate_launch_description():
         waypoint_follower,
         velocity_smoother,
         lifecycle_manager_navigation,
-        ampcc_node,
         rl_bridge_node,
         rviz_visualizer_node,
         rviz_node,

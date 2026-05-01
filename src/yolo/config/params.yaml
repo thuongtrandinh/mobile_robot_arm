@@ -15,7 +15,7 @@ multi_object_tracking_node:
     # ===== YOLO DETECTION PARAMETERS =====
     yolo:
       # Object detection confidence threshold (reduced to prevent losing targets during pose changes)
-      object_conf_thresh: 0.40       # Reduced to 0.40 for better arm/extended pose detection
+      object_conf_thresh: 0.35       # Reduced to 0.35 for better arm/extended pose detection
       
       # Non-Maximum Suppression - STRENGTHENED to eliminate ghosting
       # When arms extend, body+arms may create 2 overlapping BBoxes
@@ -36,6 +36,7 @@ multi_object_tracking_node:
       tracking_timeout: 0.5          # Reduced from 2.0s to 0.5s: aggressive EKF cleanup
       track_buffer: 30               # Reduced from 90: remove stale obstacles faster
       max_age_before_predict: 30     # Keep at 30 for motion prediction during brief occlusion
+      global_frame: 'odom'           # Estimate human velocity in fixed frame to compensate robot ego-motion
       
       # BoT-SORT matching thresholds - RELAXED for continuous tracking
       track_thresh: 0.30             # Relaxed from 0.45 to 0.30 for better weak detection capture
@@ -55,6 +56,10 @@ multi_object_tracking_node:
     # ===== VELOCITY FILTER =====
     velocity_filter:
       alpha: 0.25                     # EMA smoothing factor para velocidade
+
+    # ===== RVIZ VISUALIZATION =====
+    visualization:
+      marker_lifetime_sec: 0.5        # Hold markers across short TF/camera timing gaps
 
     # ===== ROS 2 QoS CONFIGURATION =====
     ros2_qos:

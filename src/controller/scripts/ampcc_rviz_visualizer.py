@@ -10,6 +10,7 @@ import numpy as np
 import rclpy
 from rcl_interfaces.msg import SetParametersResult
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
 from std_msgs.msg import String
 from std_msgs.msg import ColorRGBA
 from visualization_msgs.msg import Marker, MarkerArray
@@ -181,7 +182,7 @@ class AmpccRvizVisualizer(Node):
         self.create_subscription(OccupancyGrid, self.local_costmap_topic, self._on_local_costmap, 10)
         self.create_subscription(OccupancyGrid, self.map_topic, self._on_map, 10)
         self.create_subscription(OccupancyGrid, self.astar_local_map_topic, self._on_astar_local_map, 10)
-        self.create_subscription(LaserScan, self.scan_topic, self._on_scan, 10)
+        self.create_subscription(LaserScan, self.scan_topic, self._on_scan, qos_profile_sensor_data)
         self.create_subscription(Path, self.astar_path_topic, self._on_astar_path, 10)
         if self.visualize_joint_state_geometry:
             self.create_subscription(InterfaceJointState, self.joint_state_topic, self._on_joint_state, 10)
@@ -375,6 +376,7 @@ class AmpccRvizVisualizer(Node):
             return
         self.last_action_payload = payload
         self._publish_action_markers()
+        self._publish_scene_markers()
 
     def _on_scene_debug(self, msg: String) -> None:
         try:
@@ -482,16 +484,34 @@ class AmpccRvizVisualizer(Node):
 
         return linearity >= self.linearity_reject_ratio and span >= self.linearity_reject_span
 
-    def _delete_all(self, frame_id: str) -> Marker:
+    def _delete_all(self, frame_id: str, ns: str = "planner_scene") -> Marker:
         m = Marker()
         m.header.frame_id = frame_id
-        m.header.stamp = self.get_clock().now().to_msg()
+        m.header.stamp = rclpy.time.Time().to_msg()
+        m.ns = ns  # Prevent deleting markers from other namespaces
         m.action = Marker.DELETEALL
         return m
 
     @staticmethod
     def _point(x: float, y: float, z: float = 0.05) -> RosPoint:
         return RosPoint(x=float(x), y=float(y), z=float(z))
+
+    def _append_circle_segments(
+        self,
+        points: List[RosPoint],
+        cx: float,
+        cy: float,
+        radius: float,
+        z: float = 0.08,
+        segments: int = 32,
+    ) -> None:
+        if radius <= 0.0:
+            return
+        for i in range(segments):
+            a0 = 2.0 * math.pi * float(i) / float(segments)
+            a1 = 2.0 * math.pi * float(i + 1) / float(segments)
+            points.append(self._point(cx + radius * math.cos(a0), cy + radius * math.sin(a0), z))
+            points.append(self._point(cx + radius * math.cos(a1), cy + radius * math.sin(a1), z))
 
     def _publish_action_markers(self) -> None:
         payload = self.last_action_payload
@@ -502,13 +522,19 @@ class AmpccRvizVisualizer(Node):
         goal_reached = bool(payload.get("goal_reached", False))
 
         markers = MarkerArray()
-        markers.markers.append(self._delete_all(frame_id))
+        # Don't use DELETEALL for action markers - let RViz update them naturally
+        # Only delete action markers if goal is reached
 
         if goal_reached or not self.visualize_actions:
             self.action_pub.publish(markers)
             return
+        
+        # Debug logging
+        valid_count = len(payload.get("valid_points", []))
+        masked_count = len(payload.get("masked_points", []))
+        self.get_logger().debug(f"Action markers: valid={valid_count}, masked={masked_count}")
 
-        now = self.get_clock().now().to_msg()
+        now = rclpy.time.Time().to_msg()
         valid_points = [self._point(p[0], p[1]) for p in payload.get("valid_points", [])]
         masked_points = [self._point(p[0], p[1]) for p in payload.get("masked_points", [])]
         selected_point = payload.get("selected_point", None)
@@ -528,6 +554,7 @@ class AmpccRvizVisualizer(Node):
         valid_marker.color.g = 1.0
         valid_marker.color.b = 0.25
         valid_marker.color.a = 0.85
+        valid_marker.lifetime = rclpy.duration.Duration(seconds=0.5).to_msg()
         valid_marker.points = valid_points
         markers.markers.append(valid_marker)
 
@@ -545,6 +572,7 @@ class AmpccRvizVisualizer(Node):
         masked_marker.color.g = 0.1
         masked_marker.color.b = 0.1
         masked_marker.color.a = 0.65
+        masked_marker.lifetime = rclpy.duration.Duration(seconds=0.5).to_msg()
         masked_marker.points = masked_points
         markers.markers.append(masked_marker)
 
@@ -562,6 +590,7 @@ class AmpccRvizVisualizer(Node):
         selected_marker.color.g = 0.4
         selected_marker.color.b = 1.0
         selected_marker.color.a = 1.0
+        selected_marker.lifetime = rclpy.duration.Duration(seconds=0.5).to_msg()
         if selected_point is not None and len(selected_point) == 2:
             selected_marker.pose.position.x = float(selected_point[0])
             selected_marker.pose.position.y = float(selected_point[1])
@@ -582,6 +611,7 @@ class AmpccRvizVisualizer(Node):
         info_marker.color.g = 1.0
         info_marker.color.b = 1.0
         info_marker.color.a = 0.95
+        info_marker.lifetime = rclpy.duration.Duration(seconds=0.5).to_msg()
         info_marker.pose.position.x = float(current_pose[0])
         info_marker.pose.position.y = float(current_pose[1])
         info_marker.pose.position.z = 0.6
@@ -607,7 +637,7 @@ class AmpccRvizVisualizer(Node):
             self.scene_pub.publish(markers)
             return
 
-        now = self.get_clock().now().to_msg()
+        now = rclpy.time.Time().to_msg()
         robot = payload.get("robot", {})
         goal = payload.get("goal", {})
         sub_goal = payload.get("sub_goal", {})
@@ -619,18 +649,21 @@ class AmpccRvizVisualizer(Node):
         trajectory = payload.get("trajectory", [])
         reference_debug = payload.get("reference_debug", {})
         costmap_msg = self.last_costmap
+        action_payload = self.last_action_payload or {}
 
         robot_radius = float(robot.get("radius", 0.25))
 
         robot_marker = Marker()
-        robot_marker.header.frame_id = frame_id
+        # Gắn thẳng vào hệ quy chiếu của xe (base_footprint)
+        robot_marker.header.frame_id = "base_footprint" 
         robot_marker.header.stamp = now
         robot_marker.ns = "planner_scene"
         robot_marker.id = 100
         robot_marker.type = Marker.CYLINDER
         robot_marker.action = Marker.ADD
-        robot_marker.pose.position.x = float(robot.get("x", 0.0))
-        robot_marker.pose.position.y = float(robot.get("y", 0.0))
+        # Tâm của base_link luôn là (0, 0)
+        robot_marker.pose.position.x = 0.0
+        robot_marker.pose.position.y = 0.0
         robot_marker.pose.position.z = 0.05
         robot_marker.pose.orientation.w = 1.0
         robot_marker.scale.x = 2.0 * robot_radius
@@ -642,8 +675,11 @@ class AmpccRvizVisualizer(Node):
         robot_marker.color.a = 0.85
         markers.markers.append(robot_marker)
 
+        # =========================================================
+        # 2. VẼ MŨI TÊN HƯỚNG ĐI (BÁM THEO BASE_LINK)
+        # =========================================================
         heading = Marker()
-        heading.header.frame_id = frame_id
+        heading.header.frame_id = "base_link" # Gắn vào xe
         heading.header.stamp = now
         heading.ns = "planner_scene"
         heading.id = 103
@@ -656,10 +692,8 @@ class AmpccRvizVisualizer(Node):
         heading.color.g = 0.8
         heading.color.b = 0.2
         heading.color.a = 0.95
-        x = float(robot.get("x", 0.0))
-        y = float(robot.get("y", 0.0))
-        theta = float(robot.get("theta", 0.0))
-        heading.points = [self._point(x, y, 0.1), self._point(x + 0.5 * math.cos(theta), y + 0.5 * math.sin(theta), 0.1)]
+        # Mũi tên chỉ thẳng về phía trước theo trục X của xe
+        heading.points = [self._point(0.0, 0.0, 0.1), self._point(0.5, 0.0, 0.1)]
         markers.markers.append(heading)
 
         goal_marker = Marker()
@@ -811,6 +845,7 @@ class AmpccRvizVisualizer(Node):
         scan_marker.id = 131
         scan_marker.type = Marker.SPHERE_LIST
         scan_marker.action = Marker.ADD
+        scan_marker.lifetime = rclpy.duration.Duration(seconds=0.2).to_msg()
         scan_marker.scale.x = 0.16
         scan_marker.scale.y = 0.16
         scan_marker.scale.z = 0.10
@@ -830,8 +865,8 @@ class AmpccRvizVisualizer(Node):
         obst_marker.id = 130
         obst_marker.type = Marker.SPHERE_LIST
         obst_marker.action = Marker.ADD
-        obst_marker.scale.x = 0.20
-        obst_marker.scale.y = 0.20
+        obst_marker.scale.x = 0.15
+        obst_marker.scale.y = 0.15
         obst_marker.scale.z = 0.10
         obst_marker.color.r = 1.0
         obst_marker.color.g = 0.10
@@ -840,9 +875,7 @@ class AmpccRvizVisualizer(Node):
         for obs in obstacles:
             if len(obs) < 3:
                 continue
-            radius = max(0.05, float(obs[2]))
-            obst_marker.scale.x = 2.0 * radius
-            obst_marker.scale.y = 2.0 * radius
+            # Use fixed scale for SPHERE_LIST - do NOT update scale in loop
             obst_marker.points.append(self._point(obs[0], obs[1]))
         markers.markers.append(obst_marker)
 
@@ -890,6 +923,154 @@ class AmpccRvizVisualizer(Node):
             human_dir_marker.points.append(self._point(px, py, 0.09))
             human_dir_marker.points.append(self._point(ex, ey, 0.09))
         markers.markers.append(human_dir_marker)
+
+        action_frame = str(action_payload.get("frame_id", frame_id))
+        action_obstacle_frame = str(action_payload.get("obstacle_frame", frame_id))
+        valid_points = action_payload.get("valid_points", [])
+        masked_points = action_payload.get("masked_points", [])
+        selected_point = action_payload.get("selected_point", None)
+        action_obstacles = action_payload.get("obstacles", [])
+        mask_margin = float(action_payload.get("mask_margin", 0.35))
+        human_safety_margin = float(action_payload.get("human_safety_margin", 0.0))
+        map_margin = 0.5 * mask_margin
+
+        rl_valid_marker = Marker()
+        rl_valid_marker.header.frame_id = action_frame
+        rl_valid_marker.header.stamp = now
+        rl_valid_marker.ns = "rl_grid_valid"
+        rl_valid_marker.id = 160
+        rl_valid_marker.type = Marker.SPHERE_LIST
+        rl_valid_marker.action = Marker.ADD
+        rl_valid_marker.scale.x = 0.11
+        rl_valid_marker.scale.y = 0.11
+        rl_valid_marker.scale.z = 0.05
+        rl_valid_marker.color.r = 0.0
+        rl_valid_marker.color.g = 1.0
+        rl_valid_marker.color.b = 0.25
+        rl_valid_marker.color.a = 0.95
+        for p in valid_points:
+            if len(p) >= 2:
+                rl_valid_marker.points.append(self._point(p[0], p[1], 0.12))
+        markers.markers.append(rl_valid_marker)
+
+        rl_masked_marker = Marker()
+        rl_masked_marker.header.frame_id = action_frame
+        rl_masked_marker.header.stamp = now
+        rl_masked_marker.ns = "rl_grid_masked"
+        rl_masked_marker.id = 161
+        rl_masked_marker.type = Marker.SPHERE_LIST
+        rl_masked_marker.action = Marker.ADD
+        rl_masked_marker.scale.x = 0.10
+        rl_masked_marker.scale.y = 0.10
+        rl_masked_marker.scale.z = 0.05
+        rl_masked_marker.color.r = 1.0
+        rl_masked_marker.color.g = 0.05
+        rl_masked_marker.color.b = 0.05
+        rl_masked_marker.color.a = 0.85
+        for p in masked_points:
+            if len(p) >= 2:
+                rl_masked_marker.points.append(self._point(p[0], p[1], 0.13))
+        markers.markers.append(rl_masked_marker)
+
+        rl_selected_marker = Marker()
+        rl_selected_marker.header.frame_id = action_frame
+        rl_selected_marker.header.stamp = now
+        rl_selected_marker.ns = "rl_grid_selected"
+        rl_selected_marker.id = 162
+        rl_selected_marker.type = Marker.SPHERE
+        rl_selected_marker.action = Marker.ADD
+        rl_selected_marker.scale.x = 0.24
+        rl_selected_marker.scale.y = 0.24
+        rl_selected_marker.scale.z = 0.12
+        rl_selected_marker.color.r = 0.1
+        rl_selected_marker.color.g = 0.45
+        rl_selected_marker.color.b = 1.0
+        rl_selected_marker.color.a = 1.0
+        if selected_point is not None and len(selected_point) >= 2:
+            rl_selected_marker.pose.position.x = float(selected_point[0])
+            rl_selected_marker.pose.position.y = float(selected_point[1])
+            rl_selected_marker.pose.position.z = 0.18
+        else:
+            rl_selected_marker.action = Marker.DELETE
+        markers.markers.append(rl_selected_marker)
+
+        margin_marker = Marker()
+        margin_obstacles = obstacles if obstacles else action_obstacles
+        margin_marker.header.frame_id = frame_id if obstacles else action_obstacle_frame
+        margin_marker.header.stamp = now
+        margin_marker.ns = "planner_margins"
+        margin_marker.id = 163
+        margin_marker.type = Marker.LINE_LIST
+        margin_marker.action = Marker.ADD
+        margin_marker.scale.x = 0.035
+        margin_marker.color.r = 1.0
+        margin_marker.color.g = 0.15
+        margin_marker.color.b = 0.05
+        margin_marker.color.a = 0.9
+        for obs in margin_obstacles:
+            if len(obs) >= 3:
+                # Don't add mask_margin for static map obstacles - they're already in collision space
+                # Only add margin for dynamic obstacles
+                obs_radius = max(0.05, float(obs[2]))
+                radius = obs_radius  # Use original radius without adding mask_margin
+                self._append_circle_segments(margin_marker.points, float(obs[0]), float(obs[1]), radius)
+        for hum in humans:
+            radius = max(0.05, float(hum.get("radius", 0.25)))
+            self._append_circle_segments(
+                margin_marker.points,
+                float(hum.get("px", 0.0)),
+                float(hum.get("py", 0.0)),
+                radius,
+                z=0.10,
+            )
+        # Margin circles visualization disabled - RL already has map data
+        # markers.markers.append(margin_marker)
+
+        wall_margin_marker = Marker()
+        wall_margin_marker.header.frame_id = frame_id
+        wall_margin_marker.header.stamp = now
+        wall_margin_marker.ns = "wall_margins"
+        wall_margin_marker.id = 164
+        wall_margin_marker.type = Marker.LINE_LIST
+        wall_margin_marker.action = Marker.ADD
+        wall_margin_marker.scale.x = 0.04  # Fixed scale for visibility
+        wall_margin_marker.color.r = 1.0
+        wall_margin_marker.color.g = 0.1
+        wall_margin_marker.color.b = 0.0
+        wall_margin_marker.color.a = 0.25
+        for w in walls:
+            if len(w) == 4:
+                wall_margin_marker.points.append(self._point(w[0], w[1], 0.04))
+                wall_margin_marker.points.append(self._point(w[2], w[3], 0.04))
+        if self.visualize_joint_state_geometry:
+            for w in self.scene_walls:
+                wall_margin_marker.points.append(self._point(w[0], w[1], 0.04))
+                wall_margin_marker.points.append(self._point(w[2], w[3], 0.04))
+        # Wall margin visualization disabled - RL already has map data
+        # markers.markers.append(wall_margin_marker)
+
+        map_margin_marker = Marker()
+        map_margin_marker.header.frame_id = self.map_frame
+        map_margin_marker.header.stamp = now
+        map_margin_marker.ns = "map_margins"
+        map_margin_marker.id = 165
+        map_margin_marker.type = Marker.LINE_LIST
+        map_margin_marker.action = Marker.ADD
+        map_margin_marker.scale.x = 0.04  # Fixed scale for visibility
+        map_margin_marker.color.r = 1.0
+        map_margin_marker.color.g = 0.18
+        map_margin_marker.color.b = 0.0
+        map_margin_marker.color.a = 0.22
+        for poly in self.static_polygons:
+            if len(poly) < 2:
+                continue
+            for i in range(len(poly)):
+                p1 = poly[i]
+                p2 = poly[(i + 1) % len(poly)]
+                map_margin_marker.points.append(self._point(p1[0], p1[1], 0.035))
+                map_margin_marker.points.append(self._point(p2[0], p2[1], 0.035))
+        # Map margin visualization disabled - RL already has map data
+        # markers.markers.append(map_margin_marker)
 
         costmap_marker = Marker()
         costmap_marker.header.frame_id = frame_id

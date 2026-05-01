@@ -6,7 +6,7 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PythonExpression
 
 
 def generate_launch_description():
@@ -18,11 +18,13 @@ def generate_launch_description():
     y_pos = LaunchConfiguration("y_pos")
     yaw = LaunchConfiguration("yaw")
     localization_cfg = LaunchConfiguration("localization_cfg")
+    localization_backend = LaunchConfiguration("localization_backend")
     localization_database_path = LaunchConfiguration("localization_database_path")
     localization_namespace = LaunchConfiguration("localization_namespace")
     localization_map_name = LaunchConfiguration("localization_map_name")
     localization_map_yaml = LaunchConfiguration("localization_map_yaml")
     localization_use_map_server = LaunchConfiguration("localization_use_map_server")
+    localization_ekf_config = LaunchConfiguration("localization_ekf_config")
 
     use_sim_time_arg = DeclareLaunchArgument(
         "use_sim_time",
@@ -71,6 +73,21 @@ def generate_launch_description():
         ),
         description="RTAB-Map localization config file",
     )
+    localization_backend_arg = DeclareLaunchArgument(
+        "localization_backend",
+        default_value="amcl",
+        description="Localization backend. Use amcl for .yaml/.pgm maps, rtabmap for RTAB-Map databases",
+        choices=["amcl", "rtabmap"],
+    )
+    localization_ekf_config_arg = DeclareLaunchArgument(
+        "localization_ekf_config",
+        default_value=os.path.join(
+            get_package_share_directory("localization"),
+            "config",
+            "ekf_sim.yaml",
+        ),
+        description="EKF config used by robot_localization during localization",
+    )
     localization_database_path_arg = DeclareLaunchArgument(
         "localization_database_path",
         default_value="~/.ros/rtabmap_map.db",
@@ -116,6 +133,25 @@ def generate_launch_description():
         }.items(),
     )
 
+    localization_amcl = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(
+                get_package_share_directory("localization"),
+                "launch",
+                "global_localization.launch.py",
+            )
+        ),
+        launch_arguments={
+            "use_sim_time": use_sim_time,
+            "map_name": localization_map_name,
+            "map_yaml": localization_map_yaml,
+            "x_pos": x_pos,
+            "y_pos": y_pos,
+            "yaw": yaw,
+        }.items(),
+        condition=IfCondition(PythonExpression(["'", localization_backend, "' == 'amcl'"])),
+    )
+
     localization_rtabmap = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(
@@ -126,6 +162,7 @@ def generate_launch_description():
         ),
         launch_arguments={
             "use_sim_time": use_sim_time,
+            "ekf_config": localization_ekf_config,
             "cfg": localization_cfg,
             "database_path": localization_database_path,
             "namespace": localization_namespace,
@@ -137,6 +174,35 @@ def generate_launch_description():
             "initial_yaw": yaw,
             "launch_rviz": "false",
         }.items(),
+        condition=IfCondition(PythonExpression(["'", localization_backend, "' == 'rtabmap'"])),
+    )
+
+    yolo_tracking = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(
+                get_package_share_directory("yolo"),
+                "launch",
+                "multi_object_tracking.launch.py",
+            )
+        ),
+        launch_arguments={
+            "use_sim_time": use_sim_time,
+        }.items(),
+        condition=IfCondition(launch_yolo),
+    )
+
+    yolo_tracking = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(
+                get_package_share_directory("yolo"),
+                "launch",
+                "multi_object_tracking.launch.py",
+            )
+        ),
+        launch_arguments={
+            "use_sim_time": use_sim_time,
+        }.items(),
+        condition=IfCondition(launch_yolo),
     )
 
     yolo_tracking = IncludeLaunchDescription(
@@ -162,12 +228,15 @@ def generate_launch_description():
         y_pos_arg,
         yaw_arg,
         localization_cfg_arg,
+        localization_backend_arg,
         localization_database_path_arg,
         localization_namespace_arg,
         localization_map_name_arg,
         localization_map_yaml_arg,
         localization_use_map_server_arg,
+        localization_ekf_config_arg,
         gazebo,
+        localization_amcl,
         localization_rtabmap,
         yolo_tracking,
     ])

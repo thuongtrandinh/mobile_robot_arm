@@ -70,24 +70,37 @@ if(BUILD_OCP_PYTHON_BINDINGS)
 
   find_package(Python3 COMPONENTS Interpreter Development.Module)
   if(Python3_FOUND)
-    # Add pybind11 subdirectory
-    add_subdirectory(extern/pybind11)
+    set(_pybind11_ready FALSE)
 
-    # Build Python binding module (STANDALONE - no ROS dependency)
-    pybind11_add_module(${PROJECT_NAME}_py
-      src/ocp_bind.cc
-      src/astar.cc
-      src/smooth.cc
-      src/lookahead.cc
-      src/planner.cc
-      src/mpc.cc
-    )
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/extern/pybind11/CMakeLists.txt")
+      add_subdirectory(extern/pybind11)
+      set(_pybind11_ready TRUE)
+    else()
+      find_package(pybind11 CONFIG QUIET)
+      if(pybind11_FOUND)
+        set(_pybind11_ready TRUE)
+      endif()
+    endif()
 
-    target_link_libraries(${PROJECT_NAME}_py
-      PRIVATE
-      ${OpenCV_LIBRARIES}
-      casadi::casadi
-    )
+    if(_pybind11_ready)
+      # Build Python binding module (STANDALONE - no ROS dependency)
+      pybind11_add_module(${PROJECT_NAME}_py
+        src/ocp_bind.cc
+        src/astar.cc
+        src/smooth.cc
+        src/lookahead.cc
+        src/planner.cc
+        src/mpc.cc
+      )
+
+      target_link_libraries(${PROJECT_NAME}_py
+        PRIVATE
+        ${OpenCV_LIBRARIES}
+        casadi::casadi
+      )
+    else()
+      message(WARNING "pybind11 not found (missing extern/pybind11 and no system pybind11 package). Skipping ocp_planner pybind module.")
+    endif()
   else()
     message(WARNING "Python3 (Interpreter + Development.Module) not found. Skipping ocp_planner pybind module.")
   endif()
