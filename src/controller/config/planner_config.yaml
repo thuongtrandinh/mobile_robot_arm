@@ -1,0 +1,67 @@
+opt_planner:
+  ros__parameters:
+    # A* reference generation and velocity-profile limits.
+    planner.reference_horizon_steps: 20
+    planner.reference_dt: 0.1
+    scene_limits.num_static_obstacles: 40
+
+    constraints.max_linear_vel: 0.3
+    constraints.max_angular_vel: 0.3
+    constraints.max_linear_acc: 0.15
+    constraints.max_angular_acc: 0.1
+
+    planner.local_obstacle_count: 8
+    planner.polygon_clearance_margin: 0.03
+    planner.wall_constraint_activation_distance: 2.0
+
+    # Reference source in planner:
+    # - astar_subgoal: build A* path from robot pose to RL local goal
+    # - direct_goal_xref: debug mode only
+    planner.reference_mode: astar_subgoal
+    planner.debug_xref_v_max: 0.3
+    planner.debug_xref_v_min: 0.05
+    planner.debug_xref_slowdown_distance: 1.5
+    planner.debug_xref_kp_dist: 0.8
+    planner.goal_stop_distance: 0.18
+
+rl_ocp_policy_bridge:
+  ros__parameters:
+    # Direct frequency tuning [Hz]
+    policy_hz: 5.0
+    service_hz: 5.0
+    follow_path_action: /follow_path
+    controller_id: FollowPath
+    goal_checker_id: general_goal_checker
+    follow_path_replan_min_interval_sec: 0.80
+    follow_path_replan_path_delta: 0.35
+    final_goal_approach_distance: 0.80
+    final_goal_xy_tolerance: 0.22
+    final_goal_yaw_tolerance: 0.25
+    final_goal_release_distance: 0.45
+    stop_cmd_topic: /diff_cont/cmd_vel_unstamped
+    # Goal source mode:
+    # - rl_local_goal: use PPO-generated local sub-goal
+    # - rviz_global_goal: bypass PPO and send RViz global goal directly to planner
+    goal_source_mode: rl_local_goal
+    # Legacy params (fallback/compatibility)
+    timer_period: 0.1
+    policy_period: 0.1
+    # Match Nav2 goal checker so bridge/planner/controller stop in the same zone.
+    goal_tolerance: 0.18
+    robot_radius: 0.25
+    obstacle_radius: 0.25
+    action_mask_clearance: 0.10
+    # Keep wall/poly constraints always active unless explicitly enabled
+    auto_relax_constraints: false
+    # Include occupied cells from /map as static obstacles for RL mask/planner debug
+    use_map_static_obstacles: true
+    map_static_obstacle_radius: 0.25
+    map_static_sample_step_m: 0.3
+    map_static_obstacle_limit: 40
+    # Always populate JointState with walls/poly/obstacles/humans fallback
+    enforce_scene_entities: false
+    human_fallback_enabled: true
+    map_geometry_boundary_area_ratio: 1.0 # Ép nó không nhận diện tường
+    map_geometry_wall_linearity_ratio: 100.0 # Ép nó không nhận diện tường
+    human_fallback_limit: 20
+    human_fallback_radius: 0.30

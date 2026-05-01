@@ -1,0 +1,174 @@
+controller_server:
+  ros__parameters:
+    # Chú ý đồng bộ use_sim_time với toàn hệ thống (True cho Gazebo, False cho phần cứng thật)
+    use_sim_time: true 
+    controller_frequency: 20.0
+    odom_topic: /odometry/filtered
+    cmd_vel_topic: "/diff_cont/cmd_vel_unstamped"
+    min_x_velocity_threshold: 0.001
+    min_y_velocity_threshold: 0.0
+    min_theta_velocity_threshold: 0.001
+    failure_tolerance: 0.3
+    progress_checker_plugin: "progress_checker"
+    goal_checker_plugins: ["general_goal_checker"]
+    controller_plugins: ["FollowPath"]
+
+    general_goal_checker:
+      plugin: "nav2_controller::SimpleGoalChecker"
+      xy_goal_tolerance: 0.18
+      yaw_goal_tolerance: 0.25
+      stateful: True
+
+    progress_checker:
+      plugin: "nav2_controller::SimpleProgressChecker"
+      required_movement_radius: 0.05
+      movement_time_allowance: 30.0
+
+    FollowPath:
+      plugin: "amr_nav2_mppi_controller::MPPIController"
+      time_steps: 80
+      model_dt: 0.1
+      batch_size: 2000
+
+      vx_min: -0.3
+      vx_max: 0.3
+      vy_max: 0.0
+      wz_max: 0.3
+
+      ax_min: -0.15
+      ax_max: 0.15
+      ay_max: 0.0
+      az_max: 0.1
+
+      motion_model: "DiffDrive"
+      IterationCount: 1
+      PruneBoundary: true
+      transform_tolerance: 0.1
+      visualize: true
+      TrajectoryVisualizer:
+        trajectory_step: 500
+        time_step: 20
+
+      critics:
+        - ConstraintCritic
+        - ObstaclesCritic
+        - DynamicHumanCritic
+        - GoalCritic
+        - GoalAngleCritic
+        - PathAlignCritic
+        - PreferForwardCritic
+
+      ConstraintCritic:
+        cost_weight: 1.0
+      ObstaclesCritic:
+        repulsion_weight: 5.0
+        cost_weight: 60.0
+        collision_cost: 100000.0
+      DynamicHumanCritic:
+        enabled: true
+        human_topic: /tracking/humans
+        publish_debug: true
+        debug_topic: /debug/dynamic_human_critic
+        cost_weight: 60.0
+        collision_cost: 100000.0
+        safe_margin: 0.2
+        human_min_radius: 0.01
+        human_max_radius: 1.50
+        data_timeout: 0.5
+      PathAlignCritic:
+        cost_weight: 5.0
+        max_heuristic_path_distance: 3.0
+      GoalCritic:
+        cost_weight: 15.0
+        threshold_to_consider: 2.0
+      GoalAngleCritic:
+        cost_weight: 10.0
+        threshold_to_consider: 1.0
+      PreferForwardCritic:
+        cost_weight: 20.0
+        threshold_to_consider: 1.0
+
+planner_server:
+  ros__parameters:
+    expected_planner_frequency: 30.0
+    use_sim_time: True
+    planner_plugins: ["GridBased"]
+    GridBased:
+      plugin: "nav2_navfn_planner/NavfnPlanner"
+      tolerance: 0.5
+      use_astar: true
+      allow_unknown: true
+
+local_costmap:
+  local_costmap:
+    ros__parameters:
+      update_frequency: 20.0
+      publish_frequency: 5.0
+      global_frame: odom
+      robot_base_frame: base_link
+      use_sim_time: True
+      rolling_window: true
+      width: 4
+      height: 4
+      resolution: 0.05
+      robot_radius: 0.35
+      plugins: ["obstacle_layer", "inflation_layer"]
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: True
+        observation_sources: scan
+        scan:
+          topic: /scan
+          max_obstacle_height: 2.0
+          clearing: True
+          marking: True
+          data_type: "LaserScan"
+          raytrace_max_range: 12.0
+          raytrace_min_range: 0.0
+          obstacle_max_range: 3.0
+          obstacle_min_range: 0.0
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        cost_scaling_factor: 5.0
+        inflation_radius: 0.75
+      always_send_full_costmap: True
+
+bt_navigator:
+  ros__parameters:
+    use_sim_time: True
+    odom_topic: /odometry/filtered
+
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      update_frequency: 2.0
+      publish_frequency: 2.0
+      global_frame: map
+      robot_base_frame: base_link
+      use_sim_time: True
+      robot_radius: 0.25
+      resolution: 0.05
+      track_unknown_space: true
+      plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: True
+        observation_sources: scan
+        scan:
+          topic: /scan
+          max_obstacle_height: 2.0
+          clearing: True
+          marking: True
+          data_type: "LaserScan"
+          raytrace_max_range: 3.5
+          raytrace_min_range: 0.0
+          obstacle_max_range: 3.0
+          obstacle_min_range: 0.0
+      static_layer:
+        plugin: "nav2_costmap_2d::StaticLayer"
+        map_subscribe_transient_local: True
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        cost_scaling_factor: 10.0
+        inflation_radius: 0.25
+      always_send_full_costmap: True

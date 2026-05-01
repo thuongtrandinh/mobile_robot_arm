@@ -1,0 +1,104 @@
+<?xml version="1.0" ?>
+<sdf version="1.7">
+  <world name="parallel_hallways">
+    <physics type="ode">
+      <max_step_size>0.01</max_step_size>
+    </physics>
+
+    <light type="directional" name="sun">
+      <cast_shadows>true</cast_shadows>
+      <pose>0 0 10 0 0 0</pose>
+      <diffuse>0.8 0.8 0.8 1</diffuse>
+      <specular>0.2 0.2 0.2 1</specular>
+      <attenuation>
+        <range>1000</range>
+        <constant>0.9</constant>
+        <linear>0.01</linear>
+        <quadratic>0.001</quadratic>
+      </attenuation>
+      <direction>-0.5 0.1 -0.9</direction>
+    </light>
+
+    <model name="ground_plane">
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry>
+            <plane>
+              <normal>0 0 1</normal>
+              <size>100 100</size>
+            </plane>
+          </geometry>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <plane>
+              <normal>0 0 1</normal>
+              <size>100 100</size>
+            </plane>
+          </geometry>
+          <material>
+            <ambient>0.75 0.78 0.8 1</ambient>
+            <diffuse>0.75 0.78 0.8 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Outer boundary for two long parallel corridors -->
+    <model name="wall_top">
+      <static>true</static>
+      <link name="link">
+        <pose>0 5.1 1.25 0 0 0</pose>
+        <collision name="collision"><geometry><box><size>24.2 0.2 2.5</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>24.2 0.2 2.5</size></box></geometry></visual>
+      </link>
+    </model>
+
+    <model name="wall_bottom">
+      <static>true</static>
+      <link name="link">
+        <pose>0 -5.1 1.25 0 0 0</pose>
+        <collision name="collision"><geometry><box><size>24.2 0.2 2.5</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>24.2 0.2 2.5</size></box></geometry></visual>
+      </link>
+    </model>
+
+    <model name="wall_left">
+      <static>true</static>
+      <link name="link">
+        <pose>-12.1 0 1.25 0 0 0</pose>
+        <collision name="collision"><geometry><box><size>0.2 10.4 2.5</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>0.2 10.4 2.5</size></box></geometry></visual>
+      </link>
+    </model>
+
+    <model name="wall_right">
+      <static>true</static>
+      <link name="link">
+        <pose>12.1 0 1.25 0 0 0</pose>
+        <collision name="collision"><geometry><box><size>0.2 10.4 2.5</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>0.2 10.4 2.5</size></box></geometry></visual>
+      </link>
+    </model>
+
+    <!-- Middle wall split into two pieces to create one connector passage in the middle -->
+    <model name="middle_wall_left">
+      <static>true</static>
+      <link name="link">
+        <pose>-7 0 1.25 0 0 0</pose>
+        <collision name="collision"><geometry><box><size>10 0.2 2.5</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>10 0.2 2.5</size></box></geometry></visual>
+      </link>
+    </model>
+
+    <model name="middle_wall_right">
+      <static>true</static>
+      <link name="link">
+        <pose>7 0 1.25 0 0 0</pose>
+        <collision name="collision"><geometry><box><size>10 0.2 2.5</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>10 0.2 2.5</size></box></geometry></visual>
+      </link>
+    </model>
+  </world>
+</sdf>

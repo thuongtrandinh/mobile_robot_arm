@@ -1,0 +1,89 @@
+<?xml version="1.0" ?>
+<robot name="diff_drive" xmlns:xacro="http://ros.org/wiki/xacro">
+
+    <gazebo reference="chassis"><material>Gazebo/Aluminium</material></gazebo>
+
+    <gazebo reference="left_wheel">
+        <material>Gazebo/Blue</material>
+        <mu1>1.0</mu1><mu2>1.0</mu2>
+        <kp>1000000.0</kp><kd>10.0</kd>
+    </gazebo>
+
+    <gazebo reference="right_wheel">
+        <material>Gazebo/Blue</material>
+        <mu1>1.0</mu1><mu2>1.0</mu2>
+        <kp>1000000.0</kp><kd>10.0</kd>
+    </gazebo>
+
+    <gazebo reference="caster_wheel"><mu1>0.0</mu1><mu2>0.0</mu2></gazebo>
+    <gazebo reference="above_base_caster"><mu1>0.0</mu1><mu2>0.0</mu2></gazebo>
+    <gazebo reference="right_base_caster"><mu1>0.0</mu1><mu2>0.0</mu2></gazebo>
+    <gazebo reference="left_base_caster"><mu1>0.0</mu1><mu2>0.0</mu2></gazebo>
+    <gazebo reference="back_base_caster"><mu1>0.0</mu1><mu2>0.0</mu2></gazebo>
+
+    <gazebo reference="laser">
+        <sensor name="laser_sensor" type="gpu_lidar">
+            <always_on>true</always_on>
+            <visualize>true</visualize>
+            <update_rate>10.0</update_rate>
+            <topic>scan</topic>
+            <gz_frame_id>laser</gz_frame_id>
+            <lidar>
+                <scan>
+                    <horizontal>
+                        <samples>720</samples>
+                        <resolution>1</resolution>
+                        <min_angle>-3.14159</min_angle>
+                        <max_angle>3.14159</max_angle>
+                    </horizontal>
+                </scan>
+                <range>
+                    <min>0.12</min>
+                    <max>12.0</max>
+                </range>
+            </lidar>
+        </sensor>
+    </gazebo>
+    
+    <gazebo reference="camera_link">
+        <sensor name="camera_sensor" type="rgbd_camera">
+            <always_on>true</always_on>
+            <update_rate>30.0</update_rate>
+            <topic>camera</topic>
+            <gz_frame_id>camera_link</gz_frame_id>
+            <camera name="d435i">
+                <horizontal_fov>1.50098</horizontal_fov>
+                <image>
+                    <width>640</width>
+                    <height>480</height>
+                </image>
+                <clip>
+                    <near>0.1</near>
+                    <far>10.0</far>
+                </clip>
+            </camera>
+        </sensor>
+    </gazebo>
+
+    <gazebo reference="camera_link">
+        <sensor name="imu_sensor" type="imu">
+            <always_on>true</always_on>
+            <update_rate>100.0</update_rate>
+            <topic>imu</topic>
+            <gz_frame_id>camera_link</gz_frame_id>
+        </sensor>
+    </gazebo>
+
+    <gazebo>
+        <plugin filename="libgz_ros2_control-system.so" name="gz_ros2_control::GazeboSimROS2ControlPlugin">
+            <parameters>$(find descriptions)/model/wheeled/config/ros2_control.yaml</parameters>
+        </plugin>
+        
+        <plugin filename="gz-sim-imu-system" name="gz::sim::systems::Imu"/>
+        
+        <plugin filename="gz-sim-sensors-system" name="gz::sim::systems::Sensors">
+            <render_engine>ogre2</render_engine>
+        </plugin>
+    </gazebo>
+  
+</robot>

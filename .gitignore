@@ -1,0 +1,14 @@
+build/
+install/
+log/
+.colcon/
+*.pyc
+__pycache__/
+.vscode/
+.DS_Store
+*.pdf
+HALO_1/log/
+HALO_1/install/
+.venv/
+*.db
+*.csv
