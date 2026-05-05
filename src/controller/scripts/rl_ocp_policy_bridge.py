@@ -54,8 +54,9 @@ class RlOcpPolicyBridge(Node):
         self.declare_parameter("scan_min_neighbor_count", 1)
         self.declare_parameter("scan_neighbor_max_delta", 0.18)
         self.declare_parameter("scan_persistence_hits", 1)
-        self.declare_parameter("scan_persistence_decay_scans", 4)
+        self.declare_parameter("scan_persistence_decay_scans", 1)  # Reduced from 4: Faster cleanup
         self.declare_parameter("scan_persistence_resolution", 0.12)
+        self.declare_parameter("scan_max_stale_count", 2)  # Reset count if missing for N scans
         self.declare_parameter("scan_obstacle_limit", 300)
         self.declare_parameter("use_map_static_obstacles", True)
         self.declare_parameter("map_static_obstacle_radius", 0.05)
@@ -148,6 +149,7 @@ class RlOcpPolicyBridge(Node):
         self.scan_persistence_hits = self.get_parameter("scan_persistence_hits").get_parameter_value().integer_value
         self.scan_persistence_decay_scans = self.get_parameter("scan_persistence_decay_scans").get_parameter_value().integer_value
         self.scan_persistence_resolution = self.get_parameter("scan_persistence_resolution").get_parameter_value().double_value
+        self.scan_max_stale_count = max(1, self.get_parameter("scan_max_stale_count").get_parameter_value().integer_value)
         self.scan_obstacle_limit = self.get_parameter("scan_obstacle_limit").get_parameter_value().integer_value
         self.use_map_static_obstacles = self.get_parameter("use_map_static_obstacles").get_parameter_value().bool_value
         self.map_static_obstacle_radius = self.get_parameter("map_static_obstacle_radius").get_parameter_value().double_value
@@ -471,6 +473,8 @@ class RlOcpPolicyBridge(Node):
             elif p.name == "scan_persistence_resolution":
                 self.scan_persistence_resolution = max(0.01, float(p.value))
                 self.scan_persistence.clear()
+            elif p.name == "scan_max_stale_count":
+                self.scan_max_stale_count = max(1, int(p.value))
                 self._clear_scan_obstacle_cache()
             elif p.name == "scan_obstacle_limit":
                 self.scan_obstacle_limit = max(1, int(p.value))
@@ -1468,17 +1472,27 @@ class RlOcpPolicyBridge(Node):
         return (int(round(float(x) / resolution)), int(round(float(y) / resolution)))
 
     def _scan_is_persistent(self, x: float, y: float) -> bool:
+        """Check if obstacle is persistent enough to include (faster cleanup for real robot)."""
         if not self.scan_filter_enabled:
             return True
 
         required_hits = max(1, int(self.scan_persistence_hits))
         decay_scans = max(1, int(self.scan_persistence_decay_scans))
+        max_stale = max(1, int(self.scan_max_stale_count))
         key = self._scan_persistence_key(x, y)
         count, last_seen = self.scan_persistence.get(key, (0, -1))
+        
+        # IMPROVED: Reset count if obstacle missing for N consecutive scans
+        # This prevents ghost obstacles from persisting when object moves away
         if last_seen != self.scan_seq:
-            count = min(required_hits, count + 1)
+            if self.scan_seq - last_seen >= max_stale:
+                count = 0  # Reset if too stale
+            else:
+                count = min(required_hits, count + 1)  # Accumulate if recent
+        
         self.scan_persistence[key] = (count, self.scan_seq)
 
+        # AGGRESSIVE cleanup: Remove stale entries faster
         stale_keys = [
             stale_key
             for stale_key, (_, last_seen) in self.scan_persistence.items()
@@ -1490,12 +1504,6 @@ class RlOcpPolicyBridge(Node):
         return count >= required_hits
 
     def _scan_only_obstacle_tuples(self) -> List[Tuple[float, float, float]]:
-        """
-        GIẢI PHÁP TỐI ƯU NHẤT: Transform 2 Chặng.
-        - Chặng 1: Laser -> Odom (Dùng timestamp gốc để chống trôi/lệch khi xoay).
-        - Chặng 2: Odom -> Map (Dùng Time() mới nhất để chống rớt TF Timeout).
-        - Giữ lại toàn bộ tia Lidar để đảm bảo không bị mất người.
-        """
         if self._cached_scan_seq == self.scan_seq:
             return list(self._cached_scan_obstacles)
 
@@ -1517,19 +1525,15 @@ class RlOcpPolicyBridge(Node):
         if not scan_frame:
             return obstacles
 
-        # ==========================================================
-        # BƯỚC 1: Lấy Transform từ Laser sang Odom (Chống lệch khi xoay)
-        # ==========================================================
+        # --- CHẶNG 1: Laser -> Odom (Dùng exact time để chống lệch góc) ---
         try:
-            # Lấy chính xác thời điểm quét (header.stamp)
             laser_to_odom_tf = self.tf_buffer.lookup_transform(
                 self.pose_frame,                    # Target: odom
                 scan_frame,                         # Source: laser
                 self.latest_scan.header.stamp,      # Exact time
-                timeout=Duration(seconds=0.02)      # Chờ nhẹ 20ms
+                timeout=Duration(seconds=0.02)
             )
         except TransformException:
-            # Fallback lấy thời gian mới nhất nếu bị trễ mạng
             try:
                 laser_to_odom_tf = self.tf_buffer.lookup_transform(
                     self.pose_frame, scan_frame, Time(), timeout=Duration(seconds=0.0)
@@ -1537,39 +1541,31 @@ class RlOcpPolicyBridge(Node):
             except TransformException:
                 return list(self._cached_scan_obstacles)
 
-        # Lấy ma trận xoay & tịnh tiến của Laser -> Odom
-        tx = laser_to_odom_tf.transform.translation.x
-        ty = laser_to_odom_tf.transform.translation.y
-        r = laser_to_odom_tf.transform.rotation
-        laser_odom_yaw = self._yaw_from_quaternion(r.x, r.y, r.z, r.w)
+        tx1 = laser_to_odom_tf.transform.translation.x
+        ty1 = laser_to_odom_tf.transform.translation.y
+        r1 = laser_to_odom_tf.transform.rotation
+        laser_odom_yaw = self._yaw_from_quaternion(r1.x, r1.y, r1.z, r1.w)
         cos_tf1 = math.cos(laser_odom_yaw)
         sin_tf1 = math.sin(laser_odom_yaw)
 
-        # ==========================================================
-        # BƯỚC 2: Lấy Transform từ Odom sang Map (Chống lỗi Timeout)
-        # ==========================================================
+        # --- CHẶNG 2: Odom -> Map (Dùng Time() để tránh Timeout mạng) ---
         try:
-            # Luôn dùng Time() vì map -> odom thay đổi rất chậm
             odom_to_map_tf = self.tf_buffer.lookup_transform(
                 self.map_frame,                     # Target: map
                 self.pose_frame,                    # Source: odom
-                Time(),                             # Latest time
+                Time(),                             
                 timeout=Duration(seconds=0.0)
             )
         except TransformException:
             return list(self._cached_scan_obstacles)
 
-        # Lấy ma trận xoay & tịnh tiến của Odom -> Map
-        mtx = odom_to_map_tf.transform.translation.x
-        mty = odom_to_map_tf.transform.translation.y
-        mr = odom_to_map_tf.transform.rotation
-        odom_map_yaw = self._yaw_from_quaternion(mr.x, mr.y, mr.z, mr.w)
+        tx2 = odom_to_map_tf.transform.translation.x
+        ty2 = odom_to_map_tf.transform.translation.y
+        r2 = odom_to_map_tf.transform.rotation
+        odom_map_yaw = self._yaw_from_quaternion(r2.x, r2.y, r2.z, r2.w)
         cos_tf2 = math.cos(odom_map_yaw)
         sin_tf2 = math.sin(odom_map_yaw)
 
-        # ==========================================================
-        # XỬ LÝ ĐIỂM LIDAR
-        # ==========================================================
         x_lim = min(self.effective_half_width, self.planner_x_limit)
         y_lim = min(self.effective_half_height, self.planner_y_limit)
         self_filter_min_range = max(0.0, float(self.scan_self_filter_min_range))
@@ -1593,21 +1589,17 @@ class RlOcpPolicyBridge(Node):
             lx = r * math.cos(ang)
             ly = r * math.sin(ang)
 
-            # Chiếu Laser -> Odom (Giải quyết lệch góc)
-            ox = tx + (cos_tf1 * lx) - (sin_tf1 * ly)
-            oy = ty + (sin_tf1 * lx) + (cos_tf1 * ly)
-
-            # Chiếu Odom -> Map (Bám dính vào bản đồ tĩnh)
-            mx = mtx + (cos_tf2 * ox) - (sin_tf2 * oy)
-            my = mty + (sin_tf2 * ox) + (cos_tf2 * oy)
+            # Tính toán ma trận
+            ox = tx1 + (cos_tf1 * lx) - (sin_tf1 * ly)
+            oy = ty1 + (sin_tf1 * lx) + (cos_tf1 * ly)
+            mx = tx2 + (cos_tf2 * ox) - (sin_tf2 * oy)
+            my = ty2 + (sin_tf2 * ox) + (cos_tf2 * oy)
 
             if abs(mx - px_map) >= x_lim or abs(my - py_map) >= y_lim:
                 continue
-
             if not self._scan_is_persistent(mx, my):
                 continue
                 
-            # KHÔNG lọc bằng bản đồ nữa để đảm bảo người đứng sát tường vẫn bị bôi đỏ
             obstacles.append((mx, my, self.obstacle_radius))
 
         if len(obstacles) > max(1, int(self.scan_obstacle_limit)):
@@ -1741,58 +1733,49 @@ class RlOcpPolicyBridge(Node):
             if map_x < xmin or map_x > xmax or map_y < ymin or map_y > ymax:
                 return True
 
+        # Lề an toàn chuẩn (Không cộng thêm rác gây bôi đỏ thừa)
         inflate = self.robot_radius + self.action_mask_clearance
         
         # 1. Kiểm tra điểm đích có đè lên bản đồ tĩnh
         if self._is_occupied_from_map(map_x, map_y, inflate):
             return True
 
-        # 2. Kiểm tra điểm đích có đè lên vật cản (LiDAR/Người)
-        for ox, oy, radius in obstacles:
-            # TỐI ƯU 1: Lọc hộp giới hạn (Bounding Box) trước khi tính toán hypot nặng nề
-            if abs(map_x - ox) > inflate + radius or abs(map_y - oy) > inflate + radius:
-                continue
-            if math.hypot(map_x - ox, map_y - oy) < (inflate + radius):
-                return True
-
-        # 3. Kiểm tra Raycast (Line-of-Sight) - TỐI ƯU HÓA TOÁN HỌC KHÔNG DÙNG VÒNG LẶP CHO LIDAR
         robot_pose = self._current_pose_in_map_frame()
-        if robot_pose is not None and self.map_resolution is not None:
-            rx, ry = robot_pose
-            dist = math.hypot(map_x - rx, map_y - ry)
+        if robot_pose is None:
+            return False
+        rx, ry = robot_pose
+
+        dist = math.hypot(map_x - rx, map_y - ry)
+        l2 = dist * dist
+
+        # 2. Kiểm tra vật cản động (LiDAR & Người)
+        for ox, oy, radius in obstacles:
+            safety_margin = inflate + radius
             
-            if dist > 0.01:
-                # 3A. Quét tia với Bản đồ tĩnh (Vẫn phải chia bước nhưng dùng bước nhảy lớn hơn)
-                step_size = max(0.05, self.map_resolution)
-                num_steps = int(dist / step_size)
-                for i in range(1, num_steps):
-                    t = float(i) / float(num_steps)
-                    cx = rx + t * (map_x - rx)
-                    cy = ry + t * (map_y - ry)
-                    if self._is_occupied_from_map(cx, cy, inflate):
-                        return True
+            # BƯỚC A: Kiểm tra điểm đích có đè trực tiếp lên vật cản không?
+            if abs(map_x - ox) <= safety_margin and abs(map_y - oy) <= safety_margin:
+                if math.hypot(map_x - ox, map_y - oy) < safety_margin:
+                    return True
+
+            # BƯỚC B: Kiểm tra quỹ đạo đi từ Robot đến Đích có quệt vào vật cản không?
+            if l2 > 0.001:
+                # Lọc nhanh: Bỏ qua vật cản nằm ngoài hộp giới hạn của quỹ đạo
+                if ox < min(rx, map_x) - safety_margin or \
+                   ox > max(rx, map_x) + safety_margin or \
+                   oy < min(ry, map_y) - safety_margin or \
+                   oy > max(ry, map_y) + safety_margin:
+                    continue
                 
-                # 3B. Quét tia với LiDAR / Dynamic Obstacles
-                # TỐI ƯU 2: Tính khoảng cách từ điểm Lidar chiếu lên đoạn thẳng tia nhìn (O(1) thay vì O(n))
-                l2 = dist * dist
-                for ox, oy, radius in obstacles:
-                    # Lọc nhanh những điểm LiDAR nằm tít ở xa khỏi quỹ đạo tia nhìn
-                    if ox < min(rx, map_x) - inflate - radius or \
-                       ox > max(rx, map_x) + inflate + radius or \
-                       oy < min(ry, map_y) - inflate - radius or \
-                       oy > max(ry, map_y) + inflate + radius:
-                        continue
-                    
-                    # Tính hệ số hình chiếu của vật cản lên đoạn thẳng (tia nhìn)
-                    t = max(0.0, min(1.0, ((ox - rx) * (map_x - rx) + (oy - ry) * (map_y - ry)) / l2))
-                    # FIX: Only check collision if moving toward obstacle (not backing away)
-                    if t > 0.05:
-                        proj_x = rx + t * (map_x - rx)
-                        proj_y = ry + t * (map_y - ry)
-                        
-                        # Nếu khoảng cách từ vật cản đến hình chiếu < vùng an toàn -> Tia bị chặn
-                        if math.hypot(ox - proj_x, oy - proj_y) < (inflate + radius):
-                            return True
+                # Tính hình chiếu của vật cản lên đoạn thẳng quỹ đạo
+                t = max(0.0, min(1.0, ((ox - rx) * (map_x - rx) + (oy - ry) * (map_y - ry)) / l2))
+                
+                # SỬA LỖI MÙ GẦN: Đảm bảo quét TẤT CẢ vị trí trên đoạn thẳng (t >= 0.0 thay vì t > 0.05)
+                proj_x = rx + t * (map_x - rx)
+                proj_y = ry + t * (map_y - ry)
+                
+                # Kiểm tra khoảng cách vuông góc từ vật cản đến đường đi
+                if math.hypot(ox - proj_x, oy - proj_y) < safety_margin:
+                    return True
 
         return False
 

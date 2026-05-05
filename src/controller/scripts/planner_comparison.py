@@ -47,6 +47,8 @@ class PlannerComparison(Node):
         self.start_pose = None
         self.goal_pose = None
         self.goal_reached = False
+        self.recording_started = False  # Bắt đầu ghi khi nhận goal_pose
+        self.goal_received_time = None  # Thời điểm nhận goal
         
         # Metrics
         self.metrics = {
@@ -92,9 +94,11 @@ class PlannerComparison(Node):
         self.get_logger().info(f"Planner Comparison Node initialized for {self.active_planner}")
 
     def odom_callback(self, msg: Odometry):
-        if not self.start_time:
-            self.start_time = self.get_clock().now()
-            self.start_pose = msg.pose.pose
+        # Chỉ xử lý metrics khi goal đã được nhận
+        if not self.recording_started:
+            self.current_pose = msg.pose.pose
+            self.current_twist = msg.twist.twist
+            return
 
         self.current_pose = msg.pose.pose
         self.current_twist = msg.twist.twist
@@ -141,6 +145,30 @@ class PlannerComparison(Node):
         self.global_path = msg.poses
         if msg.poses:
             self.goal_pose = msg.poses[-1].pose
+            
+            # Bắt đầu ghi dữ liệu từ khi nhận goal
+            if not self.recording_started:
+                self.recording_started = True
+                self.goal_received_time = self.get_clock().now()
+                self.start_time = self.goal_received_time
+                self.start_pose = self.current_pose if self.current_pose else None
+                self.timeseries_start_time = self.get_clock().now().nanoseconds / 1e9
+                
+                # Reset metrics
+                self.metrics['total_distance'] = 0.0
+                self.metrics['trajectory_points'] = []
+                self.metrics['collision_count'] = 0
+                self.metrics['velocities'] = []
+                self.metrics['angular_velocities'] = []
+                self.metrics['costs'] = []
+                self.metrics['time_to_goal'] = None
+                self.metrics['success'] = False
+                self.metrics['efficiency'] = 0.0
+                self.timeseries_data = []
+                self.clearance_history = []
+                self.goal_reached = False
+                
+                self.get_logger().info(f"Goal received - Starting data recording for {self.active_planner}")
 
     def scan_callback(self, msg: LaserScan):
         # Lấy ra các tia laser hợp lệ (không bị nhiễu, không phải inf/nan)
@@ -177,7 +205,7 @@ class PlannerComparison(Node):
 
     def update_metrics(self):
         """Update performance metrics"""
-        if not self.current_pose or not self.goal_pose:
+        if not self.recording_started or not self.current_pose or not self.goal_pose:
             return
 
         # Calculate distance to goal
@@ -188,10 +216,11 @@ class PlannerComparison(Node):
         # Check if goal is reached
         if distance_to_goal < 0.3 and not self.goal_reached:
             self.goal_reached = True
-            elapsed_time = (self.get_clock().now() - self.start_time).nanoseconds / 1e9
+            elapsed_time = (self.get_clock().now() - self.goal_received_time).nanoseconds / 1e9
             self.metrics['time_to_goal'] = elapsed_time
             self.metrics['success'] = True
             self.get_logger().info(f"Goal reached in {elapsed_time:.2f} seconds")
+            self.save_metrics()  # Tự động lưu khi đạt goal
 
         # Calculate efficiency
         if self.global_path:
@@ -205,9 +234,9 @@ class PlannerComparison(Node):
             if global_path_length > 0:
                 self.metrics['efficiency'] = global_path_length / max(self.metrics['total_distance'], 0.001)
 
-        # Check elapsed time
-        elapsed_time = (self.get_clock().now() - self.start_time).nanoseconds / 1e9
-        if elapsed_time > self.test_duration and not self.goal_reached:
+        # Check elapsed time (từ khi nhận goal)
+        elapsed_time = (self.get_clock().now() - self.goal_received_time).nanoseconds / 1e9
+        if self.recording_started and elapsed_time > self.test_duration and not self.goal_reached:
             self.get_logger().info("Test duration exceeded")
             self.save_metrics()
             self.timer.cancel()

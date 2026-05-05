@@ -172,3 +172,124 @@ global_costmap:
         cost_scaling_factor: 10.0
         inflation_radius: 0.25
       always_send_full_costmap: True
+
+# ============================================================
+# RL-MPPI POLICY BRIDGE PARAMETERS (OPTIMIZED FOR REAL ROBOT)
+# ============================================================
+rl_ocp_policy_bridge:
+  ros__parameters:
+    # Policy Configuration
+    policy_env_name: "mpc_rl"
+    halo_drl_dir: "HALO_1/drl_moudle"
+    config: "configs/mpc_rl.py"
+    model_path: "src/controller/policy/best_model.zip"
+    action_dim: 9
+    action_range: 2.25
+
+    # Goal & Navigation
+    goal_tolerance: 0.25
+    robot_radius: 0.35
+    axle_half_width: 0.23
+    v_pref: 0.8
+    
+    # SCAN FILTERING - OPTIMIZED FOR REAL ROBOT
+    scan_filter_enabled: true  # Enable noise reduction on real robot
+    scan_obstacle_max_range: 3.0
+    scan_self_filter_min_range: 0.05
+    scan_neighbor_window: 1
+    scan_min_neighbor_count: 1
+    scan_neighbor_max_delta: 0.15  # Stricter filtering for real sensors
+    
+    # Scan Persistence: Faster cleanup for stale obstacles
+    scan_persistence_hits: 1
+    scan_persistence_decay_scans: 1  # Reduced from 4 for faster cleanup
+    scan_persistence_resolution: 0.12
+    scan_max_stale_count: 2  # Reset if missing 2+ consecutive scans
+    scan_obstacle_limit: 200  # Reduce for performance
+    
+    # Map Obstacles
+    use_map_static_obstacles: true
+    map_static_obstacle_radius: 0.05
+    map_static_sample_step_m: 0.3
+    map_static_obstacle_limit: 40
+    
+    # Humans & Dynamic Obstacles
+    enforce_scene_entities: true
+    human_max_age_sec: 1.0  # Faster dropout
+    human_min_radius: 0.01
+    human_max_radius: 1.50
+    human_safety_margin: 0.25
+    human_limit: 10
+    
+    # Timing & Control
+    policy_hz: 10.0
+    service_hz: 10.0
+    policy_period: 0.1
+    timer_period: 0.1
+    tf_timeout_sec: 0.0
+    
+    # Action Masking - Real Robot Safety
+    action_mask_clearance: 0.15  # Increased from 0.1
+    visualize_actions: false  # Disable for performance
+    
+    # Geometry & Bounds
+    planner_half_width: 5.8
+    planner_half_height: 9.8
+    planner_hard_half_width: 5.99
+    planner_hard_half_height: 9.99
+    
+    map_geometry_obstacle_threshold: 90
+    map_geometry_poly_epsilon_ratio: 0.02
+    map_geometry_wall_linearity_ratio: 20.0
+    map_geometry_wall_linearity_span: 0.50
+    map_geometry_boundary_span_threshold: 2.5
+    map_geometry_wall_min_segment_length: 0.35
+    map_geometry_wall_merge_angle_deg: 12.0
+    map_geometry_boundary_edge_margin_px: 8
+    map_geometry_boundary_area_ratio: 0.25
+    map_geometry_debug_log: false
+    
+    # ROS Topics & Frames
+    odom_topic: "/odometry/filtered"
+    scan_topic: "/scan"
+    goal_topic: "/goal_pose"
+    map_topic: "/map"
+    human_topic: "/tracking/humans"
+    map_frame: "map"
+    
+    # Action Server
+    planner_action: "/compute_path_to_pose"
+    planner_id: "GridBased"
+    follow_path_action: "/follow_path"
+    controller_id: "FollowPath"
+    goal_checker_id: "general_goal_checker"
+    planner_service: "/ocp_local_plan"
+    
+    # Local Goals
+    local_goal_topic: "/rl/local_goal"
+    local_path_topic: "/rl/local_path"
+    follow_path_replan_min_interval_sec: 0.80
+    follow_path_replan_path_delta: 0.35
+    
+    # Final Goal
+    final_goal_approach_distance: 0.80
+    final_goal_xy_tolerance: 0.22
+    final_goal_yaw_tolerance: 0.25
+    final_goal_release_distance: 0.45
+    stop_cmd_topic: "/diff_cont/cmd_vel_unstamped"
+    
+    # Goal Source
+    goal_source_mode: "rl_local_goal"
+    
+    # Debugging (disabled for performance)
+    publish_debug_joint_state: false
+    publish_policy_debug_status: false
+    visualize_planner_scene: false
+    action_marker_topic: "/policy/action_markers"
+    action_marker_frame: "odom"
+    debug_joint_state_topic: "/debug/joint_state_req"
+    policy_debug_status_topic: "/debug/policy_status"
+    planner_scene_marker_topic: "/planner/debug_markers"
+    planner_scene_frame: "map"
+    action_debug_topic: "/debug/policy_actions_scene"
+    planner_scene_debug_topic: "/debug/planner_scene"
