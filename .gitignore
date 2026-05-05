@@ -12,3 +12,4 @@ HALO_1/install/
 .venv/
 *.db
 *.csv
+*.png

@@ -65,6 +65,14 @@ class PlannerComparison(Node):
             'avg_computation_time': 0.0,
         }
 
+        # Timeseries data collection
+        self.timeseries_data = []
+        self.timeseries_start_time = None
+        self.current_clearance = 10.0
+        self.current_cmd_v = 0.0
+        self.current_cmd_w = 0.0
+        self.clearance_history = []  # Lưu lịch sử khoảng cách an toàn
+
         # Subscribers
         self.odom_sub = self.create_subscription(Odometry, "odom", self.odom_callback, 10)
         self.path_sub = self.create_subscription(Path, "global_path", self.path_callback, 10)
@@ -72,6 +80,7 @@ class PlannerComparison(Node):
         self.dwa_cost_sub = self.create_subscription(Float64, "dwa_cost", self.dwa_cost_callback, 10)
         self.teb_cost_sub = self.create_subscription(Float64, "teb_cost", self.teb_cost_callback, 10)
         self.cmd_vel_sub = self.create_subscription(Twist, "cmd_vel", self.cmd_vel_callback, 10)
+        self.cmd_vel_unstamped_sub = self.create_subscription(Twist, "/diff_cont/cmd_vel_unstamped", self.cmd_callback, 10)
 
         # Publishers
         self.stats_pub = self.create_publisher(String, "planner_stats", 10)
@@ -95,9 +104,38 @@ class PlannerComparison(Node):
             prev_x, prev_y = self.metrics['trajectory_points'][-1]
             dx = msg.pose.pose.position.x - prev_x
             dy = msg.pose.pose.position.y - prev_y
-            self.metrics['total_distance'] += math.sqrt(dx**2 + dy**2)
+            step_distance = math.sqrt(dx**2 + dy**2)
 
-        self.metrics['trajectory_points'].append((msg.pose.pose.position.x, msg.pose.pose.position.y))
+            # --- BỘ LỌC NHIỄU 1CM ---
+            # Chỉ cộng dồn quãng đường nếu xe thực sự dịch chuyển lớn hơn 0.01m (1cm)
+            if step_distance > 0.01:
+                self.metrics['total_distance'] += step_distance
+                self.metrics['trajectory_points'].append((msg.pose.pose.position.x, msg.pose.pose.position.y))
+        else:
+            # Lưu điểm đầu tiên
+            self.metrics['trajectory_points'].append((msg.pose.pose.position.x, msg.pose.pose.position.y))
+
+        # Record timeseries data
+        current_time = self.get_clock().now().nanoseconds / 1e9
+        if self.timeseries_start_time is None:
+            self.timeseries_start_time = current_time
+
+        t = current_time - self.timeseries_start_time
+        v_real = msg.twist.twist.linear.x
+        w_real = msg.twist.twist.angular.z
+        current_x = msg.pose.pose.position.x
+        current_y = msg.pose.pose.position.y
+
+        self.timeseries_data.append({
+            'time': round(t, 3),
+            'x': round(current_x, 3),
+            'y': round(current_y, 3),
+            'v_linear_cmd': round(self.current_cmd_v, 3),
+            'v_linear_real': round(v_real, 3),
+            'v_angular_cmd': round(self.current_cmd_w, 3),
+            'v_angular_real': round(w_real, 3),
+            'clearance': round(self.current_clearance, 3)
+        })
 
     def path_callback(self, msg: Path):
         self.global_path = msg.poses
@@ -111,6 +149,11 @@ class PlannerComparison(Node):
         # Nếu có tia hợp lệ thì tìm khoảng cách nhỏ nhất
         if valid_ranges:
             min_range = min(valid_ranges)
+            # Loại bỏ các giá trị nhiễu vô cực
+            if min_range < 10.0:
+                self.current_clearance = min_range
+                self.clearance_history.append(min_range)  # Lưu vào lịch sử
+            
             # Nếu có vật cản cách robot dưới 0.3m -> Tính là 1 lần va chạm (hoặc rủi ro cao)
             if min_range < 0.3:
                 self.metrics['collision_count'] += 1
@@ -126,6 +169,11 @@ class PlannerComparison(Node):
     def cmd_vel_callback(self, msg: Twist):
         self.metrics['velocities'].append(msg.linear.x)
         self.metrics['angular_velocities'].append(msg.angular.z)
+
+    def cmd_callback(self, msg: Twist):
+        """Cập nhật liên tục lệnh vận tốc gửi xuống động cơ"""
+        self.current_cmd_v = msg.linear.x
+        self.current_cmd_w = msg.angular.z
 
     def update_metrics(self):
         """Update performance metrics"""
@@ -195,6 +243,9 @@ class PlannerComparison(Node):
 
         self.calculate_oscillations()
 
+        # Calculate average clearance
+        avg_clearance = np.mean(self.clearance_history) if self.clearance_history else 0.0
+
         # Save summary
         summary = {
             'planner': self.active_planner,
@@ -204,9 +255,7 @@ class PlannerComparison(Node):
             'efficiency': self.metrics['efficiency'],
             'time_to_goal': self.metrics['time_to_goal'] if self.metrics['time_to_goal'] else self.test_duration,
             'success': self.metrics['success'],
-            'collision_count': self.metrics['collision_count'],
-            'num_oscillations': self.metrics['num_oscillations'],
-            'avg_cost': avg_cost,
+            'avg_clearance': avg_clearance,
             'avg_computation_time': self.metrics['avg_computation_time'],
             'timestamp': timestamp,
         }
@@ -218,6 +267,16 @@ class PlannerComparison(Node):
             writer.writerow(summary)
 
         self.get_logger().info(f"Metrics saved to {filename}")
+
+        # Save timeseries data
+        ts_filename = os.path.join(self.data_dir, f"{self.active_planner}_timeseries_{timestamp}.csv")
+        if self.timeseries_data:
+            with open(ts_filename, 'w', newline='') as f:
+                fieldnames = ['time', 'x', 'y', 'v_linear_cmd', 'v_linear_real', 'v_angular_cmd', 'v_angular_real', 'clearance']
+                ts_writer = csv.DictWriter(f, fieldnames=fieldnames)
+                ts_writer.writeheader()
+                ts_writer.writerows(self.timeseries_data)
+            self.get_logger().info(f"Timeseries data saved to {ts_filename}")
 
         # Publish summary (ĐÃ SỬA: An toàn khi tắt bằng Ctrl+C)
         stats_msg = String()

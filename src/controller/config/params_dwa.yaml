@@ -130,7 +130,7 @@ controller_server:
     FollowPath:
       plugin: "dwb_core::DWBLocalPlanner"
       max_vel_x: 0.3
-      min_vel_x: -0.3
+      min_vel_x: -0.05
       max_vel_y: 0.0
       min_vel_y: 0.0
       max_vel_theta: 0.3
@@ -156,10 +156,10 @@ controller_server:
       short_circuit_trajectory_evaluation: False
       stateful: True
       critics: ["RotateToGoal", "Oscillation", "BaseObstacle", "GoalAlign", "PathAlign", "PathDist", "GoalDist"]
-      BaseObstacle.scale: 0.02
-      PathAlign.scale: 64.0
+      BaseObstacle.scale: 60.0
+      PathAlign.scale: 16.0
       PathAlign.forward_point_distance: 0.1
-      GoalAlign.scale: 48.0
+      GoalAlign.scale: 16.0
       GoalAlign.forward_point_distance: 0.1
       PathDist.scale: 32.0
       GoalDist.scale: 24.0
@@ -183,8 +183,8 @@ local_costmap:
       plugins: ["voxel_layer", "inflation_layer"]
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 10.0
-        inflation_radius: 0.25
+        cost_scaling_factor: 5.0
+        inflation_radius: 0.75
       voxel_layer:
         plugin: "nav2_costmap_2d::VoxelLayer"
         enabled: True

@@ -144,8 +144,9 @@ controller_server:
       min_turning_radius: 0.0
       
       # Obstacle avoidance configuration
-      min_obstacle_dist: 0.05
+      min_obstacle_dist: 0.35
       include_costmap_obstacles: true
+      include_dynamic_obstacles: True
       costmap_obstacles_behind_robot_dist: 1.0
       obstacle_poses_affected: 30
       
@@ -157,7 +158,7 @@ controller_server:
       weight_kinematics_nh: 1000.0
       weight_kinematics_forward_drive: 100.0
       weight_optimaltime: 1.0
-      weight_obstacle: 50.0
+      weight_obstacle: 100.0
 
 local_costmap:
   local_costmap:
@@ -175,8 +176,8 @@ local_costmap:
       plugins: ["voxel_layer", "inflation_layer"]
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 10.0
-        inflation_radius: 0.25
+        cost_scaling_factor: 5.0
+        inflation_radius: 0.75
       voxel_layer:
         plugin: "nav2_costmap_2d::VoxelLayer"
         enabled: True

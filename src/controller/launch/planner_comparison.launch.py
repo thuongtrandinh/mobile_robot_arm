@@ -69,7 +69,7 @@ def generate_launch_description():
         PythonLaunchDescriptionSource(os.path.join(pkg_dir, 'launch', 'controller.launch.py')),
         condition=IfCondition(PythonExpression(["'", planner_config, "' == 'rl_mppi'"])),
         launch_arguments={
-            'mppi_params_file': os.path.join(pkg_dir, 'config', 'full_nav2_params.yaml'),
+            'mppi_params_file': os.path.join(pkg_dir, 'config', 'mppi_params.yaml'),
             'use_sim_time': use_sim_time
         }.items()
     )
