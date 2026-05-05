@@ -1490,7 +1490,12 @@ class RlOcpPolicyBridge(Node):
         return count >= required_hits
 
     def _scan_only_obstacle_tuples(self) -> List[Tuple[float, float, float]]:
-        # FIX 1: Return cache if no new frame to avoid expensive TF lookup
+        """
+        GIẢI PHÁP TỐI ƯU NHẤT: Transform 2 Chặng.
+        - Chặng 1: Laser -> Odom (Dùng timestamp gốc để chống trôi/lệch khi xoay).
+        - Chặng 2: Odom -> Map (Dùng Time() mới nhất để chống rớt TF Timeout).
+        - Giữ lại toàn bộ tia Lidar để đảm bảo không bị mất người.
+        """
         if self._cached_scan_seq == self.scan_seq:
             return list(self._cached_scan_obstacles)
 
@@ -1498,37 +1503,73 @@ class RlOcpPolicyBridge(Node):
         if self.latest_scan is None or self.current_pose is None:
             return obstacles
 
-        px, py, yaw = self.current_pose
-        cos_yaw = math.cos(yaw)
-        sin_yaw = math.sin(yaw)
-
         pose_map = self._current_pose_in_map_frame()
         if pose_map is None:
             return obstacles
         px_map, py_map = pose_map
+        
         scan_frame = (
             self.scan_frame
             or (self.latest_scan.header.frame_id if self.latest_scan.header.frame_id else "")
             or self.pose_frame
         )
-        scan_tf = None
+
         if not scan_frame:
             return obstacles
-        if scan_frame != self.map_frame:
+
+        # ==========================================================
+        # BƯỚC 1: Lấy Transform từ Laser sang Odom (Chống lệch khi xoay)
+        # ==========================================================
+        try:
+            # Lấy chính xác thời điểm quét (header.stamp)
+            laser_to_odom_tf = self.tf_buffer.lookup_transform(
+                self.pose_frame,                    # Target: odom
+                scan_frame,                         # Source: laser
+                self.latest_scan.header.stamp,      # Exact time
+                timeout=Duration(seconds=0.02)      # Chờ nhẹ 20ms
+            )
+        except TransformException:
+            # Fallback lấy thời gian mới nhất nếu bị trễ mạng
             try:
-                # FIX 2: Set timeout=0.0 to prevent SingleThreadedExecutor deadlock
-                # When timeout > 0 inside a callback, it blocks entire ROS2 thread → TF cannot update → Always timeout
-                scan_tf = self.tf_buffer.lookup_transform(
-                    self.map_frame,
-                    scan_frame,
-                    self.latest_scan.header.stamp,
-                    timeout=Duration(seconds=0.0)
+                laser_to_odom_tf = self.tf_buffer.lookup_transform(
+                    self.pose_frame, scan_frame, Time(), timeout=Duration(seconds=0.0)
                 )
-            except TransformException as exc:
-                # FIX 3: If TF fails, return cached LiDAR instead of empty list
-                # This prevents ghost obstacles from disappearing when TF lags momentarily
+            except TransformException:
                 return list(self._cached_scan_obstacles)
 
+        # Lấy ma trận xoay & tịnh tiến của Laser -> Odom
+        tx = laser_to_odom_tf.transform.translation.x
+        ty = laser_to_odom_tf.transform.translation.y
+        r = laser_to_odom_tf.transform.rotation
+        laser_odom_yaw = self._yaw_from_quaternion(r.x, r.y, r.z, r.w)
+        cos_tf1 = math.cos(laser_odom_yaw)
+        sin_tf1 = math.sin(laser_odom_yaw)
+
+        # ==========================================================
+        # BƯỚC 2: Lấy Transform từ Odom sang Map (Chống lỗi Timeout)
+        # ==========================================================
+        try:
+            # Luôn dùng Time() vì map -> odom thay đổi rất chậm
+            odom_to_map_tf = self.tf_buffer.lookup_transform(
+                self.map_frame,                     # Target: map
+                self.pose_frame,                    # Source: odom
+                Time(),                             # Latest time
+                timeout=Duration(seconds=0.0)
+            )
+        except TransformException:
+            return list(self._cached_scan_obstacles)
+
+        # Lấy ma trận xoay & tịnh tiến của Odom -> Map
+        mtx = odom_to_map_tf.transform.translation.x
+        mty = odom_to_map_tf.transform.translation.y
+        mr = odom_to_map_tf.transform.rotation
+        odom_map_yaw = self._yaw_from_quaternion(mr.x, mr.y, mr.z, mr.w)
+        cos_tf2 = math.cos(odom_map_yaw)
+        sin_tf2 = math.sin(odom_map_yaw)
+
+        # ==========================================================
+        # XỬ LÝ ĐIỂM LIDAR
+        # ==========================================================
         x_lim = min(self.effective_half_width, self.planner_x_limit)
         y_lim = min(self.effective_half_height, self.planner_y_limit)
         self_filter_min_range = max(0.0, float(self.scan_self_filter_min_range))
@@ -1537,18 +1578,13 @@ class RlOcpPolicyBridge(Node):
         angle_inc = self.latest_scan.angle_increment
         r_min = self.latest_scan.range_min
         r_max = self.latest_scan.range_max
+        
         if self.scan_filter_enabled and self.scan_obstacle_max_range > 0.0:
             r_max = min(r_max, float(self.scan_obstacle_max_range))
 
         for i in range(0, len(ranges), max(1, self.obstacle_sample_step)):
             r = ranges[i]
-            if not math.isfinite(r):
-                continue
-            if r < r_min or r > r_max:
-                continue
-            if r < self_filter_min_range:
-                continue
-            if not self._scan_has_neighbor_support(i, float(r)):
+            if not math.isfinite(r) or r < r_min or r > r_max or r < self_filter_min_range:
                 continue
             if not self._scan_has_neighbor_support(i, float(r)):
                 continue
@@ -1557,30 +1593,27 @@ class RlOcpPolicyBridge(Node):
             lx = r * math.cos(ang)
             ly = r * math.sin(ang)
 
-            if scan_tf is not None:
-                map_xy = self._transform_point_with_tf(lx, ly, scan_tf)
-            else:
-                map_xy = self._point_to_map_frame(
-                    px + lx * cos_yaw - ly * sin_yaw,
-                    py + lx * sin_yaw + ly * cos_yaw,
-                )
+            # Chiếu Laser -> Odom (Giải quyết lệch góc)
+            ox = tx + (cos_tf1 * lx) - (sin_tf1 * ly)
+            oy = ty + (sin_tf1 * lx) + (cos_tf1 * ly)
 
-            if map_xy is None:
+            # Chiếu Odom -> Map (Bám dính vào bản đồ tĩnh)
+            mx = mtx + (cos_tf2 * ox) - (sin_tf2 * oy)
+            my = mty + (sin_tf2 * ox) + (cos_tf2 * oy)
+
+            if abs(mx - px_map) >= x_lim or abs(my - py_map) >= y_lim:
                 continue
 
-            ox, oy = map_xy
-
-            if abs(ox - px_map) >= x_lim or abs(oy - py_map) >= y_lim:
+            if not self._scan_is_persistent(mx, my):
                 continue
-            if not self._scan_is_persistent(ox, oy):
-                continue
-            obstacles.append((ox, oy, self.obstacle_radius))
+                
+            # KHÔNG lọc bằng bản đồ nữa để đảm bảo người đứng sát tường vẫn bị bôi đỏ
+            obstacles.append((mx, my, self.obstacle_radius))
 
         if len(obstacles) > max(1, int(self.scan_obstacle_limit)):
             obstacles.sort(key=lambda p: math.hypot(float(p[0]) - px_map, float(p[1]) - py_map))
             obstacles = obstacles[: max(1, int(self.scan_obstacle_limit))]
 
-        # FIX 4: Cache this scan result for next frame if TF fails
         self._cached_scan_seq = self.scan_seq
         self._cached_scan_obstacles = list(obstacles)
 
