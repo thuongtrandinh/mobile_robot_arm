@@ -4,19 +4,12 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
-from scipy.ndimage import uniform_filter1d
-
-def smooth_clearance_data(clearance, window_size=5):
-    """Smooth clearance data to reduce encoder noise."""
-    if len(clearance) < window_size:
-        return clearance
-    return uniform_filter1d(clearance, size=window_size, mode='nearest')
 
 
 def analyze_and_plot_planners(algorithms=['rl_mppi', 'teb', 'dwa'], data_dir='./planner_comparison_data'):
     """
     Plot planner comparison using TF2-based trajectory (map frame).
-    Clearance data smoothed to remove encoder noise.
+    Encoder velocity and clearance data are plotted directly from CSV.
     """
     sns.set_theme(style="whitegrid")
     plt.rcParams.update({'font.size': 12, 'font.family': 'serif'})
@@ -69,14 +62,11 @@ def analyze_and_plot_planners(algorithms=['rl_mppi', 'teb', 'dwa'], data_dir='./
         x = df['x'].to_numpy()
         y = df['y'].to_numpy()
         
-        # --- ÁP DỤNG LỌC NHIỄU (MOVING AVERAGE) CHO VẬN TỐC THỰC TẾ ---
-        WINDOW_SIZE = 5 # Cỡ cửa sổ lọc. Có thể tăng lên 7 hoặc 10 nếu đồ thị vẫn còn gai
-        
         v_lin_cmd = df['v_linear_cmd'].to_numpy()
-        v_lin_real = df['v_linear_real'].rolling(window=WINDOW_SIZE, min_periods=1).mean().to_numpy()
+        v_lin_real = df['v_linear_real'].to_numpy()
         
         v_ang_cmd = df['v_angular_cmd'].to_numpy()
-        v_ang_real = df['v_angular_real'].rolling(window=WINDOW_SIZE, min_periods=1).mean().to_numpy()
+        v_ang_real = df['v_angular_real'].to_numpy()
         
         clearance = df['clearance'].to_numpy()
 
@@ -92,7 +82,8 @@ def analyze_and_plot_planners(algorithms=['rl_mppi', 'teb', 'dwa'], data_dir='./
         comparison_data[algo.upper()] = {
             't': t, 'x': x, 'y': y, 
             'dist_to_goal': dist_to_goal, 'clearance': clearance,
-            'clearance_raw': clearance_raw
+            'v_lin_real': v_lin_real,
+            'v_ang_real': v_ang_real,
         }
 
         # --- ẢNH 1: QUỸ ĐẠO DI CHUYỂN RIÊNG ---
@@ -130,13 +121,13 @@ def analyze_and_plot_planners(algorithms=['rl_mppi', 'teb', 'dwa'], data_dir='./
         # --- ẢNH 3: ĐÁP ỨNG VẬN TỐC ---
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
         ax1.plot(t, v_lin_cmd, label='Lệnh (Cmd)', color='red', linestyle='--', linewidth=2)
-        ax1.plot(t, v_lin_real, label='Thực tế (Real)', color='blue', linewidth=2, alpha=0.8)
+        ax1.plot(t, v_lin_real, label='Encoder', color='blue', linewidth=2, alpha=0.9)
         ax1.set_title(f'Đáp Ứng Vận Tốc Thẳng - {algo.upper()}', fontsize=13, fontweight='bold')
         ax1.set_ylabel('v (m/s)')
         ax1.legend()
 
         ax2.plot(t, v_ang_cmd, label='Lệnh (Cmd)', color='red', linestyle='--', linewidth=2)
-        ax2.plot(t, v_ang_real, label='Thực tế (Real)', color='green', linewidth=2, alpha=0.8)
+        ax2.plot(t, v_ang_real, label='Encoder', color='green', linewidth=2, alpha=0.9)
         ax2.set_title(f'Đáp Ứng Vận Tốc Góc - {algo.upper()}', fontsize=13, fontweight='bold')
         ax2.set_xlabel('Thời gian (s)')
         ax2.set_ylabel('w (rad/s)')
@@ -147,9 +138,7 @@ def analyze_and_plot_planners(algorithms=['rl_mppi', 'teb', 'dwa'], data_dir='./
 
         # --- ẢNH 4: KHOẢNG CÁCH AN TOÀN (CLEARANCE) ---
         plt.figure(figsize=(10, 5))
-        plt.plot(t, clearance, label='Khoảng cách (lọc nhiễu)', color='purple', linewidth=2.5)
-        plt.plot(t, clearance_raw, label='Khoảng cách (encoder noise)', 
-                color='purple', linewidth=0.8, alpha=0.3, linestyle=':')
+        plt.plot(t, clearance, label='Khoảng cách', color='purple', linewidth=2.5)
         plt.axhline(y=0.25, color='red', linestyle='-.', label='Va chạm (0.25m)', linewidth=2)
         
         clearance_text = (f"Clearance TB: {avg_clearance:.2f} m\n"
@@ -209,7 +198,7 @@ def analyze_and_plot_planners(algorithms=['rl_mppi', 'teb', 'dwa'], data_dir='./
         plt.plot(data['t'], data['clearance'], label=f'{algo}', color=colors[i%len(colors)], linewidth=2.5, alpha=0.85)
     plt.axhline(y=0.25, color='red', linestyle='-.', label='Va chạm (0.25m)', linewidth=2)
     
-    note_text = "[Trajectory: TF2/map frame | Clearance: encoder noise filtered]"
+    note_text = "[Trajectory: TF2/map frame | Encoder velocity: raw CSV values]"
     plt.text(0.02, 0.02, note_text, transform=plt.gca().transAxes, fontsize=8,
             verticalalignment='bottom', style='italic', color='gray')
     
@@ -224,7 +213,7 @@ def analyze_and_plot_planners(algorithms=['rl_mppi', 'teb', 'dwa'], data_dir='./
 
     print("✓ Hoàn tất! Đã lưu toàn bộ đồ thị.")
     print("  - Trajectory: TF2 (map frame, không odom drift)")
-    print("  - Clearance: Lọc nhiễu encoder (5-point moving average)")
+    print("  - Encoder velocity: dùng giá trị raw từ CSV")
 
 if __name__ == '__main__':
     analyze_and_plot_planners(algorithms=['rl_mppi', 'teb', 'dwa'])

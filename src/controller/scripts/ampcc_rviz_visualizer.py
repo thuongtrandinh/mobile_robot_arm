@@ -27,13 +27,13 @@ class AmpccRvizVisualizer(Node):
     def __init__(self):
         super().__init__("ampcc_rviz_visualizer")
 
-        self.declare_parameter("visualize_actions", True)
-        self.declare_parameter("visualize_planner_scene", True)
-        self.declare_parameter("visualize_local_costmap", True)
-        self.declare_parameter("visualize_scan_obstacles", True)
-        self.declare_parameter("visualize_joint_state_geometry", True)
-        self.declare_parameter("visualize_astar_path", True)
-        self.declare_parameter("visualize_astar_local_map", True)
+        self.declare_parameter("visualize_actions", False)
+        self.declare_parameter("visualize_planner_scene", False)
+        self.declare_parameter("visualize_local_costmap", False)
+        self.declare_parameter("visualize_scan_obstacles", False)
+        self.declare_parameter("visualize_joint_state_geometry", False)
+        self.declare_parameter("visualize_astar_path", False)
+        self.declare_parameter("visualize_astar_local_map", False)
 
         self.declare_parameter("action_marker_topic", "/policy/action_markers")
         self.declare_parameter("action_marker_frame", "odom")
@@ -154,23 +154,39 @@ class AmpccRvizVisualizer(Node):
         self.action_pub = self.create_publisher(MarkerArray, self.action_marker_topic, 10)
         self.scene_pub = self.create_publisher(MarkerArray, self.planner_scene_marker_topic, 10)
 
-        # Subscribers
-        self.create_subscription(String, self.action_debug_topic, self._on_action_debug, 10)
-        self.create_subscription(String, self.planner_scene_debug_topic, self._on_scene_debug, 10)
-        self.create_subscription(OccupancyGrid, self.local_costmap_topic, self._on_local_costmap, 10)
-        self.create_subscription(OccupancyGrid, self.map_topic, self._on_map, 10)
-        self.create_subscription(OccupancyGrid, self.astar_local_map_topic, self._on_astar_local_map, 10)
-        
-        # [QUAN TRỌNG]: Tách Callback Scan thành việc cực nhẹ: Chỉ lưu msg, không tính toán
-        self.create_subscription(LaserScan, self.scan_topic, self._on_scan, qos_profile_sensor_data)
-        
-        self.create_subscription(Path, self.astar_path_topic, self._on_astar_path, 10)
+        # Subscribers are created only for enabled layers to keep real-time runs light.
+        if self.visualize_actions:
+            self.create_subscription(String, self.action_debug_topic, self._on_action_debug, 10)
+        if self.visualize_planner_scene:
+            self.create_subscription(String, self.planner_scene_debug_topic, self._on_scene_debug, 10)
+        if self.visualize_local_costmap:
+            self.create_subscription(OccupancyGrid, self.local_costmap_topic, self._on_local_costmap, 10)
+        if self.visualize_planner_scene:
+            self.create_subscription(OccupancyGrid, self.map_topic, self._on_map, 10)
+        if self.visualize_astar_local_map:
+            self.create_subscription(OccupancyGrid, self.astar_local_map_topic, self._on_astar_local_map, 10)
+        if self.visualize_scan_obstacles:
+            self.create_subscription(LaserScan, self.scan_topic, self._on_scan, qos_profile_sensor_data)
+        if self.visualize_astar_path:
+            self.create_subscription(Path, self.astar_path_topic, self._on_astar_path, 10)
         if self.visualize_joint_state_geometry:
             self.create_subscription(InterfaceJointState, self.joint_state_topic, self._on_joint_state, 10)
         self.add_on_set_parameters_callback(self._on_parameters_changed)
 
-        # [QUAN TRỌNG]: Tạo Timer độc lập ở tốc độ 15Hz để gom xử lý và Publish mượt mà
-        self.publish_timer = self.create_timer(1.0 / 15.0, self._process_and_publish_scene)
+        if any(
+            [
+                self.visualize_actions,
+                self.visualize_planner_scene,
+                self.visualize_local_costmap,
+                self.visualize_scan_obstacles,
+                self.visualize_joint_state_geometry,
+                self.visualize_astar_path,
+                self.visualize_astar_local_map,
+            ]
+        ):
+            self.publish_timer = self.create_timer(1.0 / 10.0, self._process_and_publish_scene)
+        else:
+            self.publish_timer = None
 
         self.get_logger().info(
             f"RViz visualizer started. action_debug={self.action_debug_topic}, scene_debug={self.planner_scene_debug_topic}"

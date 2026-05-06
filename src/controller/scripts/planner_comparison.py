@@ -32,10 +32,16 @@ class PlannerComparison(Node):
         self.declare_parameter("test_duration", 60.0)  # seconds
         self.declare_parameter("active_planner", "rl_mppi")  # dwa, teb, rl_mppi
         self.declare_parameter("data_dir", "./planner_comparison_data")
+        self.declare_parameter("map_frame", "map")
+        self.declare_parameter("base_frame", "base_link")
+        self.declare_parameter("velocity_odom_topic", "/odometry/filtered")
 
         self.test_duration = self.get_parameter("test_duration").value
         self.active_planner = self.get_parameter("active_planner").value
         self.data_dir = self.get_parameter("data_dir").value
+        self.map_frame = self.get_parameter("map_frame").value
+        self.base_frame = self.get_parameter("base_frame").value
+        self.velocity_odom_topic = self.get_parameter("velocity_odom_topic").value
 
         # Create data directory
         os.makedirs(self.data_dir, exist_ok=True)
@@ -82,8 +88,6 @@ class PlannerComparison(Node):
         # TF2 for global frame tracking
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
-        self.map_frame = "map"
-        self.base_frame = "base_link"
         self.last_valid_pose = None
 
         # Subscribers
@@ -93,7 +97,14 @@ class PlannerComparison(Node):
         self.teb_cost_sub = self.create_subscription(Float64, "teb_cost", self.teb_cost_callback, 10)
         self.cmd_vel_sub = self.create_subscription(Twist, "cmd_vel", self.cmd_vel_callback, 10)
         self.cmd_vel_unstamped_sub = self.create_subscription(Twist, "/diff_cont/cmd_vel_unstamped", self.cmd_callback, 10)
-        self.odom_sub = self.create_subscription(Odometry, "odom", self.odom_velocity_callback, 10)
+        self.odom_sub = None
+        if self.velocity_odom_topic:
+            self.odom_sub = self.create_subscription(
+                Odometry,
+                self.velocity_odom_topic,
+                self.odom_velocity_callback,
+                10,
+            )
 
         # Publishers
         self.stats_pub = self.create_publisher(String, "planner_stats", 10)
@@ -116,7 +127,6 @@ class PlannerComparison(Node):
             return
 
         try:
-            # Get transform from map to base_link
             t = self.tf_buffer.lookup_transform(
                 self.map_frame,
                 self.base_frame,

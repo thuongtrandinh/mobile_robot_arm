@@ -42,10 +42,10 @@ class RlOcpPolicyBridge(Node):
         self.declare_parameter("action_range", 2.25)
 
         self.declare_parameter("goal_tolerance", 0.25)
-        self.declare_parameter("robot_radius", 0.35)
+        self.declare_parameter("robot_radius", 0.25)
         self.declare_parameter("axle_half_width", 0.23)
         self.declare_parameter("v_pref", 0.8)
-        self.declare_parameter("obstacle_radius", 0.1)
+        self.declare_parameter("obstacle_radius", 0.05)
         self.declare_parameter("obstacle_sample_step", 1)
         self.declare_parameter("scan_filter_enabled", False)
         self.declare_parameter("scan_obstacle_max_range", 3.0)
@@ -57,7 +57,11 @@ class RlOcpPolicyBridge(Node):
         self.declare_parameter("scan_persistence_decay_scans", 1)  # Reduced from 4: Faster cleanup
         self.declare_parameter("scan_persistence_resolution", 0.12)
         self.declare_parameter("scan_max_stale_count", 2)  # Reset count if missing for N scans
-        self.declare_parameter("scan_obstacle_limit", 300)
+        self.declare_parameter("scan_obstacle_limit", 160)
+        self.declare_parameter("scan_raytrace_shadow_enabled", True)
+        self.declare_parameter("scan_raytrace_shadow_step", 0.30)
+        self.declare_parameter("scan_raytrace_shadow_radius", 0.05)
+        self.declare_parameter("scan_raytrace_shadow_max_range", 3.0)
         self.declare_parameter("use_map_static_obstacles", True)
         self.declare_parameter("map_static_obstacle_radius", 0.05)
         self.declare_parameter("map_static_sample_step_m", 0.3)
@@ -66,7 +70,7 @@ class RlOcpPolicyBridge(Node):
         self.declare_parameter("human_max_age_sec", 2.0)  # Increased from 0.6s to avoid dropping delayed YOLO data
         self.declare_parameter("human_min_radius", 0.01)
         self.declare_parameter("human_max_radius", 1.50)
-        self.declare_parameter("human_safety_margin", 0.2)
+        self.declare_parameter("human_safety_margin", 0.05)
         self.declare_parameter("human_limit", 12)
         self.declare_parameter("auto_relax_constraints", False)
         self.declare_parameter("timer_period", 0.1)
@@ -89,21 +93,21 @@ class RlOcpPolicyBridge(Node):
         self.declare_parameter("map_geometry_wall_merge_angle_deg", 12.0)
         self.declare_parameter("map_geometry_boundary_edge_margin_px", 8)
         self.declare_parameter("map_geometry_boundary_area_ratio", 0.25)
-        self.declare_parameter("map_geometry_debug_log", True)
+        self.declare_parameter("map_geometry_debug_log", False)
         self.declare_parameter("map_geometry_debug_period_sec", 2.0)
-        self.declare_parameter("visualize_actions", True)
+        self.declare_parameter("visualize_actions", False)
         self.declare_parameter("action_marker_topic", "/policy/action_markers")
-        self.declare_parameter("action_marker_frame", "odom")
-        self.declare_parameter("action_mask_clearance", 0.1)
-        self.declare_parameter("action_mask_use_local_costmap", True)
+        self.declare_parameter("action_marker_frame", "map")
+        self.declare_parameter("action_mask_clearance", 0.0)
+        self.declare_parameter("action_mask_use_local_costmap", False)
         self.declare_parameter("local_costmap_topic", "/local_costmap/costmap")
         self.declare_parameter("local_costmap_min_cost", 50)
         self.declare_parameter("local_costmap_unknown_is_obstacle", True)
-        self.declare_parameter("publish_debug_joint_state", True)
+        self.declare_parameter("publish_debug_joint_state", False)
         self.declare_parameter("debug_joint_state_topic", "/debug/joint_state_req")
-        self.declare_parameter("publish_policy_debug_status", True)
+        self.declare_parameter("publish_policy_debug_status", False)
         self.declare_parameter("policy_debug_status_topic", "/debug/policy_status")
-        self.declare_parameter("visualize_planner_scene", True)
+        self.declare_parameter("visualize_planner_scene", False)
         self.declare_parameter("planner_scene_marker_topic", "/planner/debug_markers")
         self.declare_parameter("planner_scene_frame", "map")
         self.declare_parameter("action_debug_topic", "/debug/policy_actions_scene")
@@ -115,6 +119,7 @@ class RlOcpPolicyBridge(Node):
         self.declare_parameter("map_topic", "/map")
         self.declare_parameter("human_topic", "/tracking/humans")
         self.declare_parameter("map_frame", "map")
+        self.declare_parameter("base_frame", "base_link")
         self.declare_parameter("planner_action", "/compute_path_to_pose")
         self.declare_parameter("planner_id", "GridBased")
         self.declare_parameter("follow_path_action", "/follow_path")
@@ -155,6 +160,21 @@ class RlOcpPolicyBridge(Node):
         self.scan_persistence_resolution = self.get_parameter("scan_persistence_resolution").get_parameter_value().double_value
         self.scan_max_stale_count = max(1, self.get_parameter("scan_max_stale_count").get_parameter_value().integer_value)
         self.scan_obstacle_limit = self.get_parameter("scan_obstacle_limit").get_parameter_value().integer_value
+        self.scan_raytrace_shadow_enabled = (
+            self.get_parameter("scan_raytrace_shadow_enabled").get_parameter_value().bool_value
+        )
+        self.scan_raytrace_shadow_step = max(
+            0.05,
+            self.get_parameter("scan_raytrace_shadow_step").get_parameter_value().double_value,
+        )
+        self.scan_raytrace_shadow_radius = max(
+            0.01,
+            self.get_parameter("scan_raytrace_shadow_radius").get_parameter_value().double_value,
+        )
+        self.scan_raytrace_shadow_max_range = max(
+            0.0,
+            self.get_parameter("scan_raytrace_shadow_max_range").get_parameter_value().double_value,
+        )
         self.use_map_static_obstacles = self.get_parameter("use_map_static_obstacles").get_parameter_value().bool_value
         self.map_static_obstacle_radius = self.get_parameter("map_static_obstacle_radius").get_parameter_value().double_value
         self.map_static_sample_step_m = self.get_parameter("map_static_sample_step_m").get_parameter_value().double_value
@@ -244,6 +264,7 @@ class RlOcpPolicyBridge(Node):
         self.local_costmap_topic = self.get_parameter("local_costmap_topic").get_parameter_value().string_value
         self.human_topic = self.get_parameter("human_topic").get_parameter_value().string_value
         self.map_frame = self.get_parameter("map_frame").get_parameter_value().string_value
+        self.base_frame = self.get_parameter("base_frame").get_parameter_value().string_value
         self.planner_action = self.get_parameter("planner_action").get_parameter_value().string_value
         self.planner_id = self.get_parameter("planner_id").get_parameter_value().string_value
         self.follow_path_action = self.get_parameter("follow_path_action").get_parameter_value().string_value
@@ -304,7 +325,9 @@ class RlOcpPolicyBridge(Node):
         self.local_costmap_origin_x: float = 0.0
         self.local_costmap_origin_y: float = 0.0
         self.local_costmap_data: Optional[List[int]] = None
-        self.pose_frame: str = ""
+        self.pose_frame: str = self.map_frame
+        self.scan_obstacle_count = 0
+        self.scan_shadow_obstacle_count = 0
         self._has_received_map = False
         self.map_geometry_polygons: List[List[Tuple[float, float]]] = []
         self.map_geometry_walls: List[Tuple[float, float, float, float]] = []
@@ -376,12 +399,13 @@ class RlOcpPolicyBridge(Node):
         )
         self.create_subscription(OccupancyGrid, self.map_topic, self._map_callback, map_qos_volatile)
         self.create_subscription(OccupancyGrid, self.map_topic, self._map_callback, map_qos_transient)
-        self.create_subscription(
-            OccupancyGrid,
-            self.local_costmap_topic,
-            self._local_costmap_callback,
-            map_qos_volatile,
-        )
+        if self.action_mask_use_local_costmap:
+            self.create_subscription(
+                OccupancyGrid,
+                self.local_costmap_topic,
+                self._local_costmap_callback,
+                map_qos_volatile,
+            )
 
         self.debug_joint_state_pub = self.create_publisher(InterfaceJointState, self.debug_joint_state_topic, 10)
         self.policy_debug_status_pub = self.create_publisher(String, self.policy_debug_status_topic, 10)
@@ -397,6 +421,7 @@ class RlOcpPolicyBridge(Node):
 
         self.create_timer(self.policy_period, self._policy_loop)
         self.create_timer(self.service_period, self._planner_loop)
+        self.create_timer(0.05, self._refresh_current_pose_from_tf)
 
         self.get_logger().info("RL OCP policy bridge started")
         self.get_logger().info(f"Model: {self.model_path}")
@@ -505,6 +530,21 @@ class RlOcpPolicyBridge(Node):
                 self._clear_scan_obstacle_cache()
             elif p.name == "scan_obstacle_limit":
                 self.scan_obstacle_limit = max(1, int(p.value))
+                self._clear_scan_obstacle_cache()
+            elif p.name == "scan_raytrace_shadow_enabled":
+                self.scan_raytrace_shadow_enabled = bool(p.value)
+                self._clear_scan_obstacle_cache()
+            elif p.name == "scan_raytrace_shadow_step":
+                self.scan_raytrace_shadow_step = max(0.05, float(p.value))
+                self._clear_scan_obstacle_cache()
+            elif p.name == "scan_raytrace_shadow_radius":
+                self.scan_raytrace_shadow_radius = max(0.01, float(p.value))
+                self._clear_scan_obstacle_cache()
+            elif p.name == "scan_raytrace_shadow_max_range":
+                self.scan_raytrace_shadow_max_range = max(0.0, float(p.value))
+                self._clear_scan_obstacle_cache()
+            elif p.name == "base_frame":
+                self.base_frame = str(p.value)
                 self._clear_scan_obstacle_cache()
             elif p.name == "planner_half_width":
                 self.planner_half_width = float(p.value)
@@ -916,16 +956,26 @@ class RlOcpPolicyBridge(Node):
         self._cached_map_signature = None
 
     def _odom_callback(self, msg: Odometry) -> None:
-        px = msg.pose.pose.position.x
-        py = msg.pose.pose.position.y
-        q = msg.pose.pose.orientation
-        yaw = self._yaw_from_quaternion(q.x, q.y, q.z, q.w)
-        self.current_pose = (px, py, yaw)
-        self.pose_frame = msg.header.frame_id if msg.header.frame_id else self.pose_frame
-
         v = msg.twist.twist.linear.x
         w = msg.twist.twist.angular.z
         self.current_twist = (v, w)
+
+    def _refresh_current_pose_from_tf(self) -> None:
+        try:
+            tf_msg = self.tf_buffer.lookup_transform(
+                self.map_frame,
+                self.base_frame,
+                Time(),
+                timeout=Duration(seconds=0.0),
+            )
+        except TransformException:
+            return
+
+        t = tf_msg.transform.translation
+        r = tf_msg.transform.rotation
+        yaw = self._yaw_from_quaternion(r.x, r.y, r.z, r.w)
+        self.current_pose = (float(t.x), float(t.y), float(yaw))
+        self.pose_frame = self.map_frame
 
     def _scan_callback(self, msg: LaserScan) -> None:
         self.latest_scan = msg
@@ -1568,7 +1618,9 @@ class RlOcpPolicyBridge(Node):
         if self._cached_scan_seq == self.scan_seq:
             return list(self._cached_scan_obstacles)
 
-        obstacles = []
+        obstacles: List[Tuple[float, float, float]] = []
+        self.scan_obstacle_count = 0
+        self.scan_shadow_obstacle_count = 0
         if self.latest_scan is None or self.current_pose is None:
             return obstacles
 
@@ -1586,46 +1638,31 @@ class RlOcpPolicyBridge(Node):
         if not scan_frame:
             return obstacles
 
-        # --- CHẶNG 1: Laser -> Odom (Dùng exact time để chống lệch góc) ---
+        scan_stamp = self.latest_scan.header.stamp
         try:
-            laser_to_odom_tf = self.tf_buffer.lookup_transform(
-                self.pose_frame,                    # Target: odom
-                scan_frame,                         # Source: laser
-                self.latest_scan.header.stamp,      # Exact time
-                timeout=Duration(seconds=0.02)
+            scan_to_map_tf = self.tf_buffer.lookup_transform(
+                self.map_frame,
+                scan_frame,
+                scan_stamp,
+                timeout=Duration(seconds=0.0),
             )
         except TransformException:
             try:
-                laser_to_odom_tf = self.tf_buffer.lookup_transform(
-                    self.pose_frame, scan_frame, Time(), timeout=Duration(seconds=0.0)
+                scan_to_map_tf = self.tf_buffer.lookup_transform(
+                    self.map_frame,
+                    scan_frame,
+                    Time(),
+                    timeout=Duration(seconds=0.0),
                 )
             except TransformException:
                 return list(self._cached_scan_obstacles)
 
-        tx1 = laser_to_odom_tf.transform.translation.x
-        ty1 = laser_to_odom_tf.transform.translation.y
-        r1 = laser_to_odom_tf.transform.rotation
-        laser_odom_yaw = self._yaw_from_quaternion(r1.x, r1.y, r1.z, r1.w)
-        cos_tf1 = math.cos(laser_odom_yaw)
-        sin_tf1 = math.sin(laser_odom_yaw)
-
-        # --- CHẶNG 2: Odom -> Map (Dùng Time() để tránh Timeout mạng) ---
-        try:
-            odom_to_map_tf = self.tf_buffer.lookup_transform(
-                self.map_frame,                     # Target: map
-                self.pose_frame,                    # Source: odom
-                Time(),                             
-                timeout=Duration(seconds=0.0)
-            )
-        except TransformException:
-            return list(self._cached_scan_obstacles)
-
-        tx2 = odom_to_map_tf.transform.translation.x
-        ty2 = odom_to_map_tf.transform.translation.y
-        r2 = odom_to_map_tf.transform.rotation
-        odom_map_yaw = self._yaw_from_quaternion(r2.x, r2.y, r2.z, r2.w)
-        cos_tf2 = math.cos(odom_map_yaw)
-        sin_tf2 = math.sin(odom_map_yaw)
+        tx = scan_to_map_tf.transform.translation.x
+        ty = scan_to_map_tf.transform.translation.y
+        q = scan_to_map_tf.transform.rotation
+        scan_map_yaw = self._yaw_from_quaternion(q.x, q.y, q.z, q.w)
+        cos_tf = math.cos(scan_map_yaw)
+        sin_tf = math.sin(scan_map_yaw)
 
         x_lim = min(self.effective_half_width, self.planner_x_limit)
         y_lim = min(self.effective_half_height, self.planner_y_limit)
@@ -1639,6 +1676,14 @@ class RlOcpPolicyBridge(Node):
         if self.scan_filter_enabled and self.scan_obstacle_max_range > 0.0:
             r_max = min(r_max, float(self.scan_obstacle_max_range))
 
+        shadow_enabled = bool(self.scan_raytrace_shadow_enabled)
+        shadow_step = max(0.05, float(self.scan_raytrace_shadow_step))
+        shadow_radius = max(0.01, float(self.scan_raytrace_shadow_radius))
+        shadow_max_range = float(self.scan_raytrace_shadow_max_range)
+        if shadow_max_range <= 0.0:
+            shadow_max_range = float(r_max)
+        shadow_max_range = max(float(r_min), min(float(r_max), shadow_max_range))
+
         for i in range(0, len(ranges), max(1, self.obstacle_sample_step)):
             r = ranges[i]
             if not math.isfinite(r) or r < r_min or r > r_max or r < self_filter_min_range:
@@ -1650,11 +1695,8 @@ class RlOcpPolicyBridge(Node):
             lx = r * math.cos(ang)
             ly = r * math.sin(ang)
 
-            # Tính toán ma trận
-            ox = tx1 + (cos_tf1 * lx) - (sin_tf1 * ly)
-            oy = ty1 + (sin_tf1 * lx) + (cos_tf1 * ly)
-            mx = tx2 + (cos_tf2 * ox) - (sin_tf2 * oy)
-            my = ty2 + (sin_tf2 * ox) + (cos_tf2 * oy)
+            mx = tx + (cos_tf * lx) - (sin_tf * ly)
+            my = ty + (sin_tf * lx) + (cos_tf * ly)
 
             if abs(mx - px_map) >= x_lim or abs(my - py_map) >= y_lim:
                 continue
@@ -1662,6 +1704,22 @@ class RlOcpPolicyBridge(Node):
                 continue
                 
             obstacles.append((mx, my, self.obstacle_radius))
+            self.scan_obstacle_count += 1
+
+            if not shadow_enabled:
+                continue
+
+            shadow_range = float(r) + shadow_step
+            while shadow_range <= shadow_max_range:
+                sx_local = shadow_range * math.cos(ang)
+                sy_local = shadow_range * math.sin(ang)
+                sx_map = tx + (cos_tf * sx_local) - (sin_tf * sy_local)
+                sy_map = ty + (sin_tf * sx_local) + (cos_tf * sy_local)
+                if abs(sx_map - px_map) >= x_lim or abs(sy_map - py_map) >= y_lim:
+                    break
+                obstacles.append((sx_map, sy_map, shadow_radius))
+                self.scan_shadow_obstacle_count += 1
+                shadow_range += shadow_step
 
         if len(obstacles) > max(1, int(self.scan_obstacle_limit)):
             obstacles.sort(key=lambda p: math.hypot(float(p[0]) - px_map, float(p[1]) - py_map))
@@ -1925,7 +1983,9 @@ class RlOcpPolicyBridge(Node):
                 "valid_count": len(valid_points),
                 "masked_count": len(masked_points),
                 "static_count": len(static_obstacles),
-                "scan_obstacle_count": len(scan_obstacles),
+                "scan_obstacle_count": int(self.scan_obstacle_count),
+                "scan_shadow_obstacle_count": int(self.scan_shadow_obstacle_count),
+                "scan_total_obstacle_count": len(scan_obstacles),
                 "human_obstacle_count": len(human_obstacles),
                 "human_count": len(humans_map),
                 "raw_human_count": len(self.latest_humans.humans) if self.latest_humans is not None else 0,
@@ -1996,7 +2056,7 @@ class RlOcpPolicyBridge(Node):
         remaining = max_supported - len(result_tuples)
 
         obstacles = []
-        for obs_x, obs_y, radius in obs_tuples:
+        for obs_x, obs_y, radius in result_tuples:
             obstacle = ObstacleState()
             obstacle.px = float(obs_x)
             obstacle.py = float(obs_y)
@@ -2246,6 +2306,7 @@ class RlOcpPolicyBridge(Node):
         if self.goal_source_mode == self._GOAL_SOURCE_RL and self.worker is None:
             return
 
+        self._refresh_current_pose_from_tf()
         if self.current_pose is None or self.current_goal is None:
             self._throttled_log(
                 "_last_policy_wait_log_ns",
@@ -2326,6 +2387,7 @@ class RlOcpPolicyBridge(Node):
             self.get_logger().error(f"Policy loop failed: {exc}")
 
     def _planner_loop(self) -> None:
+        self._refresh_current_pose_from_tf()
         if self.current_pose is None or self.current_goal is None:
             self._throttled_log(
                 "_last_planner_wait_log_ns",

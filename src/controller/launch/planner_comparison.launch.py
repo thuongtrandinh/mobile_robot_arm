@@ -38,6 +38,21 @@ def generate_launch_description():
         default_value='true',
         description='Enable planner comparison metrics collection'
     )
+    map_frame_arg = DeclareLaunchArgument(
+        'map_frame',
+        default_value='map',
+        description='Global TF frame used for metrics'
+    )
+    base_frame_arg = DeclareLaunchArgument(
+        'base_frame',
+        default_value='base_link',
+        description='Robot base TF frame used for metrics'
+    )
+    velocity_odom_topic_arg = DeclareLaunchArgument(
+        'velocity_odom_topic',
+        default_value='/odometry/filtered',
+        description='Odometry topic for encoder velocity logging only; pose is always read from TF'
+    )
 
     planner_config = LaunchConfiguration('planner')
     use_sim_time = LaunchConfiguration('use_sim_time', default='true')
@@ -85,9 +100,11 @@ def generate_launch_description():
             'test_duration': 120.0,
             'active_planner': planner_config,
             'data_dir': './planner_comparison_data',
+            'map_frame': LaunchConfiguration('map_frame'),
+            'base_frame': LaunchConfiguration('base_frame'),
+            'velocity_odom_topic': LaunchConfiguration('velocity_odom_topic'),
         }],
         remappings=[
-            ('odom', '/odometry/filtered'),
             ('global_path', '/plan'),
             ('scan', '/scan'),
         ],
@@ -98,6 +115,9 @@ def generate_launch_description():
     return LaunchDescription([
         planner_arg,
         enable_comparison_arg,
+        map_frame_arg,
+        base_frame_arg,
+        velocity_odom_topic_arg,
         DeclareLaunchArgument('use_sim_time', default_value='true'),
         
         # Include Nav2 controller with appropriate config

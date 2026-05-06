@@ -137,7 +137,7 @@ local_costmap:
       width: 5
       height: 5
       resolution: 0.05
-      robot_radius: 0.35
+      robot_radius: 0.25
       plugins: ["obstacle_layer", "inflation_layer"]
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
@@ -156,7 +156,7 @@ local_costmap:
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 5.0
-        inflation_radius: 0.75
+        inflation_radius: 0.30
       always_send_full_costmap: True
 
 bt_navigator:
@@ -196,7 +196,7 @@ global_costmap:
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 10.0
-        inflation_radius: 0.25
+        inflation_radius: 0.30
       always_send_full_costmap: True
 
 # ============================================================
@@ -214,8 +214,8 @@ rl_ocp_policy_bridge:
 
     # Goal & Navigation
     goal_tolerance: 0.25
-    robot_radius: 0.35
-    obstacle_radius: 0.25
+    robot_radius: 0.25
+    obstacle_radius: 0.05
     axle_half_width: 0.23
     v_pref: 0.8
     
@@ -232,7 +232,11 @@ rl_ocp_policy_bridge:
     scan_persistence_decay_scans: 1  # Reduced from 4 for faster cleanup
     scan_persistence_resolution: 0.12
     scan_max_stale_count: 2  # Reset if missing 2+ consecutive scans
-    scan_obstacle_limit: 200  # Reduce for performance
+    scan_obstacle_limit: 160  # Keep scan scene light for real-time control
+    scan_raytrace_shadow_enabled: true
+    scan_raytrace_shadow_step: 0.30
+    scan_raytrace_shadow_radius: 0.05
+    scan_raytrace_shadow_max_range: 3.0
     
     # Map Obstacles
     use_map_static_obstacles: true
@@ -248,7 +252,7 @@ rl_ocp_policy_bridge:
     human_max_age_sec: 1.0  # Faster dropout
     human_min_radius: 0.01
     human_max_radius: 1.50
-    human_safety_margin: 0.25
+    human_safety_margin: 0.05
     human_limit: 10
     
     # Timing & Control
@@ -259,8 +263,8 @@ rl_ocp_policy_bridge:
     tf_timeout_sec: 0.0
     
     # Action Masking - Real Robot Safety
-    action_mask_clearance: 0.15  # Increased from 0.1
-    action_mask_use_local_costmap: true
+    action_mask_clearance: 0.0
+    action_mask_use_local_costmap: false
     local_costmap_topic: "/local_costmap/costmap"
     local_costmap_min_cost: 50
     local_costmap_unknown_is_obstacle: true
@@ -290,6 +294,7 @@ rl_ocp_policy_bridge:
     map_topic: "/map"
     human_topic: "/tracking/humans"
     map_frame: "map"
+    base_frame: "base_link"
     
     # Action Server
     planner_action: "/compute_path_to_pose"
@@ -320,7 +325,7 @@ rl_ocp_policy_bridge:
     publish_policy_debug_status: false
     visualize_planner_scene: false
     action_marker_topic: "/policy/action_markers"
-    action_marker_frame: "odom"
+    action_marker_frame: "map"
     debug_joint_state_topic: "/debug/joint_state_req"
     policy_debug_status_topic: "/debug/policy_status"
     planner_scene_marker_topic: "/planner/debug_markers"
