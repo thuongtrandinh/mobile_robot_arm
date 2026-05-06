@@ -1,3 +1,29 @@
+opt_planner:
+  ros__parameters:
+    # A* reference generation and velocity-profile limits.
+    planner.reference_horizon_steps: 20
+    planner.reference_dt: 0.1
+    scene_limits.num_static_obstacles: 40
+
+    constraints.max_linear_vel: 0.3
+    constraints.max_angular_vel: 0.3
+    constraints.max_linear_acc: 0.15
+    constraints.max_angular_acc: 0.1
+
+    planner.local_obstacle_count: 8
+    planner.polygon_clearance_margin: 0.03
+    planner.wall_constraint_activation_distance: 2.0
+
+    # Reference source in planner:
+    # - astar_subgoal: build A* path from robot pose to RL local goal
+    # - direct_goal_xref: debug mode only
+    planner.reference_mode: astar_subgoal
+    planner.debug_xref_v_max: 0.3
+    planner.debug_xref_v_min: 0.05
+    planner.debug_xref_slowdown_distance: 1.5
+    planner.debug_xref_kp_dist: 0.8
+    planner.goal_stop_distance: 0.18
+
 controller_server:
   ros__parameters:
     # Chú ý đồng bộ use_sim_time với toàn hệ thống (True cho Gazebo, False cho phần cứng thật)
@@ -76,7 +102,7 @@ controller_server:
         human_max_radius: 1.50
         data_timeout: 0.5
       PathAlignCritic:
-        cost_weight: 5.0
+        cost_weight: 2.0
         max_heuristic_path_distance: 3.0
       GoalCritic:
         cost_weight: 15.0
@@ -108,8 +134,8 @@ local_costmap:
       robot_base_frame: base_link
       use_sim_time: True
       rolling_window: true
-      width: 4
-      height: 4
+      width: 5
+      height: 5
       resolution: 0.05
       robot_radius: 0.35
       plugins: ["obstacle_layer", "inflation_layer"]
@@ -141,15 +167,18 @@ bt_navigator:
 global_costmap:
   global_costmap:
     ros__parameters:
-      update_frequency: 2.0
-      publish_frequency: 2.0
+      update_frequency: 10.0      # Tăng lên 10Hz để A* phản ứng nhanh với vật cản động
+      publish_frequency: 5.0
       global_frame: map
       robot_base_frame: base_link
       use_sim_time: True
       robot_radius: 0.25
       resolution: 0.05
-      track_unknown_space: true
-      plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
+      rolling_window: true
+      width: 8                    # Giảm xuống 8 mét (phủ qua bán kính 3m của Lidar)
+      height: 8                   # Giảm xuống 8 mét
+      track_unknown_space: false
+      plugins: ["obstacle_layer", "inflation_layer"]
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: True
@@ -160,13 +189,10 @@ global_costmap:
           clearing: True
           marking: True
           data_type: "LaserScan"
-          raytrace_max_range: 3.5
+          raytrace_max_range: 12.0
           raytrace_min_range: 0.0
           obstacle_max_range: 3.0
           obstacle_min_range: 0.0
-      static_layer:
-        plugin: "nav2_costmap_2d::StaticLayer"
-        map_subscribe_transient_local: True
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 10.0
@@ -189,6 +215,7 @@ rl_ocp_policy_bridge:
     # Goal & Navigation
     goal_tolerance: 0.25
     robot_radius: 0.35
+    obstacle_radius: 0.25
     axle_half_width: 0.23
     v_pref: 0.8
     
@@ -215,6 +242,9 @@ rl_ocp_policy_bridge:
     
     # Humans & Dynamic Obstacles
     enforce_scene_entities: true
+    human_fallback_enabled: true
+    human_fallback_limit: 20
+    human_fallback_radius: 0.30
     human_max_age_sec: 1.0  # Faster dropout
     human_min_radius: 0.01
     human_max_radius: 1.50
@@ -230,6 +260,10 @@ rl_ocp_policy_bridge:
     
     # Action Masking - Real Robot Safety
     action_mask_clearance: 0.15  # Increased from 0.1
+    action_mask_use_local_costmap: true
+    local_costmap_topic: "/local_costmap/costmap"
+    local_costmap_min_cost: 50
+    local_costmap_unknown_is_obstacle: true
     visualize_actions: false  # Disable for performance
     
     # Geometry & Bounds

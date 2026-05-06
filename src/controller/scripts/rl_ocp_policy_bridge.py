@@ -95,6 +95,10 @@ class RlOcpPolicyBridge(Node):
         self.declare_parameter("action_marker_topic", "/policy/action_markers")
         self.declare_parameter("action_marker_frame", "odom")
         self.declare_parameter("action_mask_clearance", 0.1)
+        self.declare_parameter("action_mask_use_local_costmap", True)
+        self.declare_parameter("local_costmap_topic", "/local_costmap/costmap")
+        self.declare_parameter("local_costmap_min_cost", 50)
+        self.declare_parameter("local_costmap_unknown_is_obstacle", True)
         self.declare_parameter("publish_debug_joint_state", True)
         self.declare_parameter("debug_joint_state_topic", "/debug/joint_state_req")
         self.declare_parameter("publish_policy_debug_status", True)
@@ -214,6 +218,15 @@ class RlOcpPolicyBridge(Node):
         self.action_marker_topic = self.get_parameter("action_marker_topic").get_parameter_value().string_value
         self.action_marker_frame = self.get_parameter("action_marker_frame").get_parameter_value().string_value
         self.action_mask_clearance = self.get_parameter("action_mask_clearance").get_parameter_value().double_value
+        self.action_mask_use_local_costmap = (
+            self.get_parameter("action_mask_use_local_costmap").get_parameter_value().bool_value
+        )
+        self.local_costmap_min_cost = int(
+            self.get_parameter("local_costmap_min_cost").get_parameter_value().integer_value
+        )
+        self.local_costmap_unknown_is_obstacle = (
+            self.get_parameter("local_costmap_unknown_is_obstacle").get_parameter_value().bool_value
+        )
         self.publish_debug_joint_state = self.get_parameter("publish_debug_joint_state").get_parameter_value().bool_value
         self.debug_joint_state_topic = self.get_parameter("debug_joint_state_topic").get_parameter_value().string_value
         self.publish_policy_debug_status = self.get_parameter("publish_policy_debug_status").get_parameter_value().bool_value
@@ -228,6 +241,7 @@ class RlOcpPolicyBridge(Node):
         self.scan_topic = self.get_parameter("scan_topic").get_parameter_value().string_value
         self.goal_topic = self.get_parameter("goal_topic").get_parameter_value().string_value
         self.map_topic = self.get_parameter("map_topic").get_parameter_value().string_value
+        self.local_costmap_topic = self.get_parameter("local_costmap_topic").get_parameter_value().string_value
         self.human_topic = self.get_parameter("human_topic").get_parameter_value().string_value
         self.map_frame = self.get_parameter("map_frame").get_parameter_value().string_value
         self.planner_action = self.get_parameter("planner_action").get_parameter_value().string_value
@@ -283,6 +297,13 @@ class RlOcpPolicyBridge(Node):
         self.map_origin_y: float = 0.0
         self.map_data: Optional[List[int]] = None
         self.map_occupancy_threshold: int = 50
+        self.local_costmap_bounds: Optional[Tuple[float, float, float, float]] = None
+        self.local_costmap_resolution: Optional[float] = None
+        self.local_costmap_width: int = 0
+        self.local_costmap_height: int = 0
+        self.local_costmap_origin_x: float = 0.0
+        self.local_costmap_origin_y: float = 0.0
+        self.local_costmap_data: Optional[List[int]] = None
         self.pose_frame: str = ""
         self._has_received_map = False
         self.map_geometry_polygons: List[List[Tuple[float, float]]] = []
@@ -355,6 +376,12 @@ class RlOcpPolicyBridge(Node):
         )
         self.create_subscription(OccupancyGrid, self.map_topic, self._map_callback, map_qos_volatile)
         self.create_subscription(OccupancyGrid, self.map_topic, self._map_callback, map_qos_transient)
+        self.create_subscription(
+            OccupancyGrid,
+            self.local_costmap_topic,
+            self._local_costmap_callback,
+            map_qos_volatile,
+        )
 
         self.debug_joint_state_pub = self.create_publisher(InterfaceJointState, self.debug_joint_state_topic, 10)
         self.policy_debug_status_pub = self.create_publisher(String, self.policy_debug_status_topic, 10)
@@ -967,6 +994,19 @@ class RlOcpPolicyBridge(Node):
                 "[map_geometry/grid] map updated; walls=0 polygons=0 (using OccupancyGrid sampling)",
             )
 
+    def _local_costmap_callback(self, msg: OccupancyGrid) -> None:
+        origin_x = msg.info.origin.position.x
+        origin_y = msg.info.origin.position.y
+        width_m = msg.info.width * msg.info.resolution
+        height_m = msg.info.height * msg.info.resolution
+        self.local_costmap_bounds = (origin_x, origin_x + width_m, origin_y, origin_y + height_m)
+        self.local_costmap_resolution = float(msg.info.resolution)
+        self.local_costmap_width = int(msg.info.width)
+        self.local_costmap_height = int(msg.info.height)
+        self.local_costmap_origin_x = float(origin_x)
+        self.local_costmap_origin_y = float(origin_y)
+        self.local_costmap_data = list(msg.data)
+
     def _pixel_to_meter(self, u: int, v: int) -> Tuple[float, float]:
         row_occ = self.map_height - 1 - v
         x_world = self.map_origin_x + (float(u) + 0.5) * self.map_resolution
@@ -1403,6 +1443,27 @@ class RlOcpPolicyBridge(Node):
         self._publish_zero_cmd()
         self._publish_action_visualization(None)
 
+    def _is_occupied_from_local_costmap(self, world_x: float, world_y: float) -> Optional[bool]:
+        if (
+            self.local_costmap_data is None
+            or self.local_costmap_resolution is None
+            or self.local_costmap_width <= 0
+            or self.local_costmap_height <= 0
+        ):
+            return None
+
+        mx = int((world_x - self.local_costmap_origin_x) / self.local_costmap_resolution)
+        my = int((world_y - self.local_costmap_origin_y) / self.local_costmap_resolution)
+        if mx < 0 or mx >= self.local_costmap_width or my < 0 or my >= self.local_costmap_height:
+            return None
+
+        idx = my * self.local_costmap_width + mx
+        occ = int(self.local_costmap_data[idx])
+        if occ < 0:
+            return bool(self.local_costmap_unknown_is_obstacle)
+
+        return occ >= max(0, min(100, int(self.local_costmap_min_cost)))
+
     def _is_occupied_from_map(self, world_x: float, world_y: float, clearance: float) -> bool:
         if (
             self.map_data is None
@@ -1728,17 +1789,25 @@ class RlOcpPolicyBridge(Node):
 
         map_x, map_y = float(world_x), float(world_y)
 
-        if self.map_bounds is not None:
+        if not self.action_mask_use_local_costmap and self.map_bounds is not None:
             xmin, xmax, ymin, ymax = self.map_bounds
             if map_x < xmin or map_x > xmax or map_y < ymin or map_y > ymax:
                 return True
 
         # Lề an toàn chuẩn (Không cộng thêm rác gây bôi đỏ thừa)
         inflate = self.robot_radius + self.action_mask_clearance
-        
-        # 1. Kiểm tra điểm đích có đè lên bản đồ tĩnh
-        if self._is_occupied_from_map(map_x, map_y, inflate):
-            return True
+
+        # 1. Chỉ kiểm tra local costmap khi action masking bật
+        if self.action_mask_use_local_costmap:
+            local_blocked = self._is_occupied_from_local_costmap(map_x, map_y)
+            if local_blocked is True:
+                return True
+        else:
+            if self._is_occupied_from_map(map_x, map_y, inflate):
+                return True
+
+        if self.action_mask_use_local_costmap:
+            return False
 
         robot_pose = self._current_pose_in_map_frame()
         if robot_pose is None:
@@ -1788,10 +1857,13 @@ class RlOcpPolicyBridge(Node):
         if not candidates:
             return sub_goal_map, False, 0.0
 
-        static_obstacles = self._map_to_obstacle_tuples()
-        human_obstacles = self._human_obstacle_tuples()
-        scan_obstacles = self._scan_only_obstacle_tuples()
-        obstacles = static_obstacles + human_obstacles + scan_obstacles
+        if self.action_mask_use_local_costmap:
+            obstacles = []
+        else:
+            static_obstacles = self._map_to_obstacle_tuples()
+            human_obstacles = self._human_obstacle_tuples()
+            scan_obstacles = self._scan_only_obstacle_tuples()
+            obstacles = static_obstacles + human_obstacles + scan_obstacles
 
         best_valid: Optional[Tuple[float, float]] = None
         best_dist = float("inf")
@@ -2045,6 +2117,8 @@ class RlOcpPolicyBridge(Node):
         sub_goal: Tuple[float, float],
         path_points: List[Tuple[float, float]],
     ) -> None:
+        if not self.visualize_planner_scene:
+            return
         pose_map = self._current_pose_with_yaw_in_map_frame()
         goal_map = self._current_goal_in_map_frame()
         if pose_map is None or goal_map is None:
