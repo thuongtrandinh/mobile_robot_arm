@@ -42,7 +42,7 @@ class RlOcpPolicyBridge(Node):
         self.declare_parameter("action_range", 2.25)
 
         self.declare_parameter("goal_tolerance", 0.25)
-        self.declare_parameter("robot_radius", 0.25)
+        self.declare_parameter("robot_radius", 0.35)
         self.declare_parameter("axle_half_width", 0.23)
         self.declare_parameter("v_pref", 0.8)
         self.declare_parameter("obstacle_radius", 0.1)
@@ -94,7 +94,11 @@ class RlOcpPolicyBridge(Node):
         self.declare_parameter("visualize_actions", True)
         self.declare_parameter("action_marker_topic", "/policy/action_markers")
         self.declare_parameter("action_marker_frame", "odom")
-        self.declare_parameter("action_mask_clearance", 0.05)
+        self.declare_parameter("action_mask_clearance", 0.1)
+        self.declare_parameter("action_mask_use_local_costmap", True)
+        self.declare_parameter("local_costmap_topic", "/local_costmap/costmap")
+        self.declare_parameter("local_costmap_min_cost", 50)
+        self.declare_parameter("local_costmap_unknown_is_obstacle", True)
         self.declare_parameter("publish_debug_joint_state", True)
         self.declare_parameter("debug_joint_state_topic", "/debug/joint_state_req")
         self.declare_parameter("publish_policy_debug_status", True)
@@ -1790,12 +1794,20 @@ class RlOcpPolicyBridge(Node):
             if map_x < xmin or map_x > xmax or map_y < ymin or map_y > ymax:
                 return True
 
-        # Lề an toàn tại điểm đích (Bước A) - Bắt buộc phải bằng robot_radius + clearance
-        inflate_goal = self.robot_radius + self.action_mask_clearance
-        
-        # 1. CẤM VẬT CẢN TĨNH TẠI ĐÍCH (Bản đồ)
-        if self._is_occupied_from_map(map_x, map_y, inflate_goal):
-            return True
+        # Lề an toàn chuẩn (Không cộng thêm rác gây bôi đỏ thừa)
+        inflate = self.robot_radius + self.action_mask_clearance
+
+        # 1. Chỉ kiểm tra local costmap khi action masking bật
+        if self.action_mask_use_local_costmap:
+            local_blocked = self._is_occupied_from_local_costmap(map_x, map_y)
+            if local_blocked is True:
+                return True
+        else:
+            if self._is_occupied_from_map(map_x, map_y, inflate):
+                return True
+
+        if self.action_mask_use_local_costmap:
+            return False
 
         robot_pose = self._current_pose_in_map_frame()
         if robot_pose is None:
@@ -1805,37 +1817,33 @@ class RlOcpPolicyBridge(Node):
         dist = math.hypot(map_x - rx, map_y - ry)
         l2 = dist * dist
 
-        # 2. KIỂM TRA VẬT CẢN ĐỘNG (LiDAR & Người)
+        # 2. Kiểm tra vật cản động (LiDAR & Người)
         for ox, oy, radius in obstacles:
+            safety_margin = inflate + radius
             
-            # --- BƯỚC A: KIỂM TRA TẠI ĐIỂM ĐÍCH ---
-            # Điểm đích phải hoàn toàn trống trải, cách vật cản 1 khoảng = xe + lề
-            safety_margin_goal = inflate_goal + radius
-            if abs(map_x - ox) <= safety_margin_goal and abs(map_y - oy) <= safety_margin_goal:
-                if math.hypot(map_x - ox, map_y - oy) < safety_margin_goal:
+            # BƯỚC A: Kiểm tra điểm đích có đè trực tiếp lên vật cản không?
+            if abs(map_x - ox) <= safety_margin and abs(map_y - oy) <= safety_margin:
+                if math.hypot(map_x - ox, map_y - oy) < safety_margin:
                     return True
 
-            # --- BƯỚC B: KIỂM TRA TIA QUÉT TỪ XE ĐẾN ĐÍCH ---
+            # BƯỚC B: Kiểm tra quỹ đạo đi từ Robot đến Đích có quệt vào vật cản không?
             if l2 > 0.001:
-                # [SỬA Ở ĐÂY CHO HÀNH LANG SIÊU HẸP 100cm]
-                # Tia quét giờ chỉ là một sợi dây mỏng, cộng với action_mask_clearance (5cm).
-                # Chúng ta KHÔNG cộng robot_radius vào tia quét nữa, nhường A* đánh lái.
-                ray_safety_margin = self.action_mask_clearance + radius
-
-                # Lọc nhanh với tia quét siêu mỏng
-                if ox < min(rx, map_x) - ray_safety_margin or \
-                   ox > max(rx, map_x) + ray_safety_margin or \
-                   oy < min(ry, map_y) - ray_safety_margin or \
-                   oy > max(ry, map_y) + ray_safety_margin:
+                # Lọc nhanh: Bỏ qua vật cản nằm ngoài hộp giới hạn của quỹ đạo
+                if ox < min(rx, map_x) - safety_margin or \
+                   ox > max(rx, map_x) + safety_margin or \
+                   oy < min(ry, map_y) - safety_margin or \
+                   oy > max(ry, map_y) + safety_margin:
                     continue
                 
-                # Tính hình chiếu của vật cản lên tia quét
+                # Tính hình chiếu của vật cản lên đoạn thẳng quỹ đạo
                 t = max(0.0, min(1.0, ((ox - rx) * (map_x - rx) + (oy - ry) * (map_y - ry)) / l2))
+                
+                # SỬA LỖI MÙ GẦN: Đảm bảo quét TẤT CẢ vị trí trên đoạn thẳng (t >= 0.0 thay vì t > 0.05)
                 proj_x = rx + t * (map_x - rx)
                 proj_y = ry + t * (map_y - ry)
                 
-                # Kiểm tra va chạm với tia quét siêu mỏng
-                if math.hypot(ox - proj_x, oy - proj_y) < ray_safety_margin:
+                # Kiểm tra khoảng cách vuông góc từ vật cản đến đường đi
+                if math.hypot(ox - proj_x, oy - proj_y) < safety_margin:
                     return True
 
         return False

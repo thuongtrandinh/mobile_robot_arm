@@ -297,7 +297,7 @@ def generate_launch_description():
                 "follow_path_action": "/follow_path",
                 "controller_id": "FollowPath",
                 "goal_checker_id": "general_goal_checker",
-                "policy_hz": 10.0,
+                "policy_hz": 5.0,
                 "service_hz": 5.0,
                 "follow_path_replan_min_interval_sec": 0.80,
                 "follow_path_replan_path_delta": 0.35,
