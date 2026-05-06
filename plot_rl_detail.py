@@ -31,11 +31,16 @@ def plot_rl_mppi_details(data_dir='./planner_comparison_data'):
     x = df['x'].to_numpy()
     y = df['y'].to_numpy()
     v_lin_cmd = df['v_linear_cmd'].to_numpy()
-    v_lin_real = df['v_linear_real'].to_numpy()
+    
+    # Áp dụng Moving Average Filter (Cửa sổ = 5, bạn có thể tăng/giảm)
+    v_lin_real = df['v_linear_real'].rolling(window=5, min_periods=1).mean().to_numpy()
+    
     v_ang_cmd = df['v_angular_cmd'].to_numpy()
-    v_ang_real = df['v_angular_real'].to_numpy()
-    clearance_raw = df['clearance'].to_numpy()
-    clearance = smooth_clearance_data(clearance_raw, window_size=5)
+    
+    # Áp dụng Moving Average Filter cho vận tốc góc
+    v_ang_real = df['v_angular_real'].rolling(window=5, min_periods=1).mean().to_numpy()
+    
+    clearance = df['clearance'].to_numpy()
 
     # IMAGE 1: TRAJECTORY
     plt.figure(figsize=(8, 6))

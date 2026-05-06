@@ -68,10 +68,17 @@ def analyze_and_plot_planners(algorithms=['rl_mppi', 'teb', 'dwa'], data_dir='./
         
         x = df['x'].to_numpy()
         y = df['y'].to_numpy()
-        v_lin_cmd, v_lin_real = df['v_linear_cmd'].to_numpy(), df['v_linear_real'].to_numpy()
-        v_ang_cmd, v_ang_real = df['v_angular_cmd'].to_numpy(), df['v_angular_real'].to_numpy()
-        clearance_raw = df['clearance'].to_numpy()
-        clearance = smooth_clearance_data(clearance_raw, window_size=5)
+        
+        # --- ÁP DỤNG LỌC NHIỄU (MOVING AVERAGE) CHO VẬN TỐC THỰC TẾ ---
+        WINDOW_SIZE = 5 # Cỡ cửa sổ lọc. Có thể tăng lên 7 hoặc 10 nếu đồ thị vẫn còn gai
+        
+        v_lin_cmd = df['v_linear_cmd'].to_numpy()
+        v_lin_real = df['v_linear_real'].rolling(window=WINDOW_SIZE, min_periods=1).mean().to_numpy()
+        
+        v_ang_cmd = df['v_angular_cmd'].to_numpy()
+        v_ang_real = df['v_angular_real'].rolling(window=WINDOW_SIZE, min_periods=1).mean().to_numpy()
+        
+        clearance = df['clearance'].to_numpy()
 
         # Tính khoảng cách đến ĐÍCH CHUẨN (từ RL-MPPI) thay vì đích riêng của từng thuật toán
         dist_to_goal = np.sqrt((x - ref_goal_x)**2 + (y - ref_goal_y)**2)

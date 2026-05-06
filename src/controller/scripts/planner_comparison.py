@@ -84,15 +84,16 @@ class PlannerComparison(Node):
         self.tf_listener = TransformListener(self.tf_buffer, self)
         self.map_frame = "map"
         self.base_frame = "base_link"
+        self.last_valid_pose = None
 
         # Subscribers
-        self.odom_sub = self.create_subscription(Odometry, "odom", self.odom_velocity_callback, 10)
         self.path_sub = self.create_subscription(Path, "global_path", self.path_callback, 10)
         self.scan_sub = self.create_subscription(LaserScan, "scan", self.scan_callback, 10)
         self.dwa_cost_sub = self.create_subscription(Float64, "dwa_cost", self.dwa_cost_callback, 10)
         self.teb_cost_sub = self.create_subscription(Float64, "teb_cost", self.teb_cost_callback, 10)
         self.cmd_vel_sub = self.create_subscription(Twist, "cmd_vel", self.cmd_vel_callback, 10)
         self.cmd_vel_unstamped_sub = self.create_subscription(Twist, "/diff_cont/cmd_vel_unstamped", self.cmd_callback, 10)
+        self.odom_sub = self.create_subscription(Odometry, "odom", self.odom_velocity_callback, 10)
 
         # Publishers
         self.stats_pub = self.create_publisher(String, "planner_stats", 10)
@@ -105,25 +106,17 @@ class PlannerComparison(Node):
         self.get_logger().info(f"Planner Comparison Node initialized for {self.active_planner}")
 
     def odom_velocity_callback(self, msg: Odometry):
+        """Extract velocity from odom (used for cmd_vel comparison)"""
         self.current_v_linear = msg.twist.twist.linear.x
         self.current_v_angular = msg.twist.twist.angular.z
 
     def pose_update_callback(self):
-        # Auto-start recording if we have odometry but haven't received path yet
-        if not self.recording_started and self.current_v_linear is not None:
-            # Start recording after 1 second of odometry data
-            if self.start_time is None:
-                self.start_time = self.get_clock().now()
-            elif (self.get_clock().now() - self.start_time).nanoseconds / 1e9 > 1.0:
-                self.recording_started = True
-                self.goal_received_time = self.get_clock().now()
-                self.timeseries_start_time = self.get_clock().now().nanoseconds / 1e9
-                self.get_logger().info(f"Auto-started recording for {self.active_planner} (no path_callback received)")
-        
+        """Update robot pose from TF2 (map frame) every 50ms"""
         if not self.recording_started:
             return
 
         try:
+            # Get transform from map to base_link
             t = self.tf_buffer.lookup_transform(
                 self.map_frame,
                 self.base_frame,
@@ -133,30 +126,42 @@ class PlannerComparison(Node):
             current_x = t.transform.translation.x
             current_y = t.transform.translation.y
 
+            # Update pose
             if self.current_pose is None:
                 self.current_pose = Pose()
             self.current_pose.position.x = current_x
             self.current_pose.position.y = current_y
             self.current_pose.orientation = t.transform.rotation
 
+            # Distance calculation with SLAM jump detection
             if len(self.metrics['trajectory_points']) > 0:
                 prev_x, prev_y = self.metrics['trajectory_points'][-1]
                 dx = current_x - prev_x
                 dy = current_y - prev_y
                 step_distance = math.sqrt(dx**2 + dy**2)
 
+                # Filter logic:
+                # 0.01m - 0.15m: Normal movement -> accumulate
+                # < 0.01m: Sensor noise -> skip
+                # > 0.15m: SLAM jump (loop closure) -> update position but skip distance
                 if 0.01 < step_distance <= 0.15:
                     self.metrics['total_distance'] += step_distance
                     self.metrics['trajectory_points'].append((current_x, current_y))
                 elif step_distance > 0.15:
+                    # SLAM jump detected
                     self.slam_jump_count += 1
                     self.get_logger().warn(
-                        f"SLAM jump #{self.slam_jump_count}: {step_distance:.3f}m detected. Position updated."
+                        f"SLAM jump #{self.slam_jump_count}: {step_distance:.3f}m detected. "
+                        "Position updated, distance NOT accumulated."
                     )
                     self.metrics['trajectory_points'].append((current_x, current_y))
+                # else: skip noise < 0.01m
             else:
+                # First point
                 self.metrics['trajectory_points'].append((current_x, current_y))
+                self.last_valid_pose = (current_x, current_y)
 
+            # Record timeseries data
             if self.timeseries_start_time is None:
                 self.timeseries_start_time = self.get_clock().now().nanoseconds / 1e9
 
@@ -176,25 +181,23 @@ class PlannerComparison(Node):
             })
 
         except Exception as e:
+            # TF not available yet
             pass
 
-    def odom_callback(self, msg: Odometry):
-        pass  # Legacy: now using TF2 instead
-
     def path_callback(self, msg: Path):
+        """Handle new global path and prepare for recording"""
         self.global_path = msg.poses
         if msg.poses:
             self.goal_pose = msg.poses[-1].pose
-            
-            # Bắt đầu ghi dữ liệu từ khi nhận goal
+
             if not self.recording_started:
                 self.recording_started = True
                 self.goal_received_time = self.get_clock().now()
                 self.start_time = self.goal_received_time
                 self.start_pose = self.current_pose if self.current_pose else None
-                self.timeseries_start_time = self.get_clock().now().nanoseconds / 1e9
-                
-                # Reset metrics
+                self.timeseries_start_time = None
+
+                # Reset metrics for new goal
                 self.metrics['total_distance'] = 0.0
                 self.metrics['trajectory_points'] = []
                 self.metrics['collision_count'] = 0
@@ -207,8 +210,12 @@ class PlannerComparison(Node):
                 self.timeseries_data = []
                 self.clearance_history = []
                 self.goal_reached = False
-                
-                self.get_logger().info(f"Goal received - Starting data recording for {self.active_planner}")
+                self.slam_jump_count = 0  # Reset SLAM jump counter
+
+                self.get_logger().info(
+                    f"Goal received - Starting data recording for {self.active_planner} "
+                    f"(Target: [{self.goal_pose.position.x:.2f}, {self.goal_pose.position.y:.2f}])"
+                )
 
     def scan_callback(self, msg: LaserScan):
         # Lấy ra các tia laser hợp lệ (không bị nhiễu, không phải inf/nan)
@@ -297,36 +304,37 @@ class PlannerComparison(Node):
         return oscillations
 
     def save_metrics(self):
-        """Save metrics to CSV file"""
+        """Save metrics to CSV file with SLAM statistics"""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = os.path.join(self.data_dir, f"{self.active_planner}_metrics_{timestamp}.csv")
 
         # Calculate final metrics
-        if self.metrics['costs']:
-            avg_cost = np.mean(self.metrics['costs'])
-        else:
-            avg_cost = 0.0
-
-        if self.metrics['computation_times']:
-            self.metrics['avg_computation_time'] = np.mean(self.metrics['computation_times'])
-
+        avg_cost = np.mean(self.metrics['costs']) if self.metrics['costs'] else 0.0
+        avg_computation_time = np.mean(self.metrics['computation_times']) if self.metrics['computation_times'] else 0.0
+        avg_clearance = np.mean(self.clearance_history) if self.clearance_history else 0.0
+        
         self.calculate_oscillations()
 
-        # Calculate average clearance
-        avg_clearance = np.mean(self.clearance_history) if self.clearance_history else 0.0
+        # Efficiency now uses map frame coordinates (accurate)
+        efficiency = (
+            self.metrics['path_length'] / max(self.metrics['total_distance'], 0.001)
+            if self.metrics['path_length'] > 0 else 0.0
+        )
 
-        # Save summary
+        # Summary with SLAM statistics
         summary = {
             'planner': self.active_planner,
             'test_duration': self.test_duration,
             'total_distance': round(self.metrics['total_distance'], 3),
             'path_length': round(self.metrics['path_length'], 3),
-            'efficiency': round(self.metrics['efficiency'], 3),
-            'time_to_goal': round(self.metrics['time_to_goal'] if self.metrics['time_to_goal'] else self.test_duration, 2),
+            'efficiency': round(efficiency, 3),
+            'time_to_goal': round(self.metrics['time_to_goal'] or self.test_duration, 2),
             'success': self.metrics['success'],
             'avg_clearance': round(avg_clearance, 3),
             'collision_count': self.metrics['collision_count'],
+            'oscillations': self.metrics['num_oscillations'],
             'slam_jumps': self.slam_jump_count,
+            'avg_computation_time': round(avg_computation_time, 4),
             'timestamp': timestamp,
         }
 
@@ -342,7 +350,8 @@ class PlannerComparison(Node):
         ts_filename = os.path.join(self.data_dir, f"{self.active_planner}_timeseries_{timestamp}.csv")
         if self.timeseries_data:
             with open(ts_filename, 'w', newline='') as f:
-                fieldnames = ['time', 'x', 'y', 'v_linear_cmd', 'v_linear_real', 'v_angular_cmd', 'v_angular_real', 'clearance', 'event']
+                fieldnames = ['time', 'x', 'y', 'v_linear_cmd', 'v_linear_real',
+                            'v_angular_cmd', 'v_angular_real', 'clearance', 'event']
                 ts_writer = csv.DictWriter(f, fieldnames=fieldnames)
                 ts_writer.writeheader()
                 ts_writer.writerows(self.timeseries_data)
@@ -350,26 +359,32 @@ class PlannerComparison(Node):
         else:
             self.get_logger().warn(f"No timeseries data to save! recording_started={self.recording_started}, data_points={len(self.timeseries_data)}")
 
-        # Publish summary (ĐÃ SỬA: An toàn khi tắt bằng Ctrl+C)
+        # Publish summary
         stats_msg = String()
         stats_msg.data = str(summary)
         try:
-            if rclpy.ok():  # Chỉ publish nếu ROS 2 context còn sống
+            if rclpy.ok():
                 self.stats_pub.publish(stats_msg)
         except Exception:
             pass
 
     def get_summary_string(self) -> str:
         """Get a formatted summary of metrics"""
+        efficiency = (
+            self.metrics['path_length'] / max(self.metrics['total_distance'], 0.001)
+            if self.metrics['path_length'] > 0 else 0.0
+        )
+        time_str = f"{self.metrics['time_to_goal']:.2f}s" if self.metrics['time_to_goal'] else 'N/A'
         summary = f"""
         ===== {self.active_planner.upper()} PLANNER METRICS =====
         Total Distance: {self.metrics['total_distance']:.2f} m
         Path Length: {self.metrics['path_length']:.2f} m
-        Efficiency: {self.metrics['efficiency']:.2f}
-        Time to Goal: {self.metrics['time_to_goal'] if self.metrics['time_to_goal'] else 'N/A'}
+        Efficiency: {efficiency:.3f}
+        Time to Goal: {time_str}
         Success: {self.metrics['success']}
         Collisions: {self.metrics['collision_count']}
         Oscillations: {self.metrics['num_oscillations']}
+        SLAM Jumps: {self.slam_jump_count}
         """
         return summary
 

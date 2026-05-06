@@ -511,7 +511,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz_default_plugins/Orbit
-      Distance: 19.62791633605957
+      Distance: 15.616867065429688
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -529,7 +529,7 @@ Visualization Manager:
       Pitch: 1.5697963237762451
       Target Frame: <Fixed Frame>
       Value: Orbit (rviz)
-      Yaw: 3.0853793621063232
+      Yaw: 3.1903796195983887
     Saved: ~
 Window Geometry:
   Displays:
