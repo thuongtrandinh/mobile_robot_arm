@@ -13,3 +13,5 @@ HALO_1/install/
 *.db
 *.csv
 *.png
+src/costmap_converter
+src/teb_local_planner

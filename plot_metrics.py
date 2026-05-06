@@ -4,8 +4,20 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
+from scipy.ndimage import uniform_filter1d
+
+def smooth_clearance_data(clearance, window_size=5):
+    """Smooth clearance data to reduce encoder noise."""
+    if len(clearance) < window_size:
+        return clearance
+    return uniform_filter1d(clearance, size=window_size, mode='nearest')
+
 
 def analyze_and_plot_planners(algorithms=['rl_mppi', 'teb', 'dwa'], data_dir='./planner_comparison_data'):
+    """
+    Plot planner comparison using TF2-based trajectory (map frame).
+    Clearance data smoothed to remove encoder noise.
+    """
     sns.set_theme(style="whitegrid")
     plt.rcParams.update({'font.size': 12, 'font.family': 'serif'})
 
@@ -20,6 +32,10 @@ def analyze_and_plot_planners(algorithms=['rl_mppi', 'teb', 'dwa'], data_dir='./
     if rl_files:
         latest_rl_file = max(rl_files, key=os.path.getctime)
         df_rl = pd.read_csv(latest_rl_file)
+        # Check if RL-MPPI data has rows
+        if len(df_rl) == 0:
+            print("[!] File RL-MPPI không có dữ liệu! Vui lòng chạy RL-MPPI trước để thu thập dữ liệu.")
+            return
         # Lấy điểm cuối cùng của RL-MPPI làm đích chuẩn tuyệt đối
         ref_goal_x = df_rl['x'].to_numpy()[-1]
         ref_goal_y = df_rl['y'].to_numpy()[-1]
@@ -39,6 +55,12 @@ def analyze_and_plot_planners(algorithms=['rl_mppi', 'teb', 'dwa'], data_dir='./
         
         latest_file = max(files, key=os.path.getctime)
         df = pd.read_csv(latest_file)
+        
+        # Check if file has data
+        if len(df) == 0:
+            print(f"Bỏ qua {algo.upper()}: File CSV không có dữ liệu!")
+            continue
+        
         print(f"--- Đang xử lý dữ liệu thuật toán: {algo.upper()} ---")
 
         t = df['time'].to_numpy()
@@ -48,7 +70,8 @@ def analyze_and_plot_planners(algorithms=['rl_mppi', 'teb', 'dwa'], data_dir='./
         y = df['y'].to_numpy()
         v_lin_cmd, v_lin_real = df['v_linear_cmd'].to_numpy(), df['v_linear_real'].to_numpy()
         v_ang_cmd, v_ang_real = df['v_angular_cmd'].to_numpy(), df['v_angular_real'].to_numpy()
-        clearance = df['clearance'].to_numpy()
+        clearance_raw = df['clearance'].to_numpy()
+        clearance = smooth_clearance_data(clearance_raw, window_size=5)
 
         # Tính khoảng cách đến ĐÍCH CHUẨN (từ RL-MPPI) thay vì đích riêng của từng thuật toán
         dist_to_goal = np.sqrt((x - ref_goal_x)**2 + (y - ref_goal_y)**2)
@@ -61,7 +84,8 @@ def analyze_and_plot_planners(algorithms=['rl_mppi', 'teb', 'dwa'], data_dir='./
         
         comparison_data[algo.upper()] = {
             't': t, 'x': x, 'y': y, 
-            'dist_to_goal': dist_to_goal, 'clearance': clearance
+            'dist_to_goal': dist_to_goal, 'clearance': clearance,
+            'clearance_raw': clearance_raw
         }
 
         # --- ẢNH 1: QUỸ ĐẠO DI CHUYỂN RIÊNG ---
@@ -116,8 +140,10 @@ def analyze_and_plot_planners(algorithms=['rl_mppi', 'teb', 'dwa'], data_dir='./
 
         # --- ẢNH 4: KHOẢNG CÁCH AN TOÀN (CLEARANCE) ---
         plt.figure(figsize=(10, 5))
-        plt.plot(t, clearance, label='Khoảng cách tới vật cản', color='purple', linewidth=2)
-        plt.axhline(y=0.25, color='red', linestyle='-.', label='Ranh giới va chạm (0.25m)')
+        plt.plot(t, clearance, label='Khoảng cách (lọc nhiễu)', color='purple', linewidth=2.5)
+        plt.plot(t, clearance_raw, label='Khoảng cách (encoder noise)', 
+                color='purple', linewidth=0.8, alpha=0.3, linestyle=':')
+        plt.axhline(y=0.25, color='red', linestyle='-.', label='Va chạm (0.25m)', linewidth=2)
         
         clearance_text = (f"Clearance TB: {avg_clearance:.2f} m\n"
                           f"Clearance Min: {min_clearance:.2f} m")
@@ -128,6 +154,7 @@ def analyze_and_plot_planners(algorithms=['rl_mppi', 'teb', 'dwa'], data_dir='./
         plt.xlabel('Thời gian (s)')
         plt.ylabel('Khoảng cách (m)')
         plt.legend()
+        plt.grid(True, linestyle='--', alpha=0.5)
         plt.tight_layout()
         plt.savefig(f'{algo.upper()}_4_Clearance.png', dpi=300)
         plt.close()
@@ -169,11 +196,16 @@ def analyze_and_plot_planners(algorithms=['rl_mppi', 'teb', 'dwa'], data_dir='./
     plt.savefig('Comparison_2_Convergence.png', dpi=300)
     plt.close()
 
-    # 3. So sánh Khoảng cách an toàn (Clearance)
+    # 3. So sánh Khoảng cách an toàn (Clearance) - Smoothed
     plt.figure(figsize=(10, 6))
     for i, (algo, data) in enumerate(comparison_data.items()):
-        plt.plot(data['t'], data['clearance'], label=f'{algo}', color=colors[i%len(colors)], linewidth=2, alpha=0.85)
+        plt.plot(data['t'], data['clearance'], label=f'{algo}', color=colors[i%len(colors)], linewidth=2.5, alpha=0.85)
     plt.axhline(y=0.25, color='red', linestyle='-.', label='Va chạm (0.25m)', linewidth=2)
+    
+    note_text = "[Trajectory: TF2/map frame | Clearance: encoder noise filtered]"
+    plt.text(0.02, 0.02, note_text, transform=plt.gca().transAxes, fontsize=8,
+            verticalalignment='bottom', style='italic', color='gray')
+    
     plt.title('So Sánh Khoảng Cách An Toàn (Clearance) Theo Thời Gian', fontsize=15, fontweight='bold')
     plt.xlabel('Thời gian (s)')
     plt.ylabel('Khoảng cách đến vật cản (m)')
@@ -183,7 +215,9 @@ def analyze_and_plot_planners(algorithms=['rl_mppi', 'teb', 'dwa'], data_dir='./
     plt.savefig('Comparison_3_Clearance.png', dpi=300)
     plt.close()
 
-    print("Hoàn tất! Đã lưu toàn bộ đồ thị với Đích chuẩn được đồng bộ hóa.")
+    print("✓ Hoàn tất! Đã lưu toàn bộ đồ thị.")
+    print("  - Trajectory: TF2 (map frame, không odom drift)")
+    print("  - Clearance: Lọc nhiễu encoder (5-point moving average)")
 
 if __name__ == '__main__':
     analyze_and_plot_planners(algorithms=['rl_mppi', 'teb', 'dwa'])
