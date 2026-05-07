@@ -5,7 +5,31 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 
+REQUIRED_TIMESERIES_COLUMNS = [
+    'time', 'x', 'y',
+    'v_linear_cmd', 'v_linear_real',
+    'v_angular_cmd', 'v_angular_real',
+    'clearance',
+]
+
+
+def validate_timeseries(df, label):
+    if df.empty:
+        print(f"[!] {label}: file CSV không có dữ liệu.")
+        return False
+
+    missing = [col for col in REQUIRED_TIMESERIES_COLUMNS if col not in df.columns]
+    if missing:
+        print(f"[!] {label}: thiếu cột {missing}.")
+        return False
+    return True
+
+
 def analyze_and_plot_planners(algorithms=['rl_mppi', 'teb', 'dwa'], data_dir='./planner_comparison_data'):
+    """
+    Plot metrics from planner_comparison timeseries CSV.
+    Encoder values are raw CSV samples, with no smoothing/filtering.
+    """
     sns.set_theme(style="whitegrid")
     plt.rcParams.update({'font.size': 12, 'font.family': 'serif'})
 
@@ -20,6 +44,8 @@ def analyze_and_plot_planners(algorithms=['rl_mppi', 'teb', 'dwa'], data_dir='./
     if rl_files:
         latest_rl_file = max(rl_files, key=os.path.getctime)
         df_rl = pd.read_csv(latest_rl_file)
+        if not validate_timeseries(df_rl, "RL-MPPI"):
+            return
         # Lấy điểm cuối cùng của RL-MPPI làm đích chuẩn tuyệt đối
         ref_goal_x = df_rl['x'].to_numpy()[-1]
         ref_goal_y = df_rl['y'].to_numpy()[-1]
@@ -39,6 +65,8 @@ def analyze_and_plot_planners(algorithms=['rl_mppi', 'teb', 'dwa'], data_dir='./
         
         latest_file = max(files, key=os.path.getctime)
         df = pd.read_csv(latest_file)
+        if not validate_timeseries(df, algo.upper()):
+            continue
         print(f"--- Đang xử lý dữ liệu thuật toán: {algo.upper()} ---")
 
         t = df['time'].to_numpy()
@@ -46,8 +74,10 @@ def analyze_and_plot_planners(algorithms=['rl_mppi', 'teb', 'dwa'], data_dir='./
         
         x = df['x'].to_numpy()
         y = df['y'].to_numpy()
-        v_lin_cmd, v_lin_real = df['v_linear_cmd'].to_numpy(), df['v_linear_real'].to_numpy()
-        v_ang_cmd, v_ang_real = df['v_angular_cmd'].to_numpy(), df['v_angular_real'].to_numpy()
+        v_lin_cmd = df['v_linear_cmd'].to_numpy()
+        v_lin_real = df['v_linear_real'].to_numpy()
+        v_ang_cmd = df['v_angular_cmd'].to_numpy()
+        v_ang_real = df['v_angular_real'].to_numpy()
         clearance = df['clearance'].to_numpy()
 
         # Tính khoảng cách đến ĐÍCH CHUẨN (từ RL-MPPI) thay vì đích riêng của từng thuật toán
@@ -99,13 +129,13 @@ def analyze_and_plot_planners(algorithms=['rl_mppi', 'teb', 'dwa'], data_dir='./
         # --- ẢNH 3: ĐÁP ỨNG VẬN TỐC ---
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
         ax1.plot(t, v_lin_cmd, label='Lệnh (Cmd)', color='red', linestyle='--', linewidth=2)
-        ax1.plot(t, v_lin_real, label='Thực tế (Real)', color='blue', linewidth=2, alpha=0.8)
+        ax1.plot(t, v_lin_real, label='Encoder raw', color='blue', linewidth=2, alpha=0.85)
         ax1.set_title(f'Đáp Ứng Vận Tốc Thẳng - {algo.upper()}', fontsize=13, fontweight='bold')
         ax1.set_ylabel('v (m/s)')
         ax1.legend()
 
         ax2.plot(t, v_ang_cmd, label='Lệnh (Cmd)', color='red', linestyle='--', linewidth=2)
-        ax2.plot(t, v_ang_real, label='Thực tế (Real)', color='green', linewidth=2, alpha=0.8)
+        ax2.plot(t, v_ang_real, label='Encoder raw', color='green', linewidth=2, alpha=0.85)
         ax2.set_title(f'Đáp Ứng Vận Tốc Góc - {algo.upper()}', fontsize=13, fontweight='bold')
         ax2.set_xlabel('Thời gian (s)')
         ax2.set_ylabel('w (rad/s)')
@@ -174,6 +204,8 @@ def analyze_and_plot_planners(algorithms=['rl_mppi', 'teb', 'dwa'], data_dir='./
     for i, (algo, data) in enumerate(comparison_data.items()):
         plt.plot(data['t'], data['clearance'], label=f'{algo}', color=colors[i%len(colors)], linewidth=2, alpha=0.85)
     plt.axhline(y=0.25, color='red', linestyle='-.', label='Va chạm (0.25m)', linewidth=2)
+    plt.text(0.02, 0.02, "[TF pose | raw encoder velocity | no plot smoothing]",
+             transform=plt.gca().transAxes, fontsize=8, color='gray', style='italic')
     plt.title('So Sánh Khoảng Cách An Toàn (Clearance) Theo Thời Gian', fontsize=15, fontweight='bold')
     plt.xlabel('Thời gian (s)')
     plt.ylabel('Khoảng cách đến vật cản (m)')

@@ -4,6 +4,14 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 
+REQUIRED_TIMESERIES_COLUMNS = [
+    'time', 'x', 'y',
+    'v_linear_cmd', 'v_linear_real',
+    'v_angular_cmd', 'v_angular_real',
+    'clearance',
+]
+
+
 def plot_rl_mppi_details(data_dir='./planner_comparison_data'):
     files = glob.glob(os.path.join(data_dir, "rl_mppi_timeseries_*.csv"))
     if not files:
@@ -12,6 +20,15 @@ def plot_rl_mppi_details(data_dir='./planner_comparison_data'):
     
     latest_file = max(files, key=os.path.getctime)
     df = pd.read_csv(latest_file)
+    if df.empty:
+        print("File timeseries RL-MPPI không có dữ liệu!")
+        return
+
+    missing = [col for col in REQUIRED_TIMESERIES_COLUMNS if col not in df.columns]
+    if missing:
+        print(f"File timeseries RL-MPPI thiếu cột: {missing}")
+        return
+
     print(f"Đang vẽ biểu đồ từ: {latest_file}")
 
     sns.set_theme(style="whitegrid")
@@ -19,6 +36,7 @@ def plot_rl_mppi_details(data_dir='./planner_comparison_data'):
 
     # --- ÉP KIỂU SANG NUMPY ARRAY ĐỂ FIX LỖI PANDAS ---
     t = df['time'].to_numpy()
+    t = t - t[0]
     x = df['x'].to_numpy()
     y = df['y'].to_numpy()
     v_lin_cmd = df['v_linear_cmd'].to_numpy()
@@ -50,14 +68,14 @@ def plot_rl_mppi_details(data_dir='./planner_comparison_data'):
     
     # Đồ thị Vận tốc thẳng (Linear Velocity)
     ax1.plot(t, v_lin_cmd, label='Lệnh vận tốc (Command)', color='red', linestyle='--', linewidth=2)
-    ax1.plot(t, v_lin_real, label='Vận tốc thực tế (Encoder)', color='blue', linewidth=2, alpha=0.8)
+    ax1.plot(t, v_lin_real, label='Encoder raw', color='blue', linewidth=2, alpha=0.85)
     ax1.set_title('Đáp Ứng Vận Tốc Thẳng (Linear Velocity)', fontsize=13, fontweight='bold')
     ax1.set_ylabel('v (m/s)')
     ax1.legend()
 
     # Đồ thị Vận tốc góc (Angular Velocity)
     ax2.plot(t, v_ang_cmd, label='Lệnh góc xoay (Command)', color='red', linestyle='--', linewidth=2)
-    ax2.plot(t, v_ang_real, label='Vận tốc góc thực (Encoder)', color='green', linewidth=2, alpha=0.8)
+    ax2.plot(t, v_ang_real, label='Encoder raw', color='green', linewidth=2, alpha=0.85)
     ax2.set_title('Đáp Ứng Vận Tốc Góc (Angular Velocity)', fontsize=13, fontweight='bold')
     ax2.set_xlabel('Thời gian (s)')
     ax2.set_ylabel('w (rad/s)')
@@ -73,6 +91,8 @@ def plot_rl_mppi_details(data_dir='./planner_comparison_data'):
     plt.figure(figsize=(10, 5))
     plt.plot(t, clearance, label='Khoảng cách tới vật cản gần nhất', color='purple', linewidth=2)
     plt.axhline(y=0.25, color='red', linestyle='-.', label='Ranh giới va chạm (0.25m)')
+    plt.text(0.02, 0.02, "[TF pose | raw encoder velocity | no plot smoothing]",
+             transform=plt.gca().transAxes, fontsize=8, color='gray', style='italic')
     plt.title('Khoảng Cách An Toàn Của AGV (RL-MPPI)', fontsize=14, fontweight='bold')
     plt.xlabel('Thời gian (s)')
     plt.ylabel('Khoảng cách (m)')
@@ -81,7 +101,7 @@ def plot_rl_mppi_details(data_dir='./planner_comparison_data'):
     plt.savefig('RL_MPPI_3_Clearance.png', dpi=300)
     plt.close()
 
-    print("Đã tạo xong 3 ảnh HD!")
+    print("Đã tạo xong 3 ảnh HD! Encoder dùng raw CSV, không smooth/filter.")
 
 if __name__ == '__main__':
     plot_rl_mppi_details()

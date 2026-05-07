@@ -7,12 +7,12 @@ Compares performance of DWA, TEB, and custom AMPCC algorithms
 import numpy as np
 import rclpy
 from rclpy.node import Node
-from geometry_msgs.msg import Twist, PoseStamped
+from geometry_msgs.msg import Twist, Pose
 from nav_msgs.msg import Odometry, Path
 from std_msgs.msg import Float64, String
 from sensor_msgs.msg import LaserScan
 from visualization_msgs.msg import Marker, MarkerArray
-import time
+from tf2_ros import Buffer, TransformListener
 import csv
 import os
 from datetime import datetime
@@ -31,10 +31,16 @@ class PlannerComparison(Node):
         self.declare_parameter("test_duration", 60.0)  # seconds
         self.declare_parameter("active_planner", "rl_mppi")  # dwa, teb, rl_mppi
         self.declare_parameter("data_dir", "./planner_comparison_data")
+        self.declare_parameter("map_frame", "map")
+        self.declare_parameter("base_frame", "base_link")
+        self.declare_parameter("velocity_odom_topic", "/odometry/filtered")
 
         self.test_duration = self.get_parameter("test_duration").value
         self.active_planner = self.get_parameter("active_planner").value
         self.data_dir = self.get_parameter("data_dir").value
+        self.map_frame = self.get_parameter("map_frame").value
+        self.base_frame = self.get_parameter("base_frame").value
+        self.velocity_odom_topic = self.get_parameter("velocity_odom_topic").value
 
         # Create data directory
         os.makedirs(self.data_dir, exist_ok=True)
@@ -73,10 +79,24 @@ class PlannerComparison(Node):
         self.current_clearance = 10.0
         self.current_cmd_v = 0.0
         self.current_cmd_w = 0.0
+        self.current_v_linear = 0.0
+        self.current_v_angular = 0.0
         self.clearance_history = []  # Lưu lịch sử khoảng cách an toàn
+        self.slam_jump_count = 0
+
+        # TF pose tracking: position metrics use map -> base_link, not odom.
+        self.tf_buffer = Buffer()
+        self.tf_listener = TransformListener(self.tf_buffer, self)
 
         # Subscribers
-        self.odom_sub = self.create_subscription(Odometry, "odom", self.odom_callback, 10)
+        self.odom_sub = None
+        if self.velocity_odom_topic:
+            self.odom_sub = self.create_subscription(
+                Odometry,
+                self.velocity_odom_topic,
+                self.odom_velocity_callback,
+                10,
+            )
         self.path_sub = self.create_subscription(Path, "global_path", self.path_callback, 10)
         self.scan_sub = self.create_subscription(LaserScan, "scan", self.scan_callback, 10)
         self.dwa_cost_sub = self.create_subscription(Float64, "dwa_cost", self.dwa_cost_callback, 10)
@@ -88,57 +108,73 @@ class PlannerComparison(Node):
         self.stats_pub = self.create_publisher(String, "planner_stats", 10)
         self.comparison_pub = self.create_publisher(MarkerArray, "planner_comparison", 10)
 
-        # Timer
-        self.timer = self.create_timer(0.1, self.update_metrics)
+        # Timers
+        self.metrics_timer = self.create_timer(0.1, self.update_metrics)
+        self.pose_timer = self.create_timer(0.05, self.pose_update_callback)
 
         self.get_logger().info(f"Planner Comparison Node initialized for {self.active_planner}")
 
-    def odom_callback(self, msg: Odometry):
-        # Chỉ xử lý metrics khi goal đã được nhận
-        if not self.recording_started:
-            self.current_pose = msg.pose.pose
-            self.current_twist = msg.twist.twist
-            return
-
-        self.current_pose = msg.pose.pose
+    def odom_velocity_callback(self, msg: Odometry):
+        """Extract raw encoder/odometry velocity only; pose comes from TF."""
+        self.current_v_linear = msg.twist.twist.linear.x
+        self.current_v_angular = msg.twist.twist.angular.z
         self.current_twist = msg.twist.twist
 
-        # Update metrics
-        if len(self.metrics['trajectory_points']) > 0:
+    def pose_update_callback(self):
+        """Sample one synchronized row: TF pose + latest cmd + latest encoder + clearance."""
+        if not self.recording_started:
+            return
+
+        try:
+            transform = self.tf_buffer.lookup_transform(
+                self.map_frame,
+                self.base_frame,
+                rclpy.time.Time(),
+            )
+        except Exception:
+            return
+
+        current_x = transform.transform.translation.x
+        current_y = transform.transform.translation.y
+
+        if self.current_pose is None:
+            self.current_pose = Pose()
+        self.current_pose.position.x = current_x
+        self.current_pose.position.y = current_y
+        self.current_pose.orientation = transform.transform.rotation
+
+        if self.metrics['trajectory_points']:
             prev_x, prev_y = self.metrics['trajectory_points'][-1]
-            dx = msg.pose.pose.position.x - prev_x
-            dy = msg.pose.pose.position.y - prev_y
-            step_distance = math.sqrt(dx**2 + dy**2)
+            step_distance = math.hypot(current_x - prev_x, current_y - prev_y)
 
-            # --- BỘ LỌC NHIỄU 1CM ---
-            # Chỉ cộng dồn quãng đường nếu xe thực sự dịch chuyển lớn hơn 0.01m (1cm)
-            if step_distance > 0.01:
+            # Keep distance robust to TF noise and SLAM loop-closure jumps.
+            if 0.01 < step_distance <= 0.15:
                 self.metrics['total_distance'] += step_distance
-                self.metrics['trajectory_points'].append((msg.pose.pose.position.x, msg.pose.pose.position.y))
+                self.metrics['trajectory_points'].append((current_x, current_y))
+            elif step_distance > 0.15:
+                self.slam_jump_count += 1
+                self.get_logger().warn(
+                    f"SLAM jump #{self.slam_jump_count}: {step_distance:.3f}m; distance not accumulated."
+                )
+                self.metrics['trajectory_points'].append((current_x, current_y))
         else:
-            # Lưu điểm đầu tiên
-            self.metrics['trajectory_points'].append((msg.pose.pose.position.x, msg.pose.pose.position.y))
+            self.metrics['trajectory_points'].append((current_x, current_y))
 
-        # Record timeseries data
         current_time = self.get_clock().now().nanoseconds / 1e9
         if self.timeseries_start_time is None:
             self.timeseries_start_time = current_time
 
         t = current_time - self.timeseries_start_time
-        v_real = msg.twist.twist.linear.x
-        w_real = msg.twist.twist.angular.z
-        current_x = msg.pose.pose.position.x
-        current_y = msg.pose.pose.position.y
-
         self.timeseries_data.append({
             'time': round(t, 3),
             'x': round(current_x, 3),
             'y': round(current_y, 3),
             'v_linear_cmd': round(self.current_cmd_v, 3),
-            'v_linear_real': round(v_real, 3),
+            'v_linear_real': round(self.current_v_linear, 3),
             'v_angular_cmd': round(self.current_cmd_w, 3),
-            'v_angular_real': round(w_real, 3),
-            'clearance': round(self.current_clearance, 3)
+            'v_angular_real': round(self.current_v_angular, 3),
+            'clearance': round(self.current_clearance, 3),
+            'event': ''
         })
 
     def path_callback(self, msg: Path):
@@ -167,8 +203,12 @@ class PlannerComparison(Node):
                 self.timeseries_data = []
                 self.clearance_history = []
                 self.goal_reached = False
+                self.slam_jump_count = 0
                 
-                self.get_logger().info(f"Goal received - Starting data recording for {self.active_planner}")
+                self.get_logger().info(
+                    f"Goal received - Recording {self.active_planner} with TF pose "
+                    f"({self.map_frame}->{self.base_frame}) and encoder velocity ({self.velocity_odom_topic})"
+                )
 
     def scan_callback(self, msg: LaserScan):
         # Lấy ra các tia laser hợp lệ (không bị nhiễu, không phải inf/nan)
@@ -239,7 +279,7 @@ class PlannerComparison(Node):
         if self.recording_started and elapsed_time > self.test_duration and not self.goal_reached:
             self.get_logger().info("Test duration exceeded")
             self.save_metrics()
-            self.timer.cancel()
+            self.metrics_timer.cancel()
 
     def calculate_oscillations(self):
         """Calculate number of direction changes (oscillations)"""
@@ -285,6 +325,9 @@ class PlannerComparison(Node):
             'time_to_goal': self.metrics['time_to_goal'] if self.metrics['time_to_goal'] else self.test_duration,
             'success': self.metrics['success'],
             'avg_clearance': avg_clearance,
+            'collision_count': self.metrics['collision_count'],
+            'oscillations': self.metrics['num_oscillations'],
+            'slam_jumps': self.slam_jump_count,
             'avg_computation_time': self.metrics['avg_computation_time'],
             'timestamp': timestamp,
         }
@@ -301,11 +344,12 @@ class PlannerComparison(Node):
         ts_filename = os.path.join(self.data_dir, f"{self.active_planner}_timeseries_{timestamp}.csv")
         if self.timeseries_data:
             with open(ts_filename, 'w', newline='') as f:
-                fieldnames = ['time', 'x', 'y', 'v_linear_cmd', 'v_linear_real', 'v_angular_cmd', 'v_angular_real', 'clearance']
+                fieldnames = ['time', 'x', 'y', 'v_linear_cmd', 'v_linear_real',
+                              'v_angular_cmd', 'v_angular_real', 'clearance', 'event']
                 ts_writer = csv.DictWriter(f, fieldnames=fieldnames)
                 ts_writer.writeheader()
                 ts_writer.writerows(self.timeseries_data)
-            self.get_logger().info(f"Timeseries data saved to {ts_filename}")
+            self.get_logger().info(f"Timeseries data saved to {ts_filename} with {len(self.timeseries_data)} rows")
 
         # Publish summary (ĐÃ SỬA: An toàn khi tắt bằng Ctrl+C)
         stats_msg = String()
