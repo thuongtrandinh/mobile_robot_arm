@@ -60,15 +60,15 @@ controller_server:
       temperature: 0.3
       gamma: 0.015
 
-      vx_min: -0.1
+      vx_min: -0.2
       vx_max: 0.3
       vy_max: 0.0
-      wz_max: 0.5
+      wz_max: 0.3
 
       ax_min: -0.3
       ax_max: 0.3
       ay_max: 0.0
-      az_max: 0.5
+      az_max: 0.3
 
       motion_model: "DiffDrive"
       IterationCount: 1
@@ -98,7 +98,7 @@ controller_server:
       
       ObstaclesCritic:
         repulsion_weight: 5.0
-        cost_weight: 80.0
+        cost_weight: 90.0
         collision_cost: 100000.0
         consider_footprint: true # Nên bật để robot tránh vật cản chính xác hơn
       
@@ -107,7 +107,7 @@ controller_server:
         human_topic: /tracking/humans
         publish_debug: true
         debug_topic: /debug/dynamic_human_critic
-        cost_weight: 80.0
+        cost_weight: 100.0
         collision_cost: 100000.0
         safe_margin: 0.2
         human_min_radius: 0.01
@@ -151,14 +151,32 @@ controller_server:
 
 planner_server:
   ros__parameters:
-    expected_planner_frequency: 30.0
+    expected_planner_frequency: 20.0
     use_sim_time: True
     planner_plugins: ["GridBased"]
     GridBased:
-      plugin: "nav2_navfn_planner/NavfnPlanner"
+      plugin: "nav2_smac_planner/SmacPlannerHybrid" # Đổi plugin xịn hơn
       tolerance: 0.5
-      use_astar: true
+      downsample_costmap: false
+      downsampling_factor: 1
       allow_unknown: true
+      max_iterations: 1000000
+      max_on_lane_iterations: 1000
+      max_planning_time: 2.0
+      motion_model_for_search: "REEDS_SHEPP" # SmacPlannerHybrid valid model; supports forward/reverse motion
+      angle_bin_size: 72                   # Chia 360 độ thành 72 phần (5 độ/bin)
+      minimum_turning_radius: 0.20         # Bán kính quay tối thiểu (m)
+      reverse_penalty: 5.0                 # PHẠT NẶNG ĐI LÙI (1.0 là không phạt, >1.0 là phạt)
+      change_penalty: 0.1
+      non_straight_penalty: 1.2
+      cost_penalty: 2.0
+      retries_on_out_of_bounds: false
+      smooth_path: true                    # Tự động làm mượt đường đi
+      smoother:
+        max_iterations: 1000
+        w_smooth: 0.3
+        w_data: 0.2
+        tolerance: 1e-10
 
 local_costmap:
   local_costmap:
@@ -211,8 +229,8 @@ global_costmap:
       footprint: "[[0.24, 0.14], [0.24, -0.14], [-0.24, -0.14], [-0.24, 0.14]]"
       resolution: 0.05
       rolling_window: true
-      width: 8                    # Giảm xuống 8 mét (phủ qua bán kính 3m của Lidar)
-      height: 8                   # Giảm xuống 8 mét
+      width: 20                   # Giảm xuống 8 mét (phủ qua bán kính 3m của Lidar)
+      height: 20                 # Giảm xuống 8 mét
       track_unknown_space: false
       plugins: ["obstacle_layer", "inflation_layer"]
       obstacle_layer:
@@ -232,7 +250,7 @@ global_costmap:
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 10.0
-        inflation_radius: 0.25
+        inflation_radius: 0.75
       always_send_full_costmap: True
 
 # ============================================================
@@ -294,14 +312,15 @@ rl_ocp_policy_bridge:
     timer_period: 0.1
     tf_timeout_sec: 0.0
     
+
     # Action Masking - Real Robot Safety
-    action_mask_clearance: 0.15  # Increased from 0.1
+    action_mask_clearance: 0.08  # Loosen to avoid masking all actions
     action_mask_use_local_costmap: true
     local_costmap_topic: "/local_costmap/costmap"
-    local_costmap_min_cost: 50
-    local_costmap_unknown_is_obstacle: true
+    local_costmap_min_cost: 80
+    local_costmap_unknown_is_obstacle: false
     action_mask_lidar_shadow_enabled: true
-    action_mask_lidar_shadow_width: 0.30
+    action_mask_lidar_shadow_width: 0.15
     action_mask_lidar_shadow_start_distance: 0.05
     sub_goal_hysteresis_enabled: true
     sub_goal_lock_time_sec: 1.2
