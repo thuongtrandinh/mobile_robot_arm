@@ -56,6 +56,10 @@ controller_server:
       model_dt: 0.1
       batch_size: 2000
 
+      # --- [THÊM MỚI] Các tham số toán học cốt lõi của MPPI ---
+      temperature: 0.3
+      gamma: 0.015
+
       vx_min: -0.3
       vx_max: 0.3
       vy_max: 0.0
@@ -82,15 +86,22 @@ controller_server:
         - GoalCritic
         - GoalAngleCritic
         - PathAlignCritic
-        # - VelocityDeadbandCritic
+        # --- [THÊM MỚI] ---
+        - CostCritic
+        - PathFollowCritic
+        - TwirlingCritic
         - PreferForwardCritic
+        # - VelocityDeadbandCritic
 
       ConstraintCritic:
         cost_weight: 1.0
+      
       ObstaclesCritic:
         repulsion_weight: 5.0
         cost_weight: 60.0
         collision_cost: 100000.0
+        consider_footprint: true # Nên bật để robot tránh vật cản chính xác hơn
+      
       DynamicHumanCritic:
         enabled: true
         human_topic: /tracking/humans
@@ -102,20 +113,38 @@ controller_server:
         human_min_radius: 0.01
         human_max_radius: 1.50
         data_timeout: 0.5
+      
       PathAlignCritic:
         cost_weight: 2.0
         max_heuristic_path_distance: 3.0
+
+      # --- [THÊM MỚI] Cấu hình cho các Critics vừa thêm ---
+      CostCritic:
+        cost_weight: 3.81
+        consider_footprint: true
+      
+      PathFollowCritic:
+        cost_weight: 5.0
+        offset_from_furthest: 20
+        
+      TwirlingCritic:
+        cost_weight: 10.0
+      # ---------------------------------------------------
+
       # VelocityDeadbandCritic:
       #   enabled: true
       #   cost_power: 2
       #   cost_weight: 200.0
-        deadband_velocities: [0.08, 0.0, 0.08]
+      #   deadband_velocities: [0.08, 0.0, 0.08] # Đã đưa dòng này vào lại trong khối comment
+
       GoalCritic:
         cost_weight: 15.0
         threshold_to_consider: 2.0
+      
       GoalAngleCritic:
         cost_weight: 10.0
         threshold_to_consider: 1.0
+      
       PreferForwardCritic:
         cost_weight: 20.0
         threshold_to_consider: 1.0
@@ -140,10 +169,11 @@ local_costmap:
       robot_base_frame: base_link
       use_sim_time: True
       rolling_window: true
-      width: 5
-      height: 5
+      width: 20
+      height: 20
       resolution: 0.05
       robot_radius: 0.35
+      footprint: "[[0.22, 0.18], [0.22, -0.18], [-0.22, -0.18], [-0.22, 0.18]]"
       plugins: ["obstacle_layer", "inflation_layer"]
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
@@ -179,6 +209,7 @@ global_costmap:
       robot_base_frame: base_link
       use_sim_time: True
       robot_radius: 0.25
+      footprint: "[[0.22, 0.18], [0.22, -0.18], [-0.22, -0.18], [-0.22, 0.18]]"
       resolution: 0.05
       rolling_window: true
       width: 8                    # Giảm xuống 8 mét (phủ qua bán kính 3m của Lidar)
