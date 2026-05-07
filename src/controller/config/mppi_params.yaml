@@ -63,12 +63,12 @@ controller_server:
       vx_min: -0.3
       vx_max: 0.3
       vy_max: 0.0
-      wz_max: 0.3
+      wz_max: 0.5
 
-      ax_min: -0.15
-      ax_max: 0.15
+      ax_min: -0.3
+      ax_max: 0.3
       ay_max: 0.0
-      az_max: 0.1
+      az_max: 0.5
 
       motion_model: "DiffDrive"
       IterationCount: 1
@@ -98,7 +98,7 @@ controller_server:
       
       ObstaclesCritic:
         repulsion_weight: 5.0
-        cost_weight: 60.0
+        cost_weight: 80.0
         collision_cost: 100000.0
         consider_footprint: true # Nên bật để robot tránh vật cản chính xác hơn
       
@@ -107,7 +107,7 @@ controller_server:
         human_topic: /tracking/humans
         publish_debug: true
         debug_topic: /debug/dynamic_human_critic
-        cost_weight: 60.0
+        cost_weight: 80.0
         collision_cost: 100000.0
         safe_margin: 0.2
         human_min_radius: 0.01
@@ -115,7 +115,7 @@ controller_server:
         data_timeout: 0.5
       
       PathAlignCritic:
-        cost_weight: 2.0
+        cost_weight: 15.0
         max_heuristic_path_distance: 3.0
 
       # --- [THÊM MỚI] Cấu hình cho các Critics vừa thêm ---
@@ -146,7 +146,7 @@ controller_server:
         threshold_to_consider: 1.0
       
       PreferForwardCritic:
-        cost_weight: 20.0
+        cost_weight: 30.0
         threshold_to_consider: 1.0
 
 planner_server:
@@ -173,7 +173,7 @@ local_costmap:
       height: 20
       resolution: 0.05
       robot_radius: 0.35
-      footprint: "[[0.22, 0.18], [0.22, -0.18], [-0.22, -0.18], [-0.22, 0.18]]"
+      footprint: "[[0.24, 0.14], [0.24, -0.14], [-0.24, -0.14], [-0.24, 0.14]]"
       plugins: ["obstacle_layer", "inflation_layer"]
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
@@ -208,8 +208,7 @@ global_costmap:
       global_frame: map
       robot_base_frame: base_link
       use_sim_time: True
-      robot_radius: 0.25
-      footprint: "[[0.22, 0.18], [0.22, -0.18], [-0.22, -0.18], [-0.22, 0.18]]"
+      footprint: "[[0.24, 0.14], [0.24, -0.14], [-0.24, -0.14], [-0.24, 0.14]]"
       resolution: 0.05
       rolling_window: true
       width: 8                    # Giảm xuống 8 mét (phủ qua bán kính 3m của Lidar)
