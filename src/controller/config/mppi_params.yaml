@@ -47,8 +47,8 @@ controller_server:
 
     progress_checker:
       plugin: "nav2_controller::SimpleProgressChecker"
-      required_movement_radius: 0.05
-      movement_time_allowance: 30.0
+      required_movement_radius: 0.08
+      movement_time_allowance: 6.0
 
     FollowPath:
       plugin: "amr_nav2_mppi_controller::MPPIController"
@@ -82,6 +82,7 @@ controller_server:
         - GoalCritic
         - GoalAngleCritic
         - PathAlignCritic
+        # - VelocityDeadbandCritic
         - PreferForwardCritic
 
       ConstraintCritic:
@@ -104,6 +105,11 @@ controller_server:
       PathAlignCritic:
         cost_weight: 2.0
         max_heuristic_path_distance: 3.0
+      # VelocityDeadbandCritic:
+      #   enabled: true
+      #   cost_power: 2
+      #   cost_weight: 200.0
+        deadband_velocities: [0.08, 0.0, 0.08]
       GoalCritic:
         cost_weight: 15.0
         threshold_to_consider: 2.0
@@ -210,7 +216,7 @@ rl_ocp_policy_bridge:
     config: "configs/mpc_rl.py"
     model_path: "src/controller/policy/best_model.zip"
     action_dim: 9
-    action_range: 2.25
+    action_range: 1.5
 
     # Goal & Navigation
     goal_tolerance: 0.25
@@ -264,6 +270,13 @@ rl_ocp_policy_bridge:
     local_costmap_topic: "/local_costmap/costmap"
     local_costmap_min_cost: 50
     local_costmap_unknown_is_obstacle: true
+    action_mask_lidar_shadow_enabled: true
+    action_mask_lidar_shadow_width: 0.30
+    action_mask_lidar_shadow_start_distance: 0.05
+    sub_goal_hysteresis_enabled: true
+    sub_goal_lock_time_sec: 1.2
+    sub_goal_switch_distance: 0.60
+    sub_goal_switch_goal_improvement: 0.25
     visualize_actions: false  # Disable for performance
     
     # Geometry & Bounds
