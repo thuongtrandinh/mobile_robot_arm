@@ -3,6 +3,43 @@ import argparse
 import os
 import shutil
 import sys
+
+
+def _ensure_native_runtime():
+    """Restart once with native library paths needed by ocp_planner_py."""
+    if os.environ.get("HALO_NATIVE_RUNTIME_READY") == "1":
+        return
+
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    casadi_lib = os.path.join(repo_root, "extern", "casadi_cpp", "lib")
+    libtiff = "/lib/x86_64-linux-gnu/libtiff.so.5"
+
+    env_changed = False
+    if os.path.isdir(casadi_lib):
+        ld_library_path = os.environ.get("LD_LIBRARY_PATH", "")
+        parts = [p for p in ld_library_path.split(":") if p]
+        if casadi_lib not in parts:
+            os.environ["LD_LIBRARY_PATH"] = (
+                casadi_lib if not ld_library_path else casadi_lib + ":" + ld_library_path
+            )
+            env_changed = True
+
+    if os.path.exists(libtiff):
+        ld_preload = os.environ.get("LD_PRELOAD", "")
+        parts = [p for p in ld_preload.split(":") if p]
+        if libtiff not in parts:
+            os.environ["LD_PRELOAD"] = (
+                libtiff if not ld_preload else libtiff + ":" + ld_preload
+            )
+            env_changed = True
+
+    if env_changed:
+        os.environ["HALO_NATIVE_RUNTIME_READY"] = "1"
+        os.execv(sys.executable, [sys.executable] + sys.argv)
+
+
+_ensure_native_runtime()
+
 import numpy as np
 import torch
 import argparse
@@ -15,12 +52,25 @@ from sympy import false
 
 from crowd_sim.envs.utils.robot import Robot
 
-from simple_env.mpc_policy import MpcPolicy
 from algorithms.mpc_ppo import MpcPPO
 from modules.evaluation import evaluate_policy
 from modules.policies import ExternalPolicy
 from crowd_sim.envs.utils.action import ActionDiff
 from crowd_sim.envs.utils.state import JointState
+
+
+def get_eval_device(use_gpu: bool):
+    if not use_gpu:
+        return th.device("cpu")
+    if not th.cuda.is_available():
+        return th.device("cpu")
+    try:
+        th.empty(1, device="cuda:0")
+        return th.device("cuda:0")
+    except RuntimeError as exc:
+        logging.warning("CUDA unavailable during eval, falling back to CPU: %s", exc)
+        return th.device("cpu")
+
 
 def seed_everything(seed):
     # random.seed(seed)
@@ -85,13 +135,13 @@ def main(args):
     logging.info('Current goal_weight: {}'.format(args.goal_weight))
     logging.info('Current re_collision: {}'.format(args.re_collision))
     logging.info('Current re_arrival: {}'.format(args.re_arrival))
-    device = th.device('cuda:0' if th.cuda.is_available() and args.gpu else 'cpu')
+    device = get_eval_device(args.gpu and not args.cpu)
     logging.info('Using device: %s', device)
 
     # seed_everything(seed=args.randomseed)
     use_ros = args.use_ros
     use_action_mask = args.use_action_mask
-    env = gym.make("CrowdSim-v0")
+    env = gym.make("CrowdSim-v0", disable_env_checker=True)
     env.configure(env_config)
     env.set_phase(10)
 
@@ -108,6 +158,8 @@ def main(args):
     env.use_ros = use_ros
     env.action_space = gym.spaces.Discrete(action_dim * action_dim)  # temp solution
     env.use_AM = use_action_mask
+    env.use_action_mask = use_action_mask
+    env.action_mask_render_dim = args.action_grid_dim
     env.use_PL = True
 
     if use_action_mask:
@@ -127,6 +179,7 @@ def main(args):
             print(f"Caught an exception: {e}")
     else:
         print("==========a star=================")
+        from simple_env.mpc_policy import MpcPolicy
         env.use_action_mask = False
         model = MpcPolicy(env, use_ros=use_ros)
     if args.n_eval_episodes > 1:
@@ -167,6 +220,8 @@ if __name__ == "__main__":
 
     parser.add_argument('--resume', default=False, action='store_true')
     parser.add_argument('--gpu', default=True, action='store_true')
+    parser.add_argument('--cpu', default=False, action='store_true',
+                        help='Force evaluation on CPU even if CUDA is visible')
     parser.add_argument('--debug', default=False, action='store_true')
     parser.add_argument('--safe_weight', type=float, default=0.5)
     parser.add_argument('--goal_weight', type=float, default=0.1)
@@ -177,6 +232,8 @@ if __name__ == "__main__":
     parser.add_argument('-v', '--visualize', default=False, action='store_true')
     parser.add_argument('--use_ros', default=False, action='store_true')
     parser.add_argument('--use_action_mask', default=True, action='store_true')
+    parser.add_argument('--action_grid_dim', type=int, default=21,
+                        help='Grid resolution used only for action-mask visualization')
     parser.add_argument('--model_dir', type=str, default='data/model1')
     parser.add_argument('--action_dim', type=int, default=9)
     parser.add_argument('--action_range', type=float, default=2.0)
