@@ -58,7 +58,7 @@ def generate_launch_description():
     )
     tuning_config_arg = DeclareLaunchArgument(
         "tuning_config",
-        default_value=PathJoinSubstitution([FindPackageShare("controller"), "config", "planner_config.yaml"]),
+        default_value=PathJoinSubstitution([FindPackageShare("controller"), "config", "mppi_params.yaml"]),
     )
     mppi_params_file_arg = DeclareLaunchArgument(
         "mppi_params_file",
