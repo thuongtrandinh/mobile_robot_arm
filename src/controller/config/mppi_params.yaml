@@ -1,3 +1,29 @@
+opt_planner:
+  ros__parameters:
+    # A* reference generation and velocity-profile limits.
+    planner.reference_horizon_steps: 20
+    planner.reference_dt: 0.1
+    scene_limits.num_static_obstacles: 40
+
+    constraints.max_linear_vel: 0.3
+    constraints.max_angular_vel: 0.3
+    constraints.max_linear_acc: 0.15
+    constraints.max_angular_acc: 0.1
+
+    planner.local_obstacle_count: 8
+    planner.polygon_clearance_margin: 0.03
+    planner.wall_constraint_activation_distance: 2.0
+
+    # Reference source in planner:
+    # - astar_subgoal: build A* path from robot pose to RL local goal
+    # - direct_goal_xref: debug mode only
+    planner.reference_mode: astar_subgoal
+    planner.debug_xref_v_max: 0.3
+    planner.debug_xref_v_min: 0.05
+    planner.debug_xref_slowdown_distance: 1.5
+    planner.debug_xref_kp_dist: 0.8
+    planner.goal_stop_distance: 0.18
+
 controller_server:
   ros__parameters:
     # Chú ý đồng bộ use_sim_time với toàn hệ thống (True cho Gazebo, False cho phần cứng thật)
@@ -21,8 +47,8 @@ controller_server:
 
     progress_checker:
       plugin: "nav2_controller::SimpleProgressChecker"
-      required_movement_radius: 0.05
-      movement_time_allowance: 30.0
+      required_movement_radius: 0.08
+      movement_time_allowance: 6.0
 
     FollowPath:
       plugin: "amr_nav2_mppi_controller::MPPIController"
@@ -30,15 +56,19 @@ controller_server:
       model_dt: 0.1
       batch_size: 2000
 
-      vx_min: -0.3
+      # --- [THÊM MỚI] Các tham số toán học cốt lõi của MPPI ---
+      temperature: 0.3
+      gamma: 0.015
+
+      vx_min: -0.2
       vx_max: 0.3
       vy_max: 0.0
       wz_max: 0.3
 
-      ax_min: -0.15
-      ax_max: 0.15
+      ax_min: -0.3
+      ax_max: 0.3
       ay_max: 0.0
-      az_max: 0.1
+      az_max: 0.3
 
       motion_model: "DiffDrive"
       IterationCount: 1
@@ -56,48 +86,97 @@ controller_server:
         - GoalCritic
         - GoalAngleCritic
         - PathAlignCritic
+        # --- [THÊM MỚI] ---
+        - CostCritic
+        - PathFollowCritic
+        - TwirlingCritic
         - PreferForwardCritic
+        # - VelocityDeadbandCritic
 
       ConstraintCritic:
         cost_weight: 1.0
+      
       ObstaclesCritic:
         repulsion_weight: 5.0
-        cost_weight: 60.0
+        cost_weight: 90.0
         collision_cost: 100000.0
+        consider_footprint: true # Nên bật để robot tránh vật cản chính xác hơn
+      
       DynamicHumanCritic:
         enabled: true
         human_topic: /tracking/humans
         publish_debug: true
         debug_topic: /debug/dynamic_human_critic
-        cost_weight: 60.0
+        cost_weight: 100.0
         collision_cost: 100000.0
         safe_margin: 0.2
         human_min_radius: 0.01
         human_max_radius: 1.50
         data_timeout: 0.5
+      
       PathAlignCritic:
-        cost_weight: 5.0
+        cost_weight: 15.0
         max_heuristic_path_distance: 3.0
+
+      # --- [THÊM MỚI] Cấu hình cho các Critics vừa thêm ---
+      CostCritic:
+        cost_weight: 3.81
+        consider_footprint: true
+      
+      PathFollowCritic:
+        cost_weight: 5.0
+        offset_from_furthest: 20
+        
+      TwirlingCritic:
+        cost_weight: 10.0
+      # ---------------------------------------------------
+
+      # VelocityDeadbandCritic:
+      #   enabled: true
+      #   cost_power: 2
+      #   cost_weight: 200.0
+      #   deadband_velocities: [0.08, 0.0, 0.08] # Đã đưa dòng này vào lại trong khối comment
+
       GoalCritic:
         cost_weight: 15.0
         threshold_to_consider: 2.0
+      
       GoalAngleCritic:
         cost_weight: 10.0
         threshold_to_consider: 1.0
+      
       PreferForwardCritic:
-        cost_weight: 20.0
+        cost_weight: 30.0
         threshold_to_consider: 1.0
 
 planner_server:
   ros__parameters:
-    expected_planner_frequency: 30.0
+    expected_planner_frequency: 20.0
     use_sim_time: True
     planner_plugins: ["GridBased"]
     GridBased:
-      plugin: "nav2_navfn_planner/NavfnPlanner"
+      plugin: "nav2_smac_planner/SmacPlannerHybrid" # Đổi plugin xịn hơn
       tolerance: 0.5
-      use_astar: true
+      downsample_costmap: false
+      downsampling_factor: 1
       allow_unknown: true
+      max_iterations: 1000000
+      max_on_lane_iterations: 1000
+      max_planning_time: 2.0
+      motion_model_for_search: "REEDS_SHEPP" # SmacPlannerHybrid valid model; supports forward/reverse motion
+      angle_bin_size: 72                   # Chia 360 độ thành 72 phần (5 độ/bin)
+      minimum_turning_radius: 0.20         # Bán kính quay tối thiểu (m)
+      reverse_penalty: 5.0                 # PHẠT NẶNG ĐI LÙI (1.0 là không phạt, >1.0 là phạt)
+      change_penalty: 0.1
+      non_straight_penalty: 1.2
+      cost_penalty: 2.0
+      retries_on_out_of_bounds: false
+      smooth_path: true                    # Tự động làm mượt đường đi
+      smoother:
+        max_iterations: 1000
+        w_smooth: 0.3
+        w_data: 0.2
+        tolerance: 1e-10
 
 local_costmap:
   local_costmap:
@@ -108,10 +187,11 @@ local_costmap:
       robot_base_frame: base_link
       use_sim_time: True
       rolling_window: true
-      width: 4
-      height: 4
+      width: 20
+      height: 20
       resolution: 0.05
       robot_radius: 0.35
+      footprint: "[[0.24, 0.14], [0.24, -0.14], [-0.24, -0.14], [-0.24, 0.14]]"
       plugins: ["obstacle_layer", "inflation_layer"]
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
@@ -141,15 +221,18 @@ bt_navigator:
 global_costmap:
   global_costmap:
     ros__parameters:
-      update_frequency: 2.0
-      publish_frequency: 2.0
+      update_frequency: 10.0      # Tăng lên 10Hz để A* phản ứng nhanh với vật cản động
+      publish_frequency: 5.0
       global_frame: map
       robot_base_frame: base_link
       use_sim_time: True
-      robot_radius: 0.25
+      footprint: "[[0.24, 0.14], [0.24, -0.14], [-0.24, -0.14], [-0.24, 0.14]]"
       resolution: 0.05
-      track_unknown_space: true
-      plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
+      rolling_window: true
+      width: 20                   # Giảm xuống 8 mét (phủ qua bán kính 3m của Lidar)
+      height: 20                 # Giảm xuống 8 mét
+      track_unknown_space: false
+      plugins: ["obstacle_layer", "inflation_layer"]
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: True
@@ -160,15 +243,149 @@ global_costmap:
           clearing: True
           marking: True
           data_type: "LaserScan"
-          raytrace_max_range: 3.5
+          raytrace_max_range: 12.0
           raytrace_min_range: 0.0
           obstacle_max_range: 3.0
           obstacle_min_range: 0.0
-      static_layer:
-        plugin: "nav2_costmap_2d::StaticLayer"
-        map_subscribe_transient_local: True
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 10.0
-        inflation_radius: 0.25
+        inflation_radius: 0.75
       always_send_full_costmap: True
+
+# ============================================================
+# RL-MPPI POLICY BRIDGE PARAMETERS (OPTIMIZED FOR REAL ROBOT)
+# ============================================================
+rl_ocp_policy_bridge:
+  ros__parameters:
+    # Policy Configuration
+    policy_env_name: "mpc_rl"
+    halo_drl_dir: "HALO_1/drl_moudle"
+    config: "configs/mpc_rl.py"
+    model_path: "src/controller/policy/best_model.zip"
+    action_dim: 9
+    action_range: 1.5
+
+    # Goal & Navigation
+    goal_tolerance: 0.25
+    robot_radius: 0.35
+    obstacle_radius: 0.25
+    axle_half_width: 0.23
+    v_pref: 0.8
+    
+    # SCAN FILTERING - OPTIMIZED FOR REAL ROBOT
+    scan_filter_enabled: true  # Enable noise reduction on real robot
+    scan_obstacle_max_range: 3.0
+    scan_self_filter_min_range: 0.05
+    scan_neighbor_window: 1
+    scan_min_neighbor_count: 1
+    scan_neighbor_max_delta: 0.15  # Stricter filtering for real sensors
+    
+    # Scan Persistence: Faster cleanup for stale obstacles
+    scan_persistence_hits: 1
+    scan_persistence_decay_scans: 1  # Reduced from 4 for faster cleanup
+    scan_persistence_resolution: 0.12
+    scan_max_stale_count: 2  # Reset if missing 2+ consecutive scans
+    scan_obstacle_limit: 200  # Reduce for performance
+    
+    # Map Obstacles
+    use_map_static_obstacles: true
+    map_static_obstacle_radius: 0.05
+    map_static_sample_step_m: 0.3
+    map_static_obstacle_limit: 40
+    
+    # Humans & Dynamic Obstacles
+    enforce_scene_entities: true
+    human_fallback_enabled: true
+    human_fallback_limit: 20
+    human_fallback_radius: 0.30
+    human_max_age_sec: 1.0  # Faster dropout
+    human_min_radius: 0.01
+    human_max_radius: 1.50
+    human_safety_margin: 0.25
+    human_limit: 10
+    
+    # Timing & Control
+    policy_hz: 10.0
+    service_hz: 10.0
+    policy_period: 0.1
+    timer_period: 0.1
+    tf_timeout_sec: 0.0
+    
+
+    # Action Masking - Real Robot Safety
+    action_mask_clearance: 0.08  # Loosen to avoid masking all actions
+    action_mask_use_local_costmap: true
+    local_costmap_topic: "/local_costmap/costmap"
+    local_costmap_min_cost: 80
+    local_costmap_unknown_is_obstacle: false
+    action_mask_lidar_shadow_enabled: true
+    action_mask_lidar_shadow_width: 0.15
+    action_mask_lidar_shadow_start_distance: 0.05
+    sub_goal_hysteresis_enabled: true
+    sub_goal_lock_time_sec: 1.2
+    sub_goal_switch_distance: 0.60
+    sub_goal_switch_goal_improvement: 0.25
+    visualize_actions: false  # Disable for performance
+    
+    # Geometry & Bounds
+    planner_half_width: 5.8
+    planner_half_height: 9.8
+    planner_hard_half_width: 5.99
+    planner_hard_half_height: 9.99
+    
+    map_geometry_obstacle_threshold: 90
+    map_geometry_poly_epsilon_ratio: 0.02
+    map_geometry_wall_linearity_ratio: 20.0
+    map_geometry_wall_linearity_span: 0.50
+    map_geometry_boundary_span_threshold: 2.5
+    map_geometry_wall_min_segment_length: 0.35
+    map_geometry_wall_merge_angle_deg: 12.0
+    map_geometry_boundary_edge_margin_px: 8
+    map_geometry_boundary_area_ratio: 0.25
+    map_geometry_debug_log: false
+    
+    # ROS Topics & Frames
+    odom_topic: "/odometry/filtered"
+    scan_topic: "/scan"
+    goal_topic: "/goal_pose"
+    map_topic: "/map"
+    human_topic: "/tracking/humans"
+    map_frame: "map"
+    
+    # Action Server
+    planner_action: "/compute_path_to_pose"
+    planner_id: "GridBased"
+    follow_path_action: "/follow_path"
+    controller_id: "FollowPath"
+    goal_checker_id: "general_goal_checker"
+    planner_service: "/ocp_local_plan"
+    
+    # Local Goals
+    local_goal_topic: "/rl/local_goal"
+    local_path_topic: "/rl/local_path"
+    follow_path_replan_min_interval_sec: 0.80
+    follow_path_replan_path_delta: 0.35
+    
+    # Final Goal
+    final_goal_approach_distance: 0.80
+    final_goal_xy_tolerance: 0.22
+    final_goal_yaw_tolerance: 0.25
+    final_goal_release_distance: 0.45
+    stop_cmd_topic: "/diff_cont/cmd_vel_unstamped"
+    
+    # Goal Source
+    goal_source_mode: "rl_local_goal"
+    
+    # Debugging (disabled for performance)
+    publish_debug_joint_state: false
+    publish_policy_debug_status: false
+    visualize_planner_scene: false
+    action_marker_topic: "/policy/action_markers"
+    action_marker_frame: "odom"
+    debug_joint_state_topic: "/debug/joint_state_req"
+    policy_debug_status_topic: "/debug/policy_status"
+    planner_scene_marker_topic: "/planner/debug_markers"
+    planner_scene_frame: "map"
+    action_debug_topic: "/debug/policy_actions_scene"
+    planner_scene_debug_topic: "/debug/planner_scene"

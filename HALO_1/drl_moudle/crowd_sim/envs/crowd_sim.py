@@ -94,6 +94,7 @@ class CrowdSim(gym.Env):
         self.use_action_mask: bool = True
         self.use_ros: bool = False
         self.num_actions_per_dim: int = 9
+        self.action_mask_render_dim: int = 0
         self.goal_coord_range: Tuple[float, float] = [-2.0, -2.0]
 
         self.rvo_inter = rvo_inter(
@@ -132,6 +133,7 @@ class CrowdSim(gym.Env):
         self.use_PL = False
         self.PL_traj_length = 0
         self.PL_traj_gamma = 0.0
+        self._grid_debug_logged = False
 
 
     def configure(self, config) -> None:
@@ -1566,6 +1568,156 @@ class CrowdSim(gym.Env):
                 ob += [self.robot.get_observable_state()]
         return ob
 
+    def _draw_action_mask_grid(self):
+        if not (self.use_action_mask or self.use_AM):
+            return
+
+        policy_num_actions = self.num_actions_per_dim * self.num_actions_per_dim
+        if self.action_mask is None or len(self.action_mask) != policy_num_actions:
+            self._update_action_mask()
+
+        valid_x, valid_y = [], []
+        masked_x, masked_y = [], []
+        priority_x, priority_y = [], []
+
+        min_goal_coord, max_goal_coord = self.goal_coord_range
+        render_dim = self.action_mask_render_dim if self.action_mask_render_dim > 0 else self.num_actions_per_dim
+        render_dim = max(2, int(render_dim))
+        action_values = np.linspace(min_goal_coord, max_goal_coord, render_dim)
+        rotation_matrix = np.array([[np.cos(self.robot.theta), -np.sin(self.robot.theta)],
+                                    [np.sin(self.robot.theta), np.cos(self.robot.theta)]])
+        trans_vec = np.array([[self.robot.px], [self.robot.py]])
+        rendered_goals = []
+        safety_dis = self.robot.radius + 0.1
+        max_dist = (self.MPC_NP - 1) * self.time_step
+
+        for action_idx in range(render_dim * render_dim):
+            x_index = action_idx // render_dim
+            y_index = action_idx % render_dim
+            local_goal = np.array([[action_values[x_index]], [action_values[y_index]]])
+            goal_in_map = np.dot(rotation_matrix, local_goal) + trans_vec
+            candidate_goal = (goal_in_map[0][0], goal_in_map[1][0])
+            rendered_goals.append(candidate_goal)
+
+            gx = action_values[x_index]
+            gy = action_values[y_index]
+            mask_value = 1.0
+            if self.use_AM:
+                if gx * gx + gy * gy > max_dist * max_dist:
+                    mask_value = 0.0
+                for obst in self.obstacles:
+                    if mask_value == 0.0:
+                        break
+                    closest_dist = np.sqrt((candidate_goal[0] - obst.px)**2 + (candidate_goal[1] - obst.py)**2)
+                    if closest_dist < obst.radius + safety_dis:
+                        mask_value = 0.0
+                for wall in self.walls:
+                    if mask_value == 0.0:
+                        break
+                    closest_dist = point_to_segment_dist(wall.sx, wall.sy, wall.ex, wall.ey, *candidate_goal)
+                    if closest_dist < safety_dis:
+                        mask_value = 0.0
+                for poly in self.poly_obstacles:
+                    if mask_value == 0.0:
+                        break
+                    if point_in_poly(*candidate_goal, poly):
+                        mask_value = 0.0
+                if mask_value != 0.0:
+                    if self.phase_num != 5:
+                        if (candidate_goal[0] > self.square_width / 2.0 or
+                            candidate_goal[0] < -self.square_width / 2.0 or
+                            candidate_goal[1] > self.square_width - safety_dis or
+                            candidate_goal[1] < -self.square_width + safety_dis):
+                            mask_value = 0.0
+                    else:
+                        if (not self.judgement_in_walls(candidate_goal[0], candidate_goal[1]) or
+                            candidate_goal[1] > self.square_width - safety_dis or
+                            candidate_goal[1] < -self.square_width + safety_dis):
+                            mask_value = 0.0
+
+            if mask_value == 0.0:
+                masked_x.append(candidate_goal[0])
+                masked_y.append(candidate_goal[1])
+            elif mask_value == 2.0:
+                priority_x.append(candidate_goal[0])
+                priority_y.append(candidate_goal[1])
+            else:
+                valid_x.append(candidate_goal[0])
+                valid_y.append(candidate_goal[1])
+
+        if valid_x:
+            self.ax.scatter(valid_x, valid_y, s=60, c='green', marker='o',
+                            edgecolors='black', linewidths=0.4, alpha=0.95, zorder=200)
+        if masked_x:
+            self.ax.scatter(masked_x, masked_y, s=60, c='red', marker='o',
+                            edgecolors='black', linewidths=0.4, alpha=0.9, zorder=201)
+        if priority_x:
+            self.ax.scatter(priority_x, priority_y, s=80, c='gold', marker='D',
+                            edgecolors='black', linewidths=0.5, alpha=0.95, zorder=202)
+
+        if not self._grid_debug_logged:
+            sample_x = valid_x[0] if valid_x else (masked_x[0] if masked_x else (priority_x[0] if priority_x else 0.0))
+            sample_y = valid_y[0] if valid_y else (masked_y[0] if masked_y else (priority_y[0] if priority_y else 0.0))
+            logging.info(
+                "grid debug: dim=%s, sample=(%.3f, %.3f), robot=(%.3f, %.3f)",
+                render_dim,
+                sample_x,
+                sample_y,
+                self.robot.px,
+                self.robot.py
+            )
+            self._grid_debug_logged = True
+
+        if valid_x or masked_x or priority_x:
+            mark_x = valid_x[0] if valid_x else (masked_x[0] if masked_x else priority_x[0])
+            mark_y = valid_y[0] if valid_y else (masked_y[0] if masked_y else priority_y[0])
+            self.ax.scatter([mark_x], [mark_y], s=180, c='magenta', marker='X',
+                            edgecolors='black', linewidths=0.6, alpha=0.95, zorder=210)
+
+        all_x = np.array(valid_x + masked_x + priority_x, dtype=float)
+        all_y = np.array(valid_y + masked_y + priority_y, dtype=float)
+        finite_mask = np.isfinite(all_x) & np.isfinite(all_y)
+        if np.any(finite_mask):
+            min_x = float(np.min(all_x[finite_mask]))
+            max_x = float(np.max(all_x[finite_mask]))
+            min_y = float(np.min(all_y[finite_mask]))
+            max_y = float(np.max(all_y[finite_mask]))
+            # Ensure the grid bounds are within view so points are not clipped.
+            cur_xlim = self.ax.get_xlim()
+            cur_ylim = self.ax.get_ylim()
+            pad = 0.5
+            new_xlim = (min(cur_xlim[0], min_x - pad), max(cur_xlim[1], max_x + pad))
+            new_ylim = (min(cur_ylim[0], min_y - pad), max(cur_ylim[1], max_y + pad))
+            if new_xlim != cur_xlim:
+                self.ax.set_xlim(*new_xlim)
+            if new_ylim != cur_ylim:
+                self.ax.set_ylim(*new_ylim)
+            grid_box = patches.Rectangle(
+                (min_x, min_y),
+                max_x - min_x,
+                max_y - min_y,
+                fill=False,
+                edgecolor='green',
+                linewidth=0.8,
+                linestyle='--',
+                zorder=190
+            )
+            self.ax.add_patch(grid_box)
+
+        if 0 <= self.action_index < len(self.action_mask_vis):
+            selected_goal = self.action_mask_vis[self.action_index]
+            self.ax.plot([selected_goal[0]], [selected_goal[1]], '*', color='blue',
+                         markersize=14, linestyle='None', zorder=53)
+
+        self.ax.text(
+            -self.panel_width / 2 - 0.7,
+            self.panel_height / 2 + 0.25,
+            f"mask grid: {len(valid_x)} valid / {len(masked_x)} masked (dim={render_dim})",
+            fontsize=8,
+            color='purple',
+            zorder=60
+        )
+
     def render(self, mode: str = "video", output_file: Optional[str] = None,
                local_goal_vis: Optional[Tuple[float, float]] = None):
         from matplotlib import animation
@@ -1758,18 +1910,8 @@ class CrowdSim(gym.Env):
                 #     self.ax.add_artist(astar_path)
                 
                 
-                if self.use_action_mask:
-                    # pass
-                    index = 0
-                    for candidate_goal, mask_value in zip(self.action_mask_vis, self.action_mask):
-                        if index == self.action_index:
-                            self.ax.plot(candidate_goal[0], candidate_goal[1], 'bo')
-                        else:
-                            if mask_value == 0.0:
-                                self.ax.plot(candidate_goal[0], candidate_goal[1], 'ro')
-                            else:
-                                self.ax.plot(candidate_goal[0], candidate_goal[1], 'go')
-                        index = index + 1
+                if self.use_action_mask or self.use_AM:
+                    self._draw_action_mask_grid()
 
                     # x_eles = [pos[0] for pos in self.action_mask_vis]
                     # y_eles = [pos[1] for pos in self.action_mask_vis]
@@ -1979,17 +2121,8 @@ class CrowdSim(gym.Env):
                                                    alpha=0.5)
                     self.ax.add_artist(astar_path)
                
-                if self.use_action_mask:
-                    index = 0
-                    for candidate_goal, mask_value in zip(self.action_mask_vis, self.action_mask):
-                        if index == self.action_index:
-                            self.ax.plot(candidate_goal[0], candidate_goal[1], 'bo')
-                        else:
-                            if mask_value == 0.0:
-                                self.ax.plot(candidate_goal[0], candidate_goal[1], 'ro')
-                            else:
-                                self.ax.plot(candidate_goal[0], candidate_goal[1], 'go')
-                        index = index + 1
+                if self.use_action_mask or self.use_AM:
+                    self._draw_action_mask_grid()
                     # x_eles = [pos[0] for pos in self.action_mask_vis]
                     # y_eles = [pos[1] for pos in self.action_mask_vis]
                     # v_eles = self.actions_prob * 10000.0
